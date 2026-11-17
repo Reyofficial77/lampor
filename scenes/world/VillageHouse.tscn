@@ -1,0 +1,113 @@
+[gd_scene load_steps=14 format=3]
+
+[ext_resource type="Script" path="res://scripts/systems/VillageHouse.gd" id="1_house"]
+[ext_resource type="Texture2D" path="res://assets/textures/wood_albedo.png" id="2_wood"]
+[ext_resource type="PackedScene" path="res://scenes/world/Door.tscn" id="3_door"]
+[ext_resource type="PackedScene" path="res://scenes/world/HidingSpot.tscn" id="4_hide"]
+
+[sub_resource type="StandardMaterial3D" id="Mat_Wood"]
+albedo_color = Color(0.45, 0.3, 0.18, 1)
+albedo_texture = ExtResource("2_wood")
+roughness = 0.85
+
+[sub_resource type="BoxMesh" id="BoxMesh_wall_long"]
+material = SubResource("Mat_Wood")
+size = Vector3(6.0, 3.0, 0.2)
+
+[sub_resource type="BoxMesh" id="BoxMesh_wall_short"]
+material = SubResource("Mat_Wood")
+size = Vector3(2.4, 3.0, 0.2)
+
+[sub_resource type="BoxMesh" id="BoxMesh_wall_side"]
+material = SubResource("Mat_Wood")
+size = Vector3(0.2, 3.0, 6.0)
+
+[sub_resource type="BoxMesh" id="BoxMesh_roof"]
+material = SubResource("Mat_Wood")
+size = Vector3(6.6, 0.2, 6.6)
+
+[sub_resource type="BoxShape3D" id="BoxShape_wall_long"]
+size = Vector3(6.0, 3.0, 0.2)
+
+[sub_resource type="BoxShape3D" id="BoxShape_wall_short"]
+size = Vector3(2.4, 3.0, 0.2)
+
+[sub_resource type="BoxShape3D" id="BoxShape_wall_side"]
+size = Vector3(0.2, 3.0, 6.0)
+
+[sub_resource type="BoxShape3D" id="BoxShape_interior"]
+size = Vector3(5.6, 2.8, 5.6)
+
+[node name="VillageHouse" type="Node3D"]
+script = ExtResource("1_house")
+
+[node name="BackWall" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.5, -3)
+
+[node name="Mesh" type="MeshInstance3D" parent="BackWall"]
+mesh = SubResource("BoxMesh_wall_long")
+
+[node name="Collision" type="CollisionShape3D" parent="BackWall"]
+shape = SubResource("BoxShape_wall_long")
+
+[node name="LeftWall" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -3, 1.5, 0)
+
+[node name="Mesh" type="MeshInstance3D" parent="LeftWall"]
+mesh = SubResource("BoxMesh_wall_side")
+
+[node name="Collision" type="CollisionShape3D" parent="LeftWall"]
+shape = SubResource("BoxShape_wall_side")
+
+[node name="RightWall" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 1.5, 0)
+
+[node name="Mesh" type="MeshInstance3D" parent="RightWall"]
+mesh = SubResource("BoxMesh_wall_side")
+
+[node name="Collision" type="CollisionShape3D" parent="RightWall"]
+shape = SubResource("BoxShape_wall_side")
+
+[node name="FrontWallLeft" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.8, 1.5, 3)
+
+[node name="Mesh" type="MeshInstance3D" parent="FrontWallLeft"]
+mesh = SubResource("BoxMesh_wall_short")
+
+[node name="Collision" type="CollisionShape3D" parent="FrontWallLeft"]
+shape = SubResource("BoxShape_wall_short")
+
+[node name="FrontWallRight" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1.8, 1.5, 3)
+
+[node name="Mesh" type="MeshInstance3D" parent="FrontWallRight"]
+mesh = SubResource("BoxMesh_wall_short")
+
+[node name="Collision" type="CollisionShape3D" parent="FrontWallRight"]
+shape = SubResource("BoxShape_wall_short")
+
+[node name="Roof" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 3.1, 0)
+
+[node name="Mesh" type="MeshInstance3D" parent="Roof"]
+mesh = SubResource("BoxMesh_roof")
+
+[node name="Door" parent="." instance=ExtResource("3_door")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.5, 0, 3)
+
+[node name="HidingSpot" parent="." instance=ExtResource("4_hide")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.1, 0, -2.0)
+
+[node name="RoomLight" type="OmniLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.4, 0)
+light_color = Color(1, 0.8, 0.45, 1)
+light_energy = 0.5
+omni_range = 6.0
+
+[node name="InteriorArea" type="Area3D" parent="."]
+collision_layer = 0
+collision_mask = 2
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="InteriorArea"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.4, 0)
+shape = SubResource("BoxShape_interior")

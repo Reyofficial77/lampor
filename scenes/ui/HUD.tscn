@@ -1,0 +1,678 @@
+[gd_scene load_steps=13 format=3]
+
+[ext_resource type="Script" path="res://scripts/systems/HUD.gd" id="1_hud"]
+[ext_resource type="Shader" path="res://assets/shaders/horror_postprocess.gdshader" id="2_shader"]
+[ext_resource type="Texture2D" path="res://assets/textures/crosshair.png" id="3_cross"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_post"]
+shader = ExtResource("2_shader")
+shader_parameter/vignette_intensity = 0.4
+shader_parameter/vignette_opacity = 0.7
+shader_parameter/vignette_color = Color(0.08, 0.01, 0.01, 1)
+shader_parameter/aberration_amount = 0.002
+shader_parameter/grain_amount = 0.03
+shader_parameter/pulse_speed = 2.0
+shader_parameter/pulse_intensity = 0.0
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_bar_bg"]
+bg_color = Color(0.1, 0.1, 0.12, 0.85)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.3, 0.3, 0.35, 0.9)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_sanity_fill"]
+bg_color = Color(0.18, 0.65, 0.92, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_stamina_fill"]
+bg_color = Color(0.25, 0.85, 0.35, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_battery_fill"]
+bg_color = Color(0.95, 0.8, 0.15, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_noise_fill"]
+bg_color = Color(0.95, 0.35, 0.15, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_slot"]
+bg_color = Color(0.12, 0.12, 0.15, 0.85)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.45, 0.45, 0.5, 0.8)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_pause_panel"]
+bg_color = Color(0.08, 0.08, 0.1, 0.96)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.6, 0.2, 0.2, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_modal"]
+bg_color = Color(0.06, 0.06, 0.08, 0.98)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.7, 0.3, 0.3, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[node name="HUD" type="CanvasLayer"]
+process_mode = 3
+script = ExtResource("1_hud")
+
+[node name="HorrorOverlay" type="ColorRect" parent="."]
+material = SubResource("ShaderMaterial_post")
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="CenterContainer" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="Crosshair" type="TextureRect" parent="CenterContainer"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -16.0
+offset_top = -16.0
+offset_right = 16.0
+offset_bottom = 16.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+texture = ExtResource("3_cross")
+stretch_mode = 3
+
+[node name="InteractionLabel" type="Label" parent="CenterContainer"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -300.0
+offset_top = 32.0
+offset_right = 300.0
+offset_bottom = 72.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 18
+text = ""
+horizontal_alignment = 1
+
+[node name="StareWarning" type="Label" parent="CenterContainer"]
+visible = false
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -350.0
+offset_top = -140.0
+offset_right = 350.0
+offset_bottom = -90.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_color = Color(1, 0.15, 0.15, 1)
+theme_override_colors/font_outline_color = Color(0.2, 0, 0, 1)
+theme_override_constants/outline_size = 6
+theme_override_font_sizes/font_size = 22
+text = "⚠️ JANGAN MENATAP LANGSUNG! ALIKAN PANDANGANMU! ⚠️"
+horizontal_alignment = 1
+
+[node name="ActBanner" type="Label" parent="CenterContainer"]
+visible = false
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -450.0
+offset_top = -220.0
+offset_right = 450.0
+offset_bottom = -140.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_color = Color(1, 0.9, 0.4, 1)
+theme_override_colors/font_outline_color = Color(0.1, 0, 0, 1)
+theme_override_constants/outline_size = 8
+theme_override_font_sizes/font_size = 22
+text = "BABAK I: PERTAHANAN AWAL"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="TopLeft" type="MarginContainer" parent="."]
+offset_left = 24.0
+offset_top = 24.0
+offset_right = 450.0
+offset_bottom = 260.0
+mouse_filter = 2
+
+[node name="VBox" type="VBoxContainer" parent="TopLeft"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="ClockLabel" type="Label" parent="TopLeft/VBox"]
+layout_mode = 2
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 24
+text = "🕒 01:00 WIB"
+
+[node name="ActLabel" type="Label" parent="TopLeft/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.85, 0.3, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 18
+text = "Babak I: Pertahanan Awal"
+
+[node name="HSeparator" type="HSeparator" parent="TopLeft/VBox"]
+layout_mode = 2
+
+[node name="ObjectivesList" type="VBoxContainer" parent="TopLeft/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="BottomLeft" type="MarginContainer" parent="."]
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 24.0
+offset_top = -146.0
+offset_right = 300.0
+offset_bottom = -20.0
+grow_vertical = 0
+mouse_filter = 2
+
+[node name="VBox" type="VBoxContainer" parent="BottomLeft"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="SanityContainer" type="HBoxContainer" parent="BottomLeft/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Label" type="Label" parent="BottomLeft/VBox/SanityContainer"]
+custom_minimum_size = Vector2(85, 0)
+layout_mode = 2
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 3
+theme_override_font_sizes/font_size = 14
+text = "🧠 Waras"
+
+[node name="SanityBar" type="ProgressBar" parent="BottomLeft/VBox/SanityContainer"]
+custom_minimum_size = Vector2(140, 18)
+layout_mode = 2
+size_flags_vertical = 4
+theme_override_styles/background = SubResource("StyleBoxFlat_bar_bg")
+theme_override_styles/fill = SubResource("StyleBoxFlat_sanity_fill")
+value = 100.0
+show_percentage = false
+
+[node name="SanityVal" type="Label" parent="BottomLeft/VBox/SanityContainer"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "100%"
+
+[node name="StaminaContainer" type="HBoxContainer" parent="BottomLeft/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Label" type="Label" parent="BottomLeft/VBox/StaminaContainer"]
+custom_minimum_size = Vector2(85, 0)
+layout_mode = 2
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 3
+theme_override_font_sizes/font_size = 14
+text = "⚡ Stamina"
+
+[node name="StaminaBar" type="ProgressBar" parent="BottomLeft/VBox/StaminaContainer"]
+custom_minimum_size = Vector2(140, 18)
+layout_mode = 2
+size_flags_vertical = 4
+theme_override_styles/background = SubResource("StyleBoxFlat_bar_bg")
+theme_override_styles/fill = SubResource("StyleBoxFlat_stamina_fill")
+value = 100.0
+show_percentage = false
+
+[node name="StaminaVal" type="Label" parent="BottomLeft/VBox/StaminaContainer"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "100%"
+
+[node name="BatteryContainer" type="HBoxContainer" parent="BottomLeft/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Label" type="Label" parent="BottomLeft/VBox/BatteryContainer"]
+custom_minimum_size = Vector2(85, 0)
+layout_mode = 2
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 3
+theme_override_font_sizes/font_size = 14
+text = "🔦 Senter"
+
+[node name="BatteryBar" type="ProgressBar" parent="BottomLeft/VBox/BatteryContainer"]
+custom_minimum_size = Vector2(140, 18)
+layout_mode = 2
+size_flags_vertical = 4
+theme_override_styles/background = SubResource("StyleBoxFlat_bar_bg")
+theme_override_styles/fill = SubResource("StyleBoxFlat_battery_fill")
+value = 100.0
+show_percentage = false
+
+[node name="BatteryVal" type="Label" parent="BottomLeft/VBox/BatteryContainer"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "100%"
+
+[node name="BottomRight" type="MarginContainer" parent="."]
+anchors_preset = 3
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -210.0
+offset_top = -80.0
+offset_right = -24.0
+offset_bottom = -24.0
+grow_horizontal = 0
+grow_vertical = 0
+mouse_filter = 2
+
+[node name="VBox" type="VBoxContainer" parent="BottomRight"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Label" type="Label" parent="BottomRight/VBox"]
+layout_mode = 2
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 3
+theme_override_font_sizes/font_size = 13
+text = "🔊 Kebisingan Suara"
+
+[node name="NoiseBar" type="ProgressBar" parent="BottomRight/VBox"]
+custom_minimum_size = Vector2(170, 16)
+layout_mode = 2
+theme_override_styles/background = SubResource("StyleBoxFlat_bar_bg")
+theme_override_styles/fill = SubResource("StyleBoxFlat_noise_fill")
+show_percentage = false
+
+[node name="BottomCenter" type="MarginContainer" parent="."]
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -220.0
+offset_top = -84.0
+offset_right = 220.0
+offset_bottom = -20.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+
+[node name="SlotsContainer" type="HBoxContainer" parent="BottomCenter"]
+layout_mode = 2
+theme_override_constants/separation = 10
+alignment = 1
+
+[node name="Slot1" type="PanelContainer" parent="BottomCenter/SlotsContainer"]
+custom_minimum_size = Vector2(95, 60)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_slot")
+
+[node name="VBox" type="VBoxContainer" parent="BottomCenter/SlotsContainer/Slot1"]
+layout_mode = 2
+alignment = 1
+
+[node name="Key" type="Label" parent="BottomCenter/SlotsContainer/Slot1/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "[1]"
+horizontal_alignment = 1
+
+[node name="ItemName" type="Label" parent="BottomCenter/SlotsContainer/Slot1/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "Senter"
+horizontal_alignment = 1
+
+[node name="Qty" type="Label" parent="BottomCenter/SlotsContainer/Slot1/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "100%"
+horizontal_alignment = 1
+
+[node name="Slot2" type="PanelContainer" parent="BottomCenter/SlotsContainer"]
+custom_minimum_size = Vector2(95, 60)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_slot")
+
+[node name="VBox" type="VBoxContainer" parent="BottomCenter/SlotsContainer/Slot2"]
+layout_mode = 2
+alignment = 1
+
+[node name="Key" type="Label" parent="BottomCenter/SlotsContainer/Slot2/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "[2]"
+horizontal_alignment = 1
+
+[node name="ItemName" type="Label" parent="BottomCenter/SlotsContainer/Slot2/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "Jamu"
+horizontal_alignment = 1
+
+[node name="Qty" type="Label" parent="BottomCenter/SlotsContainer/Slot2/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+text = "x1"
+horizontal_alignment = 1
+
+[node name="Slot3" type="PanelContainer" parent="BottomCenter/SlotsContainer"]
+custom_minimum_size = Vector2(95, 60)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_slot")
+
+[node name="VBox" type="VBoxContainer" parent="BottomCenter/SlotsContainer/Slot3"]
+layout_mode = 2
+alignment = 1
+
+[node name="Key" type="Label" parent="BottomCenter/SlotsContainer/Slot3/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "[3]"
+horizontal_alignment = 1
+
+[node name="ItemName" type="Label" parent="BottomCenter/SlotsContainer/Slot3/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "[Kosong]"
+horizontal_alignment = 1
+
+[node name="Qty" type="Label" parent="BottomCenter/SlotsContainer/Slot3/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+horizontal_alignment = 1
+
+[node name="Slot4" type="PanelContainer" parent="BottomCenter/SlotsContainer"]
+custom_minimum_size = Vector2(95, 60)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_slot")
+
+[node name="VBox" type="VBoxContainer" parent="BottomCenter/SlotsContainer/Slot4"]
+layout_mode = 2
+alignment = 1
+
+[node name="Key" type="Label" parent="BottomCenter/SlotsContainer/Slot4/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "[4]"
+horizontal_alignment = 1
+
+[node name="ItemName" type="Label" parent="BottomCenter/SlotsContainer/Slot4/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "[Kosong]"
+horizontal_alignment = 1
+
+[node name="Qty" type="Label" parent="BottomCenter/SlotsContainer/Slot4/VBox"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 10
+horizontal_alignment = 1
+
+[node name="JumpscareOverlay" type="ColorRect" parent="."]
+visible = false
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.65, 0.05, 0.05, 0.95)
+
+[node name="BarricadeConfirmDialog" type="PanelContainer" parent="."]
+visible = false
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -260.0
+offset_top = -140.0
+offset_right = 260.0
+offset_bottom = 140.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_modal")
+
+[node name="Margin" type="MarginContainer" parent="BarricadeConfirmDialog"]
+layout_mode = 2
+theme_override_constants/margin_left = 24
+theme_override_constants/margin_top = 20
+theme_override_constants/margin_right = 24
+theme_override_constants/margin_bottom = 20
+
+[node name="VBox" type="VBoxContainer" parent="BarricadeConfirmDialog/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="Title" type="Label" parent="BarricadeConfirmDialog/Margin/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.25, 0.2, 1)
+theme_override_font_sizes/font_size = 18
+text = "⚠️ PERINGATAN: KAMU DI DALAM RUMAH!"
+horizontal_alignment = 1
+
+[node name="Message" type="Label" parent="BarricadeConfirmDialog/Margin/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.9, 1)
+theme_override_font_sizes/font_size = 14
+text = "Kamu sedang berada di DALAM rumah kayu ini!
+
+Pintu yang dipalang tidak bisa dibuka dari luar. Kamu masih bisa membongkar palang dari dalam rumah (papan dikembalikan ke inventaris), tapi suara palu akan menarik perhatian Lampor.
+
+Apakah kamu yakin ingin tetap memalang pintu ini dari dalam?"
+autowrap_mode = 2
+
+[node name="Buttons" type="HBoxContainer" parent="BarricadeConfirmDialog/Margin/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 16
+alignment = 1
+
+[node name="ConfirmButton" type="Button" parent="BarricadeConfirmDialog/Margin/VBox/Buttons"]
+custom_minimum_size = Vector2(160, 38)
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.4, 0.4, 1)
+text = "Tetap Palang Pintu"
+
+[node name="CancelButton" type="Button" parent="BarricadeConfirmDialog/Margin/VBox/Buttons"]
+custom_minimum_size = Vector2(110, 38)
+layout_mode = 2
+text = "Batal"
+
+[node name="PauseMenu" type="Control" parent="."]
+visible = false
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="DimOverlay" type="ColorRect" parent="PauseMenu"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.7)
+
+[node name="Center" type="CenterContainer" parent="PauseMenu"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="PanelContainer" parent="PauseMenu/Center"]
+custom_minimum_size = Vector2(340, 360)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_pause_panel")
+
+[node name="VBox" type="VBoxContainer" parent="PauseMenu/Center/Panel"]
+layout_mode = 2
+theme_override_constants/separation = 16
+alignment = 1
+
+[node name="Title" type="Label" parent="PauseMenu/Center/Panel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.2, 0.2, 1)
+theme_override_colors/font_outline_color = Color(0.1, 0, 0, 1)
+theme_override_constants/outline_size = 6
+theme_override_font_sizes/font_size = 26
+text = "PERMAINAN DIJEDA"
+horizontal_alignment = 1
+
+[node name="HSeparator" type="HSeparator" parent="PauseMenu/Center/Panel/VBox"]
+layout_mode = 2
+
+[node name="ResumeButton" type="Button" parent="PauseMenu/Center/Panel/VBox"]
+custom_minimum_size = Vector2(0, 42)
+layout_mode = 2
+theme_override_font_sizes/font_size = 16
+text = "Lanjutkan Permainan [ESC]"
+
+[node name="GuideButton" type="Button" parent="PauseMenu/Center/Panel/VBox"]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+text = "Panduan & Kontrol"
+
+[node name="MenuButton" type="Button" parent="PauseMenu/Center/Panel/VBox"]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+text = "Kembali ke Menu Utama"
+
+[node name="ExitButton" type="Button" parent="PauseMenu/Center/Panel/VBox"]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+text = "Keluar Permainan"
+
+[node name="PauseGuidePanel" type="PanelContainer" parent="PauseMenu"]
+visible = false
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -320.0
+offset_top = -220.0
+offset_right = 320.0
+offset_bottom = 220.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_modal")
+
+[node name="Margin" type="MarginContainer" parent="PauseMenu/PauseGuidePanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 20
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 20
+
+[node name="VBox" type="VBoxContainer" parent="PauseMenu/PauseGuidePanel/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Title" type="Label" parent="PauseMenu/PauseGuidePanel/Margin/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.8, 0.3, 1)
+theme_override_font_sizes/font_size = 20
+text = "PANDUAN KONTROL & ITEM"
+horizontal_alignment = 1
+
+[node name="Text" type="RichTextLabel" parent="PauseMenu/PauseGuidePanel/Margin/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+bbcode_enabled = true
+text = "[b]KONTROL:[/b]
+• [W,A,S,D]: Bergerak
+• [SHIFT]: Lari Sprint
+• [E]: Interaksi (Buka/Tutup Pintu, Sembunyi, Ambil Item, Nyalakan Obor)
+• [F]: Senter On/Off
+• [1-4]: Pilih Slot Item
+• [G]: Jatuhkan/Drop Item yang dipegang
+• [ESC]: Jeda / Buka Menu Pause
+• [KLIK / ENTER]: Minum Jamu untuk pulihkan Sanity & Stamina
+
+[b]TIPS BERTAHAN HIDUP:[/b]
+1. [color=red]Jangan menatap langsung ke Lampor![/color]
+2. Matikan senter dan sembunyi di lemari saat lonceng berdentang.
+3. Obor penolak bala yang menyala adalah safe zone."
+
+[node name="CloseButton" type="Button" parent="PauseMenu/PauseGuidePanel/Margin/VBox"]
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+text = "Tutup Panduan"

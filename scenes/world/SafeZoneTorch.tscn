@@ -1,0 +1,65 @@
+[gd_scene load_steps=9 format=3]
+
+[ext_resource type="Script" path="res://scripts/systems/SafeZoneTorch.gd" id="1_torch"]
+[ext_resource type="Texture2D" path="res://assets/textures/bamboo_albedo.png" id="2_bamboo"]
+
+[sub_resource type="CylinderShape3D" id="CylinderShape3D_post"]
+height = 2.0
+radius = 0.2
+
+[sub_resource type="StandardMaterial3D" id="Mat_Bamboo"]
+albedo_color = Color(0.4, 0.5, 0.25, 1)
+albedo_texture = ExtResource("2_bamboo")
+roughness = 0.7
+
+[sub_resource type="CylinderMesh" id="CylMesh_post"]
+material = SubResource("Mat_Bamboo")
+top_radius = 0.08
+bottom_radius = 0.08
+height = 2.0
+
+[sub_resource type="StandardMaterial3D" id="Mat_Flame"]
+albedo_color = Color(1, 0.6, 0.1, 1)
+emission_enabled = true
+emission = Color(1, 0.5, 0.05, 1)
+emission_energy_multiplier = 4.0
+
+[sub_resource type="SphereMesh" id="SphereMesh_flame"]
+material = SubResource("Mat_Flame")
+radius = 0.15
+height = 0.35
+
+[sub_resource type="SphereShape3D" id="SphereShape3D_safe"]
+radius = 4.5
+
+[node name="SafeZoneTorch" type="StaticBody3D" groups=["interactable", "torch"]]
+collision_layer = 1
+collision_mask = 2
+script = ExtResource("1_torch")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.0, 0)
+shape = SubResource("CylinderShape3D_post")
+
+[node name="TorchPost" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.0, 0)
+mesh = SubResource("CylMesh_post")
+
+[node name="TorchFlame" type="MeshInstance3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.1, 0)
+mesh = SubResource("SphereMesh_flame")
+
+[node name="TorchLight" type="OmniLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.2, 0)
+light_color = Color(1, 0.7, 0.35, 1)
+light_energy = 2.5
+shadow_enabled = true
+omni_range = 10.0
+
+[node name="SafeZoneArea" type="Area3D" parent="."]
+collision_layer = 0
+collision_mask = 2
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="SafeZoneArea"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.0, 0)
+shape = SubResource("SphereShape3D_safe")

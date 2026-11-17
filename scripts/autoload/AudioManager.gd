@@ -8,6 +8,7 @@ var whisper_player: AudioStreamPlayer
 var sfx_pool: Array[AudioStreamPlayer] = []
 var ending_player: AudioStreamPlayer
 var rooster_player: AudioStreamPlayer
+var jumpscare_player: AudioStreamPlayer
 const POOL_SIZE: int = 8
 
 var sound_streams: Dictionary = {}
@@ -19,8 +20,17 @@ func _ready() -> void:
 	play_ambient()
 	
 	SignalBus.lampor_screamer_triggered.connect(_on_screamer)
-	SignalBus.player_died.connect(func(_reason: String) -> void: play_sound("game_over_sting"))
+	SignalBus.player_death_requested.connect(_on_player_death_requested)
 	SignalBus.game_won.connect(_on_game_won)
+
+
+func _on_player_death_requested(reason: String) -> void:
+	set_heartbeat_intensity(0.0)
+	set_whisper_intensity(0.0)
+	# Kematian oleh Lampor memakai jumpscare.wav (dikelola GameManager),
+	# jadi sting biasa hanya dimainkan untuk kematian non-Lampor (mis. fajar).
+	if not GameManager.is_lampor_kill(reason):
+		play_sound("game_over_sting", -2.0)
 
 func _load_sounds() -> void:
 	var sound_files: Dictionary = {
@@ -89,6 +99,14 @@ func _setup_audio_players() -> void:
 	ending_player.name = "EndingPlayer"
 	add_child(ending_player)
 
+	# Pemutar khusus agar audio jumpscare tidak tertimpa SFX lain dan tetap
+	# berjalan ketika SceneTree dijeda selama rangkaian kematian.
+	jumpscare_player = AudioStreamPlayer.new()
+	jumpscare_player.name = "JumpscarePlayer"
+	jumpscare_player.process_mode = Node.PROCESS_MODE_ALWAYS
+	jumpscare_player.volume_db = -1.0
+	add_child(jumpscare_player)
+
 	for i in range(POOL_SIZE):
 		var p: AudioStreamPlayer = AudioStreamPlayer.new()
 		p.name = "SFXPlayer_" + str(i)
@@ -102,6 +120,43 @@ func play_ambient() -> void:
 
 func _on_ambient_finished() -> void:
 	ambient_player.play()
+
+func _get_jumpscare_stream() -> AudioStream:
+	var stream: AudioStream = sound_streams.get("jumpscare") as AudioStream
+	if stream == null and ResourceLoader.exists("res://assets/audio/jumpscare.wav"):
+		stream = load("res://assets/audio/jumpscare.wav") as AudioStream
+		if stream:
+			sound_streams["jumpscare"] = stream
+	return stream
+
+func get_jumpscare_duration() -> float:
+	var stream: AudioStream = _get_jumpscare_stream()
+	return stream.get_length() if stream else 3.55
+
+func play_jumpscare_and_wait() -> void:
+	if jumpscare_player == null:
+		push_error("JumpscarePlayer belum dibuat; tidak dapat memutar audio jumpscare.")
+		await get_tree().create_timer(3.55, true).timeout
+		return
+	var stream: AudioStream = _get_jumpscare_stream()
+	if stream == null:
+		push_error("File res://assets/audio/jumpscare.wav tidak ditemukan; menggunakan jeda fallback.")
+		await get_tree().create_timer(3.55, true).timeout
+		return
+	jumpscare_player.stop()
+	if stream is AudioStreamWAV:
+		(stream as AudioStreamWAV).loop_mode = AudioStreamWAV.LOOP_DISABLED
+	jumpscare_player.stream = stream
+	jumpscare_player.volume_db = 0.0
+	jumpscare_player.pitch_scale = 1.0
+	# Putar audio melalui player khusus yang tetap aktif saat game dijeda.
+	# Timer berdasarkan durasi stream menjadi watchdog agar urutan kematian tidak
+	# macet bila backend audio gagal mengirim sinyal finished pada perangkat tertentu.
+	var duration: float = maxf(stream.get_length(), 0.1)
+	jumpscare_player.play()
+	await get_tree().create_timer(duration + 0.12, true, false, true).timeout
+	if jumpscare_player and jumpscare_player.playing:
+		jumpscare_player.stop()
 
 func play_sound(sound_name: String, volume_db: float = 0.0, pitch_scale: float = 1.0) -> void:
 	if not sound_streams.has(sound_name):

@@ -7,6 +7,7 @@ signal player_health_changed(current: float, max_val: float)
 signal player_sanity_changed(current: float, max_val: float)
 signal player_stamina_changed(current: float, max_val: float)
 signal player_noise_made(level: float, position: Vector3)
+signal player_death_requested(reason: String)
 signal player_died(reason: String)
 signal player_entered_hiding(is_hiding: bool)
 

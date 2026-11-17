@@ -5,6 +5,7 @@ extends CharacterBody3D
 @export var sprint_speed: float = 7.0
 @export var jump_velocity: float = 4.5
 @export var mouse_sensitivity: float = 0.0025
+@export var camera_sensitivity: float = 0.0025
 
 # Head & Camera
 @onready var head: Node3D = $Head
@@ -20,6 +21,9 @@ var current_stamina: float = 100.0
 var stamina_drain_rate: float = 22.0
 var stamina_recovery_rate: float = 16.0
 var is_sprinting: bool = false
+var virtual_move_input: Vector2 = Vector2.ZERO
+var virtual_sprint_pressed: bool = false
+var is_caught: bool = false
 
 # Head Bobbing
 var bob_freq: float = 2.4
@@ -53,9 +57,13 @@ var current_noise_level: float = 0.0
 var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 
 func _ready() -> void:
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	if _is_touch_device():
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	else:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	initial_camera_pos = camera.position
 	GameManager.player_character = self
+	SettingsManager.apply_player_settings(self)
 	var sanity_cfg: Dictionary = GameManager.get_sanity_settings_for_difficulty(GameManager.selected_difficulty)
 	flashlight_drain_rate = sanity_cfg.get("flash_drain", 0.7)
 	
@@ -120,8 +128,10 @@ func _physics_process(delta: float) -> void:
 		velocity.y -= gravity * delta
 
 	# Sprinting & Stamina
-	var wants_sprint: bool = Input.is_action_pressed("sprint") and is_on_floor() and current_stamina > 5.0
+	var wants_sprint: bool = (Input.is_action_pressed("sprint") or virtual_sprint_pressed) and is_on_floor() and current_stamina > 5.0
 	var input_dir: Vector2 = Input.get_vector("move_left", "move_right", "move_forward", "move_backward")
+	if virtual_move_input.length_squared() > 0.01:
+		input_dir = virtual_move_input
 	var is_moving: bool = input_dir.length_squared() > 0.01
 
 	if wants_sprint and is_moving:
@@ -179,10 +189,44 @@ func _physics_process(delta: float) -> void:
 		if flashlight_battery <= 0.0:
 			toggle_flashlight(false)
 
+func _is_touch_device() -> bool:
+	return DisplayServer.is_touchscreen_available() or OS.has_feature("android") or OS.has_feature("ios") or OS.has_feature("web_android") or OS.has_feature("web_ios")
+
+func set_virtual_move(direction: Vector2) -> void:
+	virtual_move_input = Vector2.ZERO if is_caught else direction.limit_length(1.0)
+
+func set_virtual_sprint(pressed: bool) -> void:
+	virtual_sprint_pressed = pressed and not is_caught
+
+func apply_touch_look(relative: Vector2) -> void:
+	if is_caught or GameManager.current_state != GameManager.GameState.PLAYING or is_hiding:
+		return
+	rotate_y(-relative.x * camera_sensitivity)
+	head.rotate_x(-relative.y * camera_sensitivity)
+	head.rotation.x = clampf(head.rotation.x, deg_to_rad(-80.0), deg_to_rad(80.0))
+
+func touch_interact() -> void:
+	if is_caught or GameManager.current_state != GameManager.GameState.PLAYING:
+		return
+	if is_hiding:
+		_request_exit_hiding()
+	else:
+		interaction_ray.trigger_interaction(self)
+
+func touch_use_item() -> void:
+	if not is_caught and not get_tree().paused and GameManager.current_state == GameManager.GameState.PLAYING:
+		_try_use_equipped_item()
+
+func touch_select_slot(slot_index: int) -> void:
+	if not is_caught and not get_tree().paused and GameManager.current_state == GameManager.GameState.PLAYING:
+		inventory_system.select_slot(slot_index)
+
 func _play_footstep() -> void:
 	AudioManager.play_sound("footstep_dirt", -8.0, randf_range(0.9, 1.1))
 
 func toggle_flashlight(state: Variant = null) -> void:
+	if is_caught or get_tree().paused or GameManager.current_state != GameManager.GameState.PLAYING:
+		return
 	if state != null:
 		flashlight_on = bool(state)
 	else:

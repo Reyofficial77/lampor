@@ -127,28 +127,29 @@ func consume_equipped_item() -> bool:
 	return consume_item_by_id(item.get("id", ""))
 
 func drop_equipped_item(drop_position: Vector3) -> bool:
+	if not is_inside_tree():
+		return false
+	var world: Node = get_tree().current_scene
+	if not is_instance_valid(world):
+		return false
 	var item: Dictionary = get_equipped_item()
-	if item.is_empty():
+	if item.is_empty() or item.get("id") == "flashlight":
 		return false
-	if item.get("id") == "flashlight":
-		# Do not drop flashlight
+	var pickup_scene: PackedScene = load("res://scenes/items/PickupItem.tscn")
+	if pickup_scene == null:
 		return false
-
 	var dropped_item_data: Dictionary = item.duplicate(true)
+	var inst: PickupItem = pickup_scene.instantiate() as PickupItem
+	if inst == null:
+		return false
+	inst.item_id = dropped_item_data.get("id", "minyak_tanah")
+	inst.item_name = dropped_item_data.get("name", "Barang")
+	inst.item_type = dropped_item_data.get("type", "resource")
+	# global_position baru valid setelah Node3D masuk SceneTree.
+	world.add_child(inst)
+	inst.global_position = drop_position
 	slots[active_slot] = {}
 	SignalBus.inventory_updated.emit(slots)
 	SignalBus.item_equipped.emit(active_slot, get_equipped_item())
-
-	# Spawn pickup item in world
-	var pickup_scene: PackedScene = load("res://scenes/items/PickupItem.tscn")
-	if pickup_scene:
-		var inst: PickupItem = pickup_scene.instantiate() as PickupItem
-		inst.item_id = dropped_item_data.get("id", "minyak_tanah")
-		inst.item_name = dropped_item_data.get("name", "Barang")
-		inst.item_type = dropped_item_data.get("type", "resource")
-		inst.global_position = drop_position
-		get_tree().current_scene.add_child(inst)
-		AudioManager.play_sound("item_pickup", -6.0, 0.8)
-		return true
-
-	return false
+	AudioManager.play_sound("item_pickup", -6.0, 0.8)
+	return true

@@ -454,11 +454,18 @@ func _start_catch() -> void:
 		return
 	is_catching = true
 	velocity = Vector3.ZERO
+	if player and is_instance_valid(player):
+		player.is_caught = true
+		player.virtual_move_input = Vector2.ZERO
+		player.virtual_sprint_pressed = false
+		player.velocity = Vector3.ZERO
+		player.set_physics_process(false)
+		player.set_process_unhandled_input(false)
 	red_light.light_energy = 6.0
 	red_light.light_color = Color(1.0, 0.05, 0.05)
 	SignalBus.lampor_screamer_triggered.emit()
 	await get_tree().create_timer(1.0).timeout
-	SignalBus.player_died.emit("Kamu ditarik ke dalam keranda Lampor!")
+	SignalBus.player_death_requested.emit("Kamu ditarik ke dalam keranda Lampor!")
 
 func _give_up_chase() -> void:
 	# Lampor kehilangan minat, mundur ke waypoint terjauh dari player, lalu cooldown

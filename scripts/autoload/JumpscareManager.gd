@@ -1,10 +1,11 @@
 extends CanvasLayer
 
 # Jumpscare layar penuh: wajah keranda muncul mendadak + suara + getar (mobile).
-# Dipicu oleh SignalBus.lampor_jumpscare dan tampil di atas semua scene.
+# Dipicu langsung oleh GameManager dan tampil di atas semua scene.
+# Durasi visual mengikuti panjang audio jumpscare yang sedang diputar.
 
-const DURATION: float = 1.8
-const FADE_TIME: float = 0.25
+const FADE_TIME: float = 0.32
+const FALLBACK_DURATION: float = 3.55
 
 var root: Control
 var bg: ColorRect
@@ -12,6 +13,7 @@ var face: Control
 var flash: ColorRect
 var is_playing: bool = false
 var play_time: float = 0.0
+var playback_duration: float = FALLBACK_DURATION
 var eye_glow: float = 1.0
 
 func _ready() -> void:
@@ -19,7 +21,6 @@ func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_build_overlay()
 	root.visible = false
-	SignalBus.lampor_jumpscare.connect(play_jumpscare)
 
 func _build_overlay() -> void:
 	root = Control.new()
@@ -45,21 +46,31 @@ func _build_overlay() -> void:
 	root.add_child(flash)
 	flash.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 
-func play_jumpscare() -> void:
+func play_jumpscare_and_wait() -> void:
 	if is_playing:
 		return
 	is_playing = true
 	play_time = 0.0
+	playback_duration = maxf(AudioManager.get_jumpscare_duration(), 0.1)
 	root.modulate.a = 1.0
+	face.scale = Vector2.ONE
+	face.position = Vector2.ZERO
+	flash.color = Color(1.0, 1.0, 1.0, 0.0)
 	root.visible = true
-	AudioManager.play_sound('jumpscare', 8.0)
-	# Getar di HP (tidak berpengaruh di desktop)
+	# Audio dimulai setelah overlay siap; fungsi ini menunggu sinyal finished.
+	# Getar di HP (tidak berpengaruh di desktop).
 	Input.vibrate_handheld(700)
+	await AudioManager.play_jumpscare_and_wait()
+	_finish()
 
 func _finish() -> void:
 	is_playing = false
 	root.visible = false
 	root.modulate.a = 1.0
+	face.scale = Vector2.ONE
+	face.position = Vector2.ZERO
+	flash.color = Color(1.0, 1.0, 1.0, 0.0)
+	play_time = 0.0
 
 func _process(delta: float) -> void:
 	if not is_playing:
@@ -70,7 +81,8 @@ func _process(delta: float) -> void:
 	var zoom: float = 1.5 + (play_time - 0.12) * 0.25
 	if play_time < 0.12:
 		zoom = lerpf(0.4, 1.5, play_time / 0.12)
-	var shake: float = 6.0 + 24.0 * (1.0 - play_time / DURATION)
+	var progress: float = clampf(play_time / playback_duration, 0.0, 1.0)
+	var shake: float = 6.0 + 24.0 * (1.0 - progress)
 	face.pivot_offset = face.size * 0.5
 	face.scale = Vector2(zoom, zoom)
 	face.position = Vector2(randf_range(-1.0, 1.0), randf_range(-1.0, 1.0)) * shake
@@ -84,11 +96,9 @@ func _process(delta: float) -> void:
 		flash.color = Color(0.8, 0.0, 0.0, maxf(0.0, 0.6 - play_time * 1.2))
 
 	# Memudar ke hitam di akhir
-	var fade_start: float = DURATION - FADE_TIME
+	var fade_start: float = maxf(0.0, playback_duration - FADE_TIME)
 	if play_time > fade_start:
-		root.modulate.a = clampf((DURATION - play_time) / FADE_TIME, 0.0, 1.0)
-	if play_time >= DURATION:
-		_finish()
+		root.modulate.a = clampf((playback_duration - play_time) / FADE_TIME, 0.0, 1.0)
 
 func _ellipse(center: Vector2, rx: float, ry: float, steps: int) -> PackedVector2Array:
 	var pts: PackedVector2Array = PackedVector2Array()

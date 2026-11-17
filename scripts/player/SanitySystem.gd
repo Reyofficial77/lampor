@@ -76,7 +76,7 @@ func _process(delta: float) -> void:
 	AudioManager.set_whisper_intensity(fear_ratio if fear_ratio > 0.55 else 0.0)
 
 	if current_sanity <= 0.0:
-		SignalBus.player_died.emit("Kewarasanmu hancur total karena menatap Lampor!")
+		SignalBus.player_death_requested.emit("Kewarasanmu hancur total karena menatap Lampor!")
 
 func _on_lampor_nearby(dist: float) -> void:
 	lampor_distance = dist

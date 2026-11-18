@@ -1,7 +1,7 @@
 class_name MainMenu
 extends Control
 
-const GAME_VERSION: String = "v1.1.6"
+const GAME_VERSION: String = "v1.1.9"
 const ACCENT: Color = Color(0.72, 0.12, 0.14, 1.0)
 const TEXT_MAIN: Color = Color(0.93, 0.91, 0.88, 1.0)
 const TEXT_MUTED: Color = Color(0.63, 0.61, 0.60, 1.0)
@@ -30,6 +30,12 @@ var auto_update_check: CheckButton
 var update_button: Button
 var update_check_button: Button
 var update_status_label: Label
+var fix_notes_button: Button
+var fix_notes_overlay: ColorRect
+var fix_notes_scroll: ScrollContainer
+var fix_notes_view: RichTextLabel
+var update_restart_overlay: ColorRect
+var update_restart_status: Label
 var nightmare_button: Button
 var nightmare_lock_label: Label
 var volume_slider: HSlider
@@ -48,7 +54,7 @@ func _ready() -> void:
 	GameManager.current_state = GameManager.GameState.MENU
 	_build_menu()
 	UpdateManager.update_available.connect(_on_update_available)
-	UpdateManager.update_downloaded.connect(_on_update_downloaded)
+	UpdateManager.update_installed.connect(_on_update_installed)
 	UpdateManager.update_failed.connect(_on_update_failed)
 	UpdateManager.up_to_date.connect(_on_update_up_to_date)
 	get_viewport().size_changed.connect(_apply_layout)
@@ -116,6 +122,9 @@ func _build_menu() -> void:
 	var settings_button := _make_button("PENGATURAN")
 	settings_button.pressed.connect(func() -> void: settings_overlay.visible = true)
 	menu_buttons.add_child(settings_button)
+	fix_notes_button = _make_button("CATATAN PEMBARUAN")
+	fix_notes_button.pressed.connect(_show_fix_notes)
+	menu_buttons.add_child(fix_notes_button)
 	var credits_button := _make_button("HAK CIPTA")
 	credits_button.pressed.connect(func() -> void: credits_overlay.visible = true)
 	menu_buttons.add_child(credits_button)
@@ -163,6 +172,8 @@ func _build_menu() -> void:
 	_build_settings_modal()
 	_build_shop_modal()
 	_build_credits_modal()
+	_build_fix_notes_modal()
+	_build_update_restart_modal()
 
 func _build_warning_modal() -> void:
 	var modal: Dictionary = _create_modal("PERINGATAN JUMPSCARE")
@@ -266,7 +277,7 @@ func _build_settings_modal() -> void:
 	content.add_child(graphics_row)
 
 	auto_update_check = CheckButton.new()
-	auto_update_check.text = "Unduh paket update otomatis"
+	auto_update_check.text = "Ekstrak/pasang source update otomatis"
 	auto_update_check.button_pressed = SettingsManager.auto_update
 	auto_update_check.toggled.connect(SettingsManager.set_auto_update)
 	content.add_child(auto_update_check)
@@ -434,28 +445,77 @@ func _check_for_game_updates() -> void:
 	UpdateManager.check_for_updates()
 
 func _on_update_available(commit_sha: String, commit_message: String) -> void:
-	update_button.visible = true
-	update_button.text = "PEMBARUAN TERSEDIA"
+	update_button.disabled = false
+	update_button.visible = not UpdateManager.is_update_processed()
+	update_button.text = "PASANG PEMBARUAN"
 	update_button.tooltip_text = commit_message
 	update_check_button.text = "PERIKSA PEMBARUAN GAME"
-	update_status_label.text = "Commit terbaru %s: %s" % [commit_sha.substr(0, 10), commit_message]
-	if UpdateManager.downloaded_commit == UpdateManager.latest_commit and FileAccess.file_exists(UpdateManager.downloaded_path):
-		update_button.text = "PAKET UPDATE SIAP"
+	if UpdateManager.is_update_processed():
+		update_status_label.text = "Source commit %s sudah diekstrak sebelumnya." % commit_sha.substr(0, 10)
+	else:
+		update_status_label.text = "Commit terbaru %s: %s" % [commit_sha.substr(0, 10), commit_message]
 
 func _on_update_up_to_date(commit_sha: String) -> void:
 	update_check_button.text = "PERIKSA PEMBARUAN GAME"
 	update_status_label.text = "Game sudah sama dengan commit terbaru (%s)." % commit_sha.substr(0, 10)
 	update_button.visible = false
 
-func _on_update_downloaded(file_path: String, commit_sha: String) -> void:
-	update_button.visible = true
-	update_button.text = "PAKET UPDATE DIUNDUH"
-	update_button.tooltip_text = "Paket sumber sudah diunduh. Buka untuk melihat arsip dan memasang build terbaru secara manual.\n%s\nCommit: %s" % [file_path, commit_sha]
+func _on_update_installed(destination_path: String, commit_sha: String, applied_to_project: bool) -> void:
+	update_button.disabled = false
+	update_button.visible = false
 	update_check_button.text = "PERIKSA PEMBARUAN GAME"
-	update_status_label.text = "Paket source sudah diunduh. Pasang manual; tidak mengganti executable yang sedang berjalan."
+	if applied_to_project:
+		update_status_label.text = "Update %s berhasil diterapkan. Mulai ulang permainan agar semua skrip, resource, file baru, dan penghapusan dimuat sepenuhnya." % commit_sha.substr(0, 10)
+		update_button.tooltip_text = "Proyek sudah sama dengan commit %s" % commit_sha.substr(0, 10)
+		_show_update_restart_prompt(commit_sha)
+	else:
+		update_status_label.text = "Paket source %s sudah diekstrak ke penyimpanan aplikasi, tetapi belum dapat mengganti APK/PCK yang sedang berjalan. Gunakan build rilis platform terbaru untuk menerapkan perubahan." % commit_sha.substr(0, 10)
+		update_button.tooltip_text = "Source hasil ekstrak: %s" % destination_path
+
+func _build_update_restart_modal() -> void:
+	var modal: Dictionary = _create_modal("PEMBARUAN BERHASIL")
+	update_restart_overlay = modal["overlay"] as ColorRect
+	var body: VBoxContainer = modal["body"] as VBoxContainer
+	var explanation := _make_label("Semua perubahan dari repository sudah diterapkan ke folder proyek. Mulai ulang permainan sekarang agar skrip, resource, file baru, dan penghapusan dimuat sepenuhnya. Progress permainan akan disimpan sebelum dimulai ulang.", 14, TEXT_MAIN, HORIZONTAL_ALIGNMENT_CENTER)
+	explanation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.add_child(explanation)
+	update_restart_status = _make_label("Disarankan: mulai ulang sekarang.", 12, TEXT_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	update_restart_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.add_child(update_restart_status)
+	var restart := _make_button("MULAI ULANG SEKARANG", true)
+	restart.pressed.connect(_restart_after_update)
+	body.add_child(restart)
+	var later := _make_button("NANTI, SAYA MULAI ULANG MANUAL")
+	later.pressed.connect(func() -> void:
+		update_restart_overlay.visible = false
+		update_status_label.text = "Pembaruan sudah diterapkan. Tutup permainan lalu buka kembali proyek Lampor untuk memuat seluruh perubahan."
+	)
+	body.add_child(later)
+
+func _show_update_restart_prompt(commit_sha: String) -> void:
+	if update_restart_overlay == null:
+		return
+	update_restart_status.text = "Commit terpasang: %s · Mulai ulang disarankan." % commit_sha.substr(0, 10)
+	update_restart_overlay.visible = true
+	update_restart_overlay.move_to_front()
+
+func _restart_after_update() -> void:
+	if update_restart_status:
+		update_restart_status.text = "Menyimpan progress dan memulai ulang..."
+	GameManager.save_active_run()
+	GameManager.save_game_data()
+	var executable_path: String = OS.get_executable_path()
+	var project_root: String = ProjectSettings.globalize_path("res://")
+	var process_id: int = OS.create_process(executable_path, ["--path", project_root])
+	if process_id <= 0:
+		if update_restart_status:
+			update_restart_status.text = "Permainan tidak dapat dimulai ulang otomatis. Tutup game, lalu buka kembali proyek Lampor secara manual. Progress sudah diminta untuk disimpan."
+		return
+	get_tree().quit()
 
 func _on_update_failed(message: String) -> void:
 	if update_button:
+		update_button.disabled = false
 		update_button.visible = true
 		update_button.text = "UPDATE GAGAL · COBA LAGI"
 		update_button.tooltip_text = message
@@ -465,11 +525,141 @@ func _on_update_failed(message: String) -> void:
 		update_status_label.text = message
 
 func _on_update_button_pressed() -> void:
-	if not UpdateManager.downloaded_path.is_empty() and FileAccess.file_exists(UpdateManager.downloaded_path) and UpdateManager.downloaded_commit == UpdateManager.latest_commit:
-		UpdateManager.open_downloaded_package()
-	else:
-		update_button.text = "MENGUNDUH UPDATE..."
-		UpdateManager.download_update()
+	update_button.disabled = true
+	update_button.text = "MENGUNDUH & MEMASANG..."
+	UpdateManager.download_update()
+
+
+func _build_fix_notes_modal() -> void:
+	var modal: Dictionary = _create_modal("CATATAN PEMBARUAN")
+	fix_notes_overlay = modal["overlay"] as ColorRect
+	var body: VBoxContainer = modal["body"] as VBoxContainer
+	var hint := _make_label("Catatan perubahan dari FIX_NOTES.md pada versi game/repository.", 11, TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT)
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.add_child(hint)
+	fix_notes_scroll = ScrollContainer.new()
+	fix_notes_scroll.custom_minimum_size = Vector2(0, 320)
+	fix_notes_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	fix_notes_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	body.add_child(fix_notes_scroll)
+	fix_notes_view = RichTextLabel.new()
+	fix_notes_view.bbcode_enabled = true
+	fix_notes_view.fit_content = true
+	fix_notes_view.scroll_active = false
+	fix_notes_view.selection_enabled = true
+	fix_notes_view.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	fix_notes_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	fix_notes_view.custom_minimum_size = Vector2(0, 300)
+	fix_notes_view.add_theme_color_override("default_color", TEXT_MAIN)
+	fix_notes_view.add_theme_font_size_override("normal_font_size", 14)
+	fix_notes_scroll.add_child(fix_notes_view)
+	var close := _make_button("TUTUP")
+	close.pressed.connect(func() -> void: fix_notes_overlay.visible = false)
+	body.add_child(close)
+
+func _show_fix_notes() -> void:
+	if fix_notes_view == null:
+		return
+	var markdown: String = UpdateManager.get_fix_notes_markdown()
+	if markdown.strip_edges().is_empty():
+		markdown = "# Catatan Pembaruan\n\nBelum ada catatan untuk versi ini."
+	fix_notes_view.parse_bbcode(_markdown_to_bbcode(markdown))
+	fix_notes_view.scroll_to_line(0)
+	fix_notes_overlay.visible = true
+
+func _markdown_to_bbcode(markdown: String) -> String:
+	var output := PackedStringArray()
+	var in_code_block: bool = false
+	var in_table: bool = false
+	var code_lines := PackedStringArray()
+	for line in markdown.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+		if line.strip_edges().begins_with("```"):
+			if in_code_block:
+				output.append("[bgcolor=#171719][color=#e8dddd][code]" + "\n".join(code_lines).replace("[", "[lb]").replace("]", "[rb]") + "[/code][/color][/bgcolor]")
+				code_lines.clear()
+				in_code_block = false
+			else:
+				in_code_block = true
+				code_lines.clear()
+			continue
+		if in_code_block:
+			code_lines.append(line)
+			continue
+		var trimmed: String = line.strip_edges()
+		if trimmed.is_empty():
+			output.append("")
+			in_table = false
+			continue
+		if trimmed.begins_with("|") and trimmed.count("|") >= 2:
+			var cells: PackedStringArray = trimmed.trim_prefix("|").trim_suffix("|").split("|")
+			var clean_cells := PackedStringArray()
+			var separator_row: bool = true
+			for cell in cells:
+				var cell_text: String = cell.strip_edges()
+				clean_cells.append(cell_text)
+				var separator_regex := RegEx.new()
+				if separator_regex.compile("^:?-{3,}:?$") != OK or not separator_regex.search(cell_text):
+					separator_row = false
+			if separator_row:
+				continue
+			var rendered_cells := PackedStringArray()
+			for cell_text in clean_cells:
+				rendered_cells.append(_markdown_inline(cell_text))
+			var table_row: String = "  [color=#8e7779]│[/color]  ".join(rendered_cells)
+			if not in_table:
+				output.append("[b][color=#e58b8e]" + table_row + "[/color][/b]")
+				in_table = true
+			else:
+				output.append(table_row)
+			continue
+		else:
+			in_table = false
+		if trimmed in ["---", "***", "___"]:
+			output.append("[color=#74464a]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/color]")
+			continue
+		if trimmed.begins_with("### "):
+			output.append("[font_size=16][b][color=#e58b8e]" + _markdown_inline(trimmed.substr(4)) + "[/color][/b][/font_size]")
+		elif trimmed.begins_with("## "):
+			output.append("[font_size=19][b][color=#e58b8e]" + _markdown_inline(trimmed.substr(3)) + "[/color][/b][/font_size]")
+		elif trimmed.begins_with("# "):
+			output.append("[font_size=23][b][color=#ed9b9d]" + _markdown_inline(trimmed.substr(2)) + "[/color][/b][/font_size]")
+		elif trimmed.begins_with("> "):
+			output.append("[color=#b7a5a5][i]│ " + _markdown_inline(trimmed.substr(2)) + "[/i][/color]")
+		elif trimmed.begins_with("- [ ] ") or trimmed.begins_with("* [ ] "):
+			output.append("[color=#d77b80]☐[/color]  " + _markdown_inline(trimmed.substr(6)))
+		elif trimmed.begins_with("- [x] ") or trimmed.begins_with("- [X] ") or trimmed.begins_with("* [x] ") or trimmed.begins_with("* [X] "):
+			output.append("[color=#91c59a]☑[/color]  " + _markdown_inline(trimmed.substr(6)))
+		elif trimmed.begins_with("- ") or trimmed.begins_with("* ") or trimmed.begins_with("+ "):
+			output.append("[color=#d77b80]•[/color]  " + _markdown_inline(trimmed.substr(2)))
+		else:
+			var number_match := RegEx.new()
+			if number_match.compile("^(\\d+)\\.\\s+(.+)$") == OK and number_match.search(trimmed):
+				var matched: RegExMatch = number_match.search(trimmed)
+				output.append("[color=#d77b80]" + matched.get_string(1) + ".[/color]  " + _markdown_inline(matched.get_string(2)))
+			else:
+				output.append(_markdown_inline(line))
+	if in_code_block:
+		output.append("[bgcolor=#171719][color=#e8dddd][code]" + "\n".join(code_lines).replace("[", "[lb]").replace("]", "[rb]") + "[/code][/color][/bgcolor]")
+	return "\n".join(output)
+
+func _markdown_inline(source: String) -> String:
+	var result: String = source
+	var links := RegEx.new()
+	if links.compile("\\[([^\\]]+)\\]\\((https?://[^)]+)\\)") == OK:
+		result = links.sub(result, "[url=$2][color=#9ec5ff]$1[/color][/url]", true)
+	var inline_code := RegEx.new()
+	if inline_code.compile("`([^`]+)`") == OK:
+		result = inline_code.sub(result, "[bgcolor=#252326][color=#f0c9a2]$1[/color][/bgcolor]", true)
+	var bold := RegEx.new()
+	if bold.compile("\\*\\*(.+?)\\*\\*") == OK:
+		result = bold.sub(result, "[b]$1[/b]", true)
+	var strike := RegEx.new()
+	if strike.compile("~~(.+?)~~") == OK:
+		result = strike.sub(result, "[s]$1[/s]", true)
+	var italic := RegEx.new()
+	if italic.compile("(?<!\\*)\\*([^*]+)\\*(?!\\*)") == OK:
+		result = italic.sub(result, "[i]$1[/i]", true)
+	return result
 
 func _build_credits_modal() -> void:
 	var modal: Dictionary = _create_modal("HAK CIPTA")
@@ -602,6 +792,8 @@ func _apply_layout() -> void:
 		panel.custom_minimum_size = Vector2(maxf(280.0, minf(540.0, view_size.x - 28.0)), panel.custom_minimum_size.y)
 	if settings_scroll:
 		settings_scroll.custom_minimum_size.y = maxf(120.0, minf(290.0, view_size.y - 310.0))
+	if fix_notes_scroll:
+		fix_notes_scroll.custom_minimum_size.y = maxf(150.0, minf(380.0, view_size.y - 230.0))
 
 func _update_nightmare_status() -> void:
 	var unlocked: bool = GameManager.is_nightmare_unlocked()

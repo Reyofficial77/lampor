@@ -65,12 +65,12 @@ Babak II dimulai berdasarkan jam permainan pada **02.30**, meskipun objektif Bab
 - Hadiah akhir permainan: 120 koin saat menang dan 25 koin saat kalah.
 - Toko item untuk membeli Jamu Tolak Bala, baterai senter, dan nyawa tambahan.
 - Kode redeem sekali pakai per data save lokal; daftar kode dan hadiah diatur melalui `scripts/systems/RedemptionCodes.gd`.
-- Pemeriksaan commit terbaru GitHub dengan endpoint cadangan dan diagnostik kegagalan koneksi, serta pengunduhan arsip source update.
+- Pemeriksaan commit terbaru GitHub dengan endpoint cadangan dan diagnostik kegagalan koneksi, serta ekstraksi source update otomatis ke folder proyek saat berjalan dari source yang dapat ditulis.
 - Autosave checkpoint setiap 5 detik, penyimpanan saat aplikasi dijeda/keluar/background, dan tombol **Lanjutkan Permainan** untuk memulihkan sesi terakhir.
 
 ## Redeem dan update
 
-Daftar kode redeem dan hadiah dapat diedit pada `scripts/systems/RedemptionCodes.gd`. Pengaturan update otomatis hanya mengunduh arsip source setelah commit baru terdeteksi. Repository saat ini tidak menyediakan binary/installer export, jadi paket yang diunduh perlu dipasang secara manual; game tidak mengganti executable yang sedang berjalan.
+Daftar kode redeem dan hadiah dapat diedit pada `scripts/systems/RedemptionCodes.gd`. Updater mengunduh arsip secara internal, memverifikasi, mengekstrak, dan menghapus arsip sementara. Saat game dijalankan dari folder source yang dapat ditulis, file diperbarui langsung di proyek dengan backup dan pemulihan jika proses gagal. Pada APK/executable export, source hanya diekstrak ke penyimpanan aplikasi karena paket aplikasi aktif tidak dapat ditimpa oleh dirinya sendiri. Repository perlu menyediakan APK/installer/PCK release per platform untuk update binary otomatis.
 
 Detail konfigurasi: [`REDEEM_AND_UPDATE.md`](REDEEM_AND_UPDATE.md).
 

@@ -10,7 +10,7 @@ Sebelum mengekspor APK/AAB di Godot 4:
 4. Ekspor ulang APK/AAB dan pasang ulang build tersebut.
 5. Pastikan perangkat memiliki koneksi internet, tanggal/waktu otomatis, dan tidak memblokir GitHub melalui VPN, Private DNS, firewall, atau ad blocker.
 
-Updater memeriksa GitHub API, lalu mencoba Atom feed sebagai fallback. Paket source ZIP diunduh dari codeload.github.com. Ini mengunduh source, bukan mengganti executable yang sedang berjalan; pemasangan binary otomatis membutuhkan sistem distribusi/release khusus per platform.
+Updater memeriksa GitHub API, lalu mencoba Atom feed sebagai fallback. Source diunduh secara internal, diekstrak ke direktori data privat aplikasi, dan arsip sementara dihapus. Android tidak mengizinkan aplikasi menimpa APK/PCK yang sedang berjalan. Untuk menerapkan update ke instalasi Android, repository perlu menerbitkan APK/AAB release dan aplikasi perlu memakai alur pemasangan Android yang sesuai (atau distribusi melalui Play Store).
 
 ## Autosave
 

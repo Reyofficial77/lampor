@@ -18,6 +18,12 @@ func _ready() -> void:
 		AudioManager.stop_ending_audio()
 		get_tree().change_scene_to_file("res://scenes/ui/MainMenu.tscn")
 	)
+	var reward_label := Label.new()
+	reward_label.text = "+%d Koin Emas  ·  Total: %d" % [GameManager.last_run_coin_reward, GameManager.coins]
+	reward_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	reward_label.add_theme_font_size_override("font_size", 16)
+	reward_label.add_theme_color_override("font_color", Color(0.94, 0.78, 0.38, 1.0))
+	title_box.add_child(reward_label)
 	get_viewport().size_changed.connect(_apply_layout)
 	_apply_layout()
 

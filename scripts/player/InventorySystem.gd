@@ -9,7 +9,7 @@ const STACK_LIMITS: Dictionary = {
 	"minyak_tanah": 5,
 	"papan_paku": 4,
 	"jamu": 3,
-	"baterai": 3
+	"baterai": 5
 }
 
 func _ready() -> void:
@@ -145,6 +145,7 @@ func drop_equipped_item(drop_position: Vector3) -> bool:
 	inst.item_id = dropped_item_data.get("id", "minyak_tanah")
 	inst.item_name = dropped_item_data.get("name", "Barang")
 	inst.item_type = dropped_item_data.get("type", "resource")
+	inst.set_meta("autosave_dynamic", true)
 	# global_position baru valid setelah Node3D masuk SceneTree.
 	world.add_child(inst)
 	inst.global_position = drop_position

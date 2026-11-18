@@ -1,5 +1,7 @@
 extends Node
 
+const REDEMPTION_CODES = preload("res://scripts/systems/RedemptionCodes.gd")
+
 # Game Manager Singleton
 
 enum GameState { MENU, PLAYING, PAUSED, GAMEOVER, VICTORY }
@@ -45,11 +47,28 @@ var death_sequence_active: bool = false
 
 # Save Data
 var total_wins: int = 0
+var coins: int = 0
+var extra_lives: int = 0
+var item_stash: Dictionary = {"jamu": 0, "baterai": 0}
+var redeemed_codes: Array[String] = []
+var run_reward_awarded: bool = false
+var last_run_coin_reward: int = 0
+const WIN_COIN_REWARD: int = 120
+const LOSS_COIN_REWARD: int = 25
 const SAVE_PATH: String = "user://lampor_save.json"
+const RUN_SAVE_PATH: String = "user://lampor_run.json"
+const RUN_SAVE_TEMP_PATH: String = "user://lampor_run.json.tmp"
+const RUN_SAVE_BACKUP_PATH: String = "user://lampor_run.json.bak"
+const AUTOSAVE_INTERVAL: float = 5.0
+var autosave_elapsed: float = 0.0
+var autosave_last_success_unix: int = 0
+var has_saved_run_cache: bool = false
+var is_resuming_saved_run: bool = false
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	load_save_data()
+	has_saved_run_cache = not _read_run_snapshot().is_empty()
 	SignalBus.torch_lit.connect(_on_torch_lit)
 	SignalBus.ritual_item_collected.connect(_on_ritual_item_collected)
 	SignalBus.player_death_requested.connect(_on_player_death_requested)
@@ -57,22 +76,510 @@ func _ready() -> void:
 func load_save_data() -> void:
 	if not FileAccess.file_exists(SAVE_PATH):
 		total_wins = 0
+		coins = 0
+		extra_lives = 0
 		return
 	var file: FileAccess = FileAccess.open(SAVE_PATH, FileAccess.READ)
-	if file:
-		var content: String = file.get_as_text()
-		var json: JSON = JSON.new()
-		var parse_result: Error = json.parse(content)
-		if parse_result == OK and json.data is Dictionary:
-			total_wins = int(json.data.get("total_wins", 0))
+	if not file:
+		return
+	var json: JSON = JSON.new()
+	if json.parse(file.get_as_text()) != OK or not json.data is Dictionary:
+		return
+	var data: Dictionary = json.data
+	total_wins = maxi(0, int(data.get("total_wins", 0)))
+	coins = maxi(0, int(data.get("coins", 0)))
+	extra_lives = maxi(0, int(data.get("extra_lives", 0)))
+	var saved_stash: Variant = data.get("item_stash", {})
+	if saved_stash is Dictionary:
+		item_stash["jamu"] = maxi(0, int(saved_stash.get("jamu", 0)))
+		item_stash["baterai"] = maxi(0, int(saved_stash.get("baterai", 0)))
+	var saved_codes: Variant = data.get("redeemed_codes", [])
+	if saved_codes is Array:
+		for code: Variant in saved_codes:
+			var normalized: String = str(code).to_upper()
+			if not normalized.is_empty() and not redeemed_codes.has(normalized):
+				redeemed_codes.append(normalized)
 
 func save_game_data() -> void:
 	var file: FileAccess = FileAccess.open(SAVE_PATH, FileAccess.WRITE)
-	if file:
-		var data: Dictionary = {
-			"total_wins": total_wins
-		}
-		file.store_string(JSON.stringify(data))
+	if not file:
+		return
+	var data: Dictionary = {
+		"total_wins": total_wins,
+		"coins": coins,
+		"extra_lives": extra_lives,
+		"item_stash": item_stash,
+		"redeemed_codes": redeemed_codes
+	}
+	file.store_string(JSON.stringify(data))
+	file.flush()
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_WM_GO_BACK_REQUEST or what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		# Flush a final checkpoint when Android backgrounds the app or the user exits.
+		save_active_run()
+		save_game_data()
+
+func _read_snapshot_file(path: String) -> Dictionary:
+	if not FileAccess.file_exists(path):
+		return {}
+	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return {}
+	var json := JSON.new()
+	var parse_error: Error = json.parse(file.get_as_text())
+	file.close()
+	if parse_error != OK or not json.data is Dictionary:
+		return {}
+	var snapshot: Dictionary = json.data
+	if int(snapshot.get("run_version", 0)) != 1 or not snapshot.has("player"):
+		return {}
+	return snapshot
+
+func _read_run_snapshot() -> Dictionary:
+	# Pulihkan cadangan jika proses aplikasi terhenti saat file utama ditulis.
+	for path: String in [RUN_SAVE_PATH, RUN_SAVE_TEMP_PATH, RUN_SAVE_BACKUP_PATH]:
+		var snapshot: Dictionary = _read_snapshot_file(path)
+		if not snapshot.is_empty():
+			return snapshot
+	return {}
+
+func _write_run_snapshot(snapshot: Dictionary) -> bool:
+	var temp_file: FileAccess = FileAccess.open(RUN_SAVE_TEMP_PATH, FileAccess.WRITE)
+	if temp_file == null:
+		push_warning("[GameManager] Gagal membuka file autosave sementara: %s" % FileAccess.get_open_error())
+		return false
+	temp_file.store_string(JSON.stringify(snapshot))
+	temp_file.flush()
+	temp_file.close()
+	var save_absolute: String = ProjectSettings.globalize_path(RUN_SAVE_PATH)
+	var temp_absolute: String = ProjectSettings.globalize_path(RUN_SAVE_TEMP_PATH)
+	var backup_absolute: String = ProjectSettings.globalize_path(RUN_SAVE_BACKUP_PATH)
+	if FileAccess.file_exists(RUN_SAVE_BACKUP_PATH):
+		DirAccess.remove_absolute(backup_absolute)
+	if FileAccess.file_exists(RUN_SAVE_PATH):
+		var backup_error: Error = DirAccess.rename_absolute(save_absolute, backup_absolute)
+		if backup_error != OK:
+			push_warning("[GameManager] Gagal membuat cadangan autosave: %d" % backup_error)
+			return false
+	var commit_error: Error = DirAccess.rename_absolute(temp_absolute, save_absolute)
+	if commit_error != OK:
+		if FileAccess.file_exists(RUN_SAVE_BACKUP_PATH) and not FileAccess.file_exists(RUN_SAVE_PATH):
+			DirAccess.rename_absolute(backup_absolute, save_absolute)
+		push_warning("[GameManager] Gagal memasang autosave baru: %d" % commit_error)
+		return false
+	if FileAccess.file_exists(RUN_SAVE_BACKUP_PATH):
+		DirAccess.remove_absolute(backup_absolute)
+	return true
+
+func has_saved_run() -> bool:
+	var snapshot: Dictionary = _read_run_snapshot()
+	has_saved_run_cache = not snapshot.is_empty()
+	return has_saved_run_cache
+
+func clear_run_save() -> void:
+	for path: String in [RUN_SAVE_PATH, RUN_SAVE_TEMP_PATH, RUN_SAVE_BACKUP_PATH]:
+		if FileAccess.file_exists(path):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	has_saved_run_cache = false
+	autosave_elapsed = 0.0
+
+func _vector3_to_array(value: Vector3) -> Array:
+	return [value.x, value.y, value.z]
+
+func _array_to_vector3(value: Variant, fallback: Vector3 = Vector3.ZERO) -> Vector3:
+	if value is Array and value.size() >= 3:
+		return Vector3(float(value[0]), float(value[1]), float(value[2]))
+	return fallback
+
+func _capture_world_snapshot(world_root: Node) -> Dictionary:
+	var world_data: Dictionary = {"torches": [], "doors": [], "pickups": [], "lampor": []}
+	for node: Node in get_tree().get_nodes_in_group("torch"):
+		if node is SafeZoneTorch and world_root.is_ancestor_of(node):
+			var torch: SafeZoneTorch = node as SafeZoneTorch
+			world_data["torches"].append({"path": str(world_root.get_path_to(torch)), "is_lit": torch.is_lit})
+	for node: Node in get_tree().get_nodes_in_group("interactable"):
+		if node is Door and world_root.is_ancestor_of(node):
+			var door: Door = node as Door
+			world_data["doors"].append({"path": str(world_root.get_path_to(door)), "is_open": door.is_open, "is_barricaded": door.is_barricaded})
+		elif node is PickupItem and world_root.is_ancestor_of(node):
+			var item: PickupItem = node as PickupItem
+			var entry: Dictionary = {
+				"path": str(world_root.get_path_to(item)),
+				"item_id": item.item_id,
+				"item_name": item.item_name,
+				"item_type": item.item_type,
+				"is_ritual_item": item.is_ritual_item,
+				"ritual_display_name": item.ritual_display_name,
+				"position": _vector3_to_array(item.global_position),
+				"dynamic": item.has_meta("autosave_dynamic")
+			}
+			world_data["pickups"].append(entry)
+	for node: Node in get_tree().get_nodes_in_group("lampor"):
+		if node is LamporStateMachine and world_root.is_ancestor_of(node):
+			var lampor: LamporStateMachine = node as LamporStateMachine
+			world_data["lampor"].append({
+				"path": str(world_root.get_path_to(lampor)),
+				"position": _vector3_to_array(lampor.global_position),
+				"rotation": _vector3_to_array(lampor.rotation),
+				"state": int(lampor.current_state),
+				"waypoint": lampor.current_waypoint_idx,
+				"target": _vector3_to_array(lampor.target_position),
+				"chase_timer": lampor.chase_timer,
+				"lost_sight_timer": lampor.lost_sight_timer,
+				"chase_cooldown": lampor.chase_cooldown,
+				"stare_timer": lampor.stare_timer,
+				"stare_punish_timer": lampor.stare_punish_timer,
+				"hover_time": lampor.hover_time
+			})
+	return world_data
+
+func save_active_run() -> bool:
+	if current_state != GameState.PLAYING or not is_instance_valid(player_character) or not (player_character is PlayerController):
+		return false
+	var player: PlayerController = player_character as PlayerController
+	if player.is_caught:
+		return false
+	var world_root: Node = get_tree().current_scene
+	if world_root == null or world_root.scene_file_path != "res://scenes/world/VillageMap.tscn":
+		return false
+	var save_position: Vector3 = player.global_position
+	if player.is_hiding and is_instance_valid(player.hiding_spot) and player.hiding_spot.has_node("ExitPoint"):
+		save_position = (player.hiding_spot.get_node("ExitPoint") as Node3D).global_position
+	var house_path: String = ""
+	if is_instance_valid(player.current_house):
+		house_path = str(world_root.get_path_to(player.current_house))
+	var inventory_data: Array = []
+	var active_slot: int = 0
+	if is_instance_valid(player.inventory_system):
+		inventory_data = player.inventory_system.slots.duplicate(true)
+		active_slot = player.inventory_system.active_slot
+	var snapshot: Dictionary = {
+		"run_version": 1,
+		"saved_at": Time.get_unix_time_from_system(),
+		"selected_difficulty": int(selected_difficulty),
+		"current_act": int(current_act),
+		"current_hour": current_hour,
+		"current_minute": current_minute,
+		"time_accumulator": time_accumulator,
+		"dawn_reached": dawn_reached,
+		"torches_lit": torches_lit,
+		"doors_barricaded": doors_barricaded,
+		"ritual_items": ritual_items.duplicate(true),
+		"furnace_burning": furnace_burning,
+		"furnace_time_left": furnace_time_left,
+		"player": {
+			"position": _vector3_to_array(save_position),
+			"rotation_y": player.rotation.y,
+			"head_pitch": player.head.rotation.x,
+			"stamina": player.current_stamina,
+			"sanity": player.sanity_system.current_sanity,
+			"flashlight_battery": player.flashlight_battery,
+			"flashlight_on": player.flashlight_on,
+			"inventory": inventory_data,
+			"active_slot": active_slot,
+			"inside_house": player.is_inside_house,
+			"house_path": house_path
+		},
+		"world": _capture_world_snapshot(world_root)
+	}
+	if not _write_run_snapshot(snapshot):
+		return false
+	has_saved_run_cache = true
+	autosave_last_success_unix = int(Time.get_unix_time_from_system())
+	return true
+
+func _saved_difficulty(value: int) -> Difficulty:
+	match clampi(value, Difficulty.EASY, Difficulty.NIGHTMARE):
+		Difficulty.EASY: return Difficulty.EASY
+		Difficulty.NORMAL: return Difficulty.NORMAL
+		Difficulty.HARD: return Difficulty.HARD
+		Difficulty.NIGHTMARE: return Difficulty.NIGHTMARE
+	return Difficulty.NORMAL
+
+func _saved_act(value: int) -> Act:
+	match clampi(value, Act.BABAK_1, Act.BABAK_3):
+		Act.BABAK_1: return Act.BABAK_1
+		Act.BABAK_2: return Act.BABAK_2
+		Act.BABAK_3: return Act.BABAK_3
+	return Act.BABAK_1
+
+func resume_saved_game() -> void:
+	var snapshot: Dictionary = _read_run_snapshot()
+	if snapshot.is_empty():
+		clear_run_save()
+		return
+	selected_difficulty = _saved_difficulty(int(snapshot.get("selected_difficulty", Difficulty.NORMAL)))
+	seconds_per_game_minute = get_seconds_per_minute_for_difficulty(selected_difficulty)
+	current_act = _saved_act(int(snapshot.get("current_act", Act.BABAK_1)))
+	current_hour = clampi(int(snapshot.get("current_hour", 1)), 1, 5)
+	current_minute = clampi(int(snapshot.get("current_minute", 0)), 0, 59)
+	time_accumulator = maxf(0.0, float(snapshot.get("time_accumulator", 0.0)))
+	dawn_reached = bool(snapshot.get("dawn_reached", false))
+	torches_lit = clampi(int(snapshot.get("torches_lit", 0)), 0, REQUIRED_TORCHES)
+	doors_barricaded = clampi(int(snapshot.get("doors_barricaded", 0)), 0, REQUIRED_BARRICADES)
+	var saved_ritual: Variant = snapshot.get("ritual_items", {})
+	for ritual_name: String in ritual_items.keys():
+		ritual_items[ritual_name] = bool(saved_ritual.get(ritual_name, false)) if saved_ritual is Dictionary else false
+	furnace_burning = bool(snapshot.get("furnace_burning", false))
+	furnace_time_left = clampf(float(snapshot.get("furnace_time_left", FURNACE_TOTAL_TIME)), 0.0, FURNACE_TOTAL_TIME)
+	death_sequence_active = false
+	last_death_reason = ""
+	is_resuming_saved_run = true
+	current_state = GameState.PLAYING
+	get_tree().paused = false
+	var scene_error: Error = get_tree().change_scene_to_file("res://scenes/world/VillageMap.tscn")
+	if scene_error != OK:
+		is_resuming_saved_run = false
+		current_state = GameState.MENU
+		push_error("[GameManager] Gagal memuat map untuk melanjutkan permainan: %d" % scene_error)
+		return
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var world_root: Node = get_tree().current_scene
+	if world_root == null:
+		is_resuming_saved_run = false
+		current_state = GameState.MENU
+		return
+	_restore_world_snapshot(world_root, snapshot.get("world", {}))
+	_restore_player_snapshot(world_root, snapshot.get("player", {}))
+	_broadcast_resumed_run_state()
+	_restore_lampor_snapshot(world_root, snapshot.get("world", {}))
+	is_resuming_saved_run = false
+	autosave_elapsed = 0.0
+
+func _restore_world_snapshot(world_root: Node, raw_world: Variant) -> void:
+	if not raw_world is Dictionary:
+		return
+	var world_data: Dictionary = raw_world
+	for entry: Variant in world_data.get("torches", []):
+		if not entry is Dictionary:
+			continue
+		var torch: SafeZoneTorch = world_root.get_node_or_null(NodePath(str(entry.get("path", "")))) as SafeZoneTorch
+		if torch:
+			torch.is_lit = bool(entry.get("is_lit", false))
+			torch._update_visuals()
+	for entry: Variant in world_data.get("doors", []):
+		if not entry is Dictionary:
+			continue
+		var door: Door = world_root.get_node_or_null(NodePath(str(entry.get("path", "")))) as Door
+		if door:
+			door.is_open = bool(entry.get("is_open", false))
+			door.is_barricaded = bool(entry.get("is_barricaded", false))
+			door.target_rotation_y = deg_to_rad(door.open_angle) if door.is_open else 0.0
+			door.hinge.rotation.y = door.target_rotation_y
+			if door.barricade_visual:
+				door.barricade_visual.visible = door.is_barricaded
+			door._update_blocker()
+	var saved_static_pickups: Dictionary = {}
+	var saved_dynamic_pickups: Array = []
+	for entry: Variant in world_data.get("pickups", []):
+		if not entry is Dictionary:
+			continue
+		if bool(entry.get("dynamic", false)):
+			saved_dynamic_pickups.append(entry)
+		else:
+			saved_static_pickups[str(entry.get("path", ""))] = entry
+	for node: Node in get_tree().get_nodes_in_group("interactable"):
+		if not node is PickupItem or not world_root.is_ancestor_of(node):
+			continue
+		var item: PickupItem = node as PickupItem
+		if item.has_meta("autosave_dynamic"):
+			item.queue_free()
+			continue
+		var node_path: String = str(world_root.get_path_to(item))
+		if not saved_static_pickups.has(node_path):
+			item.queue_free()
+			continue
+		var saved_item: Dictionary = saved_static_pickups[node_path]
+		item.global_position = _array_to_vector3(saved_item.get("position", []), item.global_position)
+		item.is_picked_up = false
+	for entry: Dictionary in saved_dynamic_pickups:
+		var pickup_scene: PackedScene = load("res://scenes/items/PickupItem.tscn") as PackedScene
+		if pickup_scene == null:
+			continue
+		var item: PickupItem = pickup_scene.instantiate() as PickupItem
+		if item == null:
+			continue
+		item.item_id = str(entry.get("item_id", "minyak_tanah"))
+		item.item_name = str(entry.get("item_name", "Barang"))
+		item.item_type = str(entry.get("item_type", "resource"))
+		item.is_ritual_item = bool(entry.get("is_ritual_item", false))
+		item.ritual_display_name = str(entry.get("ritual_display_name", ""))
+		item.set_meta("autosave_dynamic", true)
+		world_root.add_child(item)
+		item.global_position = _array_to_vector3(entry.get("position", []), Vector3.ZERO)
+
+func _restore_lampor_snapshot(world_root: Node, raw_world: Variant) -> void:
+	if not raw_world is Dictionary:
+		return
+	var lampor_entries: Variant = raw_world.get("lampor", [])
+	if not lampor_entries is Array or lampor_entries.is_empty():
+		return
+	for entry: Variant in lampor_entries:
+		if not entry is Dictionary:
+			continue
+		var lampor: LamporStateMachine = world_root.get_node_or_null(NodePath(str(entry.get("path", "")))) as LamporStateMachine
+		if lampor == null:
+			continue
+		lampor.global_position = _array_to_vector3(entry.get("position", []), lampor.global_position)
+		lampor.rotation = _array_to_vector3(entry.get("rotation", []), lampor.rotation)
+		var saved_state_number: int = int(entry.get("state", LamporStateMachine.State.PATROL))
+		# Tween descent tidak diserialisasi; lanjutkan dari posisi tersimpan sebagai patroli.
+		if saved_state_number == LamporStateMachine.State.DESCENDING:
+			saved_state_number = LamporStateMachine.State.PATROL
+		var restored_state: LamporStateMachine.State = LamporStateMachine.State.PATROL
+		match saved_state_number:
+			LamporStateMachine.State.DORMANT_SKY: restored_state = LamporStateMachine.State.DORMANT_SKY
+			LamporStateMachine.State.PATROL: restored_state = LamporStateMachine.State.PATROL
+			LamporStateMachine.State.INVESTIGATE: restored_state = LamporStateMachine.State.INVESTIGATE
+			LamporStateMachine.State.STARE_PUNISHMENT: restored_state = LamporStateMachine.State.STARE_PUNISHMENT
+			LamporStateMachine.State.CHASE: restored_state = LamporStateMachine.State.CHASE
+			LamporStateMachine.State.BANISHED: restored_state = LamporStateMachine.State.BANISHED
+		lampor.is_descending = false
+		lampor.is_catching = false
+		lampor.current_waypoint_idx = clampi(int(entry.get("waypoint", 0)), 0, maxi(0, lampor.waypoints.size() - 1))
+		lampor.target_position = _array_to_vector3(entry.get("target", []), lampor.target_position)
+		lampor._set_state(restored_state)
+		lampor.chase_timer = maxf(0.0, float(entry.get("chase_timer", 0.0)))
+		lampor.lost_sight_timer = maxf(0.0, float(entry.get("lost_sight_timer", 0.0)))
+		lampor.chase_cooldown = maxf(0.0, float(entry.get("chase_cooldown", 0.0)))
+		lampor.stare_timer = maxf(0.0, float(entry.get("stare_timer", 0.0)))
+		lampor.stare_punish_timer = maxf(0.0, float(entry.get("stare_punish_timer", 0.0)))
+		lampor.hover_time = maxf(0.0, float(entry.get("hover_time", 0.0)))
+		lampor.velocity = Vector3.ZERO
+		if lampor.collision_shape:
+			lampor.collision_shape.disabled = restored_state == LamporStateMachine.State.DORMANT_SKY
+
+func _restore_player_snapshot(world_root: Node, raw_player: Variant) -> void:
+	if not raw_player is Dictionary:
+		return
+	var saved_player: Dictionary = raw_player
+	var player: PlayerController = get_tree().get_first_node_in_group("player") as PlayerController
+	if player == null:
+		return
+	player.global_position = _array_to_vector3(saved_player.get("position", []), player.global_position)
+	player.rotation.y = float(saved_player.get("rotation_y", player.rotation.y))
+	player.head.rotation.x = clampf(float(saved_player.get("head_pitch", 0.0)), deg_to_rad(-80.0), deg_to_rad(80.0))
+	player.velocity = Vector3.ZERO
+	player.current_stamina = clampf(float(saved_player.get("stamina", 100.0)), 0.0, player.max_stamina)
+	player.sanity_system.current_sanity = clampf(float(saved_player.get("sanity", 100.0)), 0.0, player.sanity_system.max_sanity)
+	player.flashlight_battery = clampf(float(saved_player.get("flashlight_battery", 100.0)), 0.0, 100.0)
+	player.flashlight_on = bool(saved_player.get("flashlight_on", true)) and player.flashlight_battery > 0.0
+	player.flashlight.visible = player.flashlight_on
+	player.is_hiding = false
+	player.hiding_spot = null
+	player.is_inside_house = bool(saved_player.get("inside_house", false))
+	var house_path: String = str(saved_player.get("house_path", ""))
+	player.current_house = world_root.get_node_or_null(NodePath(house_path)) if not house_path.is_empty() else null
+	var saved_inventory: Variant = saved_player.get("inventory", [])
+	if saved_inventory is Array and is_instance_valid(player.inventory_system):
+		player.inventory_system.slots = saved_inventory.duplicate(true)
+		player.inventory_system.slots.resize(InventorySystem.MAX_SLOTS)
+		player.inventory_system.active_slot = clampi(int(saved_player.get("active_slot", 0)), 0, InventorySystem.MAX_SLOTS - 1)
+		SignalBus.inventory_updated.emit(player.inventory_system.slots)
+		SignalBus.item_equipped.emit(player.inventory_system.active_slot, player.inventory_system.get_equipped_item())
+	SignalBus.player_sanity_changed.emit(player.sanity_system.current_sanity, player.sanity_system.max_sanity)
+	SignalBus.player_stamina_changed.emit(player.current_stamina, player.max_stamina)
+	SignalBus.flashlight_battery_changed.emit(player.flashlight_battery, 100.0)
+	SignalBus.flashlight_toggled.emit(player.flashlight_on)
+
+func _broadcast_resumed_run_state() -> void:
+	SignalBus.time_tick.emit("%02d:%02d" % [current_hour, current_minute], current_hour, current_minute)
+	match current_act:
+		Act.BABAK_1:
+			SignalBus.act_started.emit(1, "Babak I: Pertahanan Awal (01.00 - 02.30)")
+			SignalBus.objective_updated.emit("torches", "Nyalakan 5 Obor Penolak Bala", torches_lit, REQUIRED_TORCHES, torches_lit >= REQUIRED_TORCHES)
+			SignalBus.objective_updated.emit("barricades", "Barikade 3 Pintu Rumah dengan Papan & Paku", doors_barricaded, REQUIRED_BARRICADES, doors_barricaded >= REQUIRED_BARRICADES)
+		Act.BABAK_2:
+			SignalBus.act_started.emit(2, "Babak II: Ritual Pemutus Kutukan (02.30 - 04.00)")
+			SignalBus.objective_updated.emit("ritual_items", "Kumpulkan 4 Benda Ritual (Kemenyan, Bunga 7 Rupa, Keris, Tanah)", get_ritual_item_count(), TOTAL_RITUAL_ITEMS, get_ritual_item_count() >= TOTAL_RITUAL_ITEMS)
+			SignalBus.objective_updated.emit("beware_lampor", "Hati-hati: Lampor berpatroli! Dilarang menatap langsung!", 0, 1, false)
+		Act.BABAK_3:
+			SignalBus.act_started.emit(3, "Babak III: Klimaks Pembakaran (04.00 - 05.00)")
+			SignalBus.objective_updated.emit("burn_ritual", "Bakar semua benda ritual di Tungku Balai Desa!", 1 if furnace_burning else 0, 1, furnace_burning)
+	if current_act >= Act.BABAK_2:
+		SignalBus.lampor_state_changed.emit("CHASE" if furnace_burning else "PATROL")
+	if furnace_burning:
+		SignalBus.furnace_progress_updated.emit(furnace_time_left, FURNACE_TOTAL_TIME)
+
+func purchase_shop_item(item_id: String, quantity: int = 1) -> Dictionary:
+	var safe_quantity: int = clampi(quantity, 1, 3)
+	var price: int = 0
+	match item_id:
+		"jamu":
+			price = 30 * safe_quantity
+		"baterai":
+			price = 20 * safe_quantity
+		"extra_life":
+			price = 80 if safe_quantity == 1 else (150 if safe_quantity == 2 else 210)
+		_:
+			return {"success": false, "message": "Item tidak tersedia di toko."}
+	if coins < price:
+		return {"success": false, "message": "Koin tidak cukup. Dibutuhkan %d koin." % price}
+	coins -= price
+	if item_id == "extra_life":
+		extra_lives += safe_quantity
+	else:
+		item_stash[item_id] = maxi(0, int(item_stash.get(item_id, 0))) + safe_quantity
+	save_game_data()
+	var item_label: String = "Nyawa tambahan" if item_id == "extra_life" else ("Jamu Tolak Bala" if item_id == "jamu" else "Baterai Senter")
+	return {"success": true, "message": "%s x%d berhasil dibeli." % [item_label, safe_quantity], "price": price}
+
+func redeem_code(raw_code: String) -> Dictionary:
+	var normalized: String = raw_code.strip_edges().to_upper()
+	if normalized.is_empty():
+		return {"success": false, "message": "Masukkan kode redeem terlebih dahulu."}
+	if redeemed_codes.has(normalized):
+		return {"success": false, "message": "Kode ini sudah pernah digunakan."}
+	var reward: Dictionary = REDEMPTION_CODES.get_reward(normalized)
+	if reward.is_empty():
+		return {"success": false, "message": "Kode redeem tidak valid."}
+	apply_reward(reward)
+	redeemed_codes.append(normalized)
+	save_game_data()
+	return {"success": true, "message": "Berhasil menukarkan kode: %s." % str(reward.get("description", "Hadiah diterima"))}
+
+func apply_reward(reward: Dictionary) -> void:
+	var quantity: int = maxi(1, int(reward.get("quantity", 1)))
+	match str(reward.get("type", "")):
+		"coins":
+			coins += quantity
+		"lives":
+			extra_lives += quantity
+		"item":
+			var item_id: String = str(reward.get("item_id", ""))
+			if item_id in ["jamu", "baterai"]:
+				item_stash[item_id] = maxi(0, int(item_stash.get(item_id, 0))) + quantity
+
+func deliver_stored_items(inventory: Node) -> void:
+	if is_resuming_saved_run:
+		return
+	if not is_instance_valid(inventory) or not inventory.has_method("add_item"):
+		return
+	var stash_changed: bool = false
+	for item_id: String in ["jamu", "baterai"]:
+		var remaining: int = maxi(0, int(item_stash.get(item_id, 0)))
+		if remaining <= 0:
+			continue
+		stash_changed = true
+		var item_name: String = "Jamu Tolak Bala" if item_id == "jamu" else "Baterai Senter"
+		while remaining > 0:
+			var accepted: bool = bool(inventory.add_item({"id": item_id, "name": item_name, "type": "consumable", "quantity": 1}))
+			if not accepted:
+				break
+			remaining -= 1
+		item_stash[item_id] = remaining
+	if stash_changed:
+		save_game_data()
+
+func _award_run_coins(amount: int) -> void:
+	if run_reward_awarded:
+		return
+	run_reward_awarded = true
+	last_run_coin_reward = maxi(0, amount)
+	coins += last_run_coin_reward
+	save_game_data()
 
 func is_nightmare_unlocked() -> bool:
 	return total_wins >= 5
@@ -114,12 +621,12 @@ func get_sanity_settings_for_difficulty(diff: Difficulty) -> Dictionary:
 		Difficulty.EASY:
 			return {
 				"dark_light": 0.12, "dark_dark": 0.5, "prox": 3.5, "stare": 12.0,
-				"regen": 16.0, "house_dark": 0.0, "flash_drain": 0.35
+				"regen": 16.0, "house_dark": 0.0, "flash_drain": 0.18
 			}
 	# NORMAL, HARD, NIGHTMARE: nilai standar
 	return {
 		"dark_light": 1.0, "dark_dark": 2.5, "prox": 8.0, "stare": 28.0,
-		"regen": 12.0, "house_dark": 1.0, "flash_drain": 0.7
+		"regen": 12.0, "house_dark": 1.0, "flash_drain": 0.25
 	}
 
 func get_difficulty_name(diff: Difficulty) -> String:
@@ -131,7 +638,10 @@ func get_difficulty_name(diff: Difficulty) -> String:
 	return "NORMAL"
 
 func start_new_game(diff: Difficulty = Difficulty.NORMAL) -> void:
+	clear_run_save()
 	selected_difficulty = diff
+	run_reward_awarded = false
+	last_run_coin_reward = 0
 	seconds_per_game_minute = get_seconds_per_minute_for_difficulty(selected_difficulty)
 	
 	current_state = GameState.PLAYING
@@ -156,6 +666,16 @@ func start_new_game(diff: Difficulty = Difficulty.NORMAL) -> void:
 	_enter_act_1()
 
 func _process(delta: float) -> void:
+	if current_state == GameState.PLAYING:
+		autosave_elapsed += delta
+		if autosave_elapsed >= AUTOSAVE_INTERVAL:
+			if save_active_run():
+				autosave_elapsed = 0.0
+			else:
+				# Retry after roughly one second if the world is not ready or save I/O failed.
+				autosave_elapsed = AUTOSAVE_INTERVAL - 1.0
+	else:
+		autosave_elapsed = 0.0
 	if current_state != GameState.PLAYING or get_tree().paused:
 		return
 	if not dawn_reached:
@@ -359,8 +879,10 @@ func get_ritual_item_count() -> int:
 func trigger_victory() -> void:
 	if current_state == GameState.GAMEOVER or current_state == GameState.VICTORY:
 		return
+	clear_run_save()
 	current_state = GameState.VICTORY
 	total_wins += 1
+	_award_run_coins(WIN_COIN_REWARD)
 	save_game_data()
 	SignalBus.game_won.emit()
 	get_tree().change_scene_to_file("res://scenes/ui/VictoryScreen.tscn")
@@ -377,7 +899,6 @@ func _on_player_death_requested(reason: String) -> void:
 	death_sequence_active = true
 	current_state = GameState.PAUSED
 	last_death_reason = reason
-	var lower_reason: String = reason.to_lower()
 	var keranda_kill: bool = is_lampor_kill(reason)
 	# Hentikan simulasi dan input, tetapi biarkan autoload audio/visual berjalan.
 	get_tree().paused = true
@@ -387,9 +908,23 @@ func _on_player_death_requested(reason: String) -> void:
 		await get_tree().create_timer(0.65, true).timeout
 	if not is_inside_tree():
 		return
-	# Status mati dan layar Game Over baru ditetapkan setelah audio jumpscare selesai.
+	# Nyawa tambahan menghidupkan kembali pemain di titik awal desa.
+	if extra_lives > 0 and is_instance_valid(player_character) and player_character.has_method("revive_from_extra_life"):
+		extra_lives -= 1
+		save_game_data()
+		current_state = GameState.PLAYING
+		player_character.revive_from_extra_life()
+		for lampor_node: Node in get_tree().get_nodes_in_group("lampor"):
+			if lampor_node.has_method("reset_after_player_revive"):
+				lampor_node.reset_after_player_revive()
+		get_tree().paused = false
+		death_sequence_active = false
+		SignalBus.dialog_requested.emit("Nyawa tambahan terpakai! Kamu kembali ke desa. Sisa nyawa: %d" % extra_lives, 4.0)
+		return
+	# Koin kekalahan hanya diberikan ketika permainan benar-benar berakhir.
+	_award_run_coins(LOSS_COIN_REWARD)
+	clear_run_save()
 	current_state = GameState.GAMEOVER
-	# Event kematian final baru dipancarkan setelah rangkaian jumpscare selesai.
 	SignalBus.player_died.emit(reason)
 	SignalBus.game_over.emit(reason)
 	get_tree().paused = false

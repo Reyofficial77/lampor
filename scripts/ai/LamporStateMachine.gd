@@ -64,6 +64,8 @@ func _ready() -> void:
 	SignalBus.player_noise_made.connect(_on_player_noise)
 	SignalBus.act_started.connect(_on_act_started)
 	SignalBus.lampor_state_changed.connect(func(new_state_str: String) -> void:
+		if GameManager.is_resuming_saved_run:
+			return
 		if new_state_str == "CHASE":
 			if current_state == State.DORMANT_SKY or current_state == State.DESCENDING:
 				trigger_descent(true)
@@ -186,6 +188,8 @@ func _setup_waypoints() -> void:
 		target_position = waypoints[0]
 
 func _on_act_started(act_number: int, _title: String) -> void:
+	if GameManager.is_resuming_saved_run:
+		return
 	if act_number >= 2 and current_state == State.DORMANT_SKY:
 		trigger_descent()
 
@@ -466,6 +470,17 @@ func _start_catch() -> void:
 	SignalBus.lampor_screamer_triggered.emit()
 	await get_tree().create_timer(1.0).timeout
 	SignalBus.player_death_requested.emit("Kamu ditarik ke dalam keranda Lampor!")
+
+
+func reset_after_player_revive() -> void:
+	is_catching = false
+	chase_timer = 0.0
+	lost_sight_timer = 0.0
+	stare_timer = 0.0
+	chase_cooldown = CHASE_COOLDOWN_TIME
+	velocity = Vector3.ZERO
+	if current_state != State.DORMANT_SKY and current_state != State.DESCENDING and current_state != State.BANISHED:
+		_set_state(State.PATROL)
 
 func _give_up_chase() -> void:
 	# Lampor kehilangan minat, mundur ke waypoint terjauh dari player, lalu cooldown

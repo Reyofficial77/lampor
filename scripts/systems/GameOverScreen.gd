@@ -20,6 +20,13 @@ func _ready() -> void:
 		title_label.text = "JIWAMU TELAH HANCUR"
 	retry_btn.pressed.connect(func() -> void: GameManager.start_new_game(GameManager.selected_difficulty))
 	menu_btn.pressed.connect(func() -> void: get_tree().change_scene_to_file("res://scenes/ui/MainMenu.tscn"))
+	var reward_label := Label.new()
+	reward_label.text = "+%d Koin Emas  ·  Total: %d" % [GameManager.last_run_coin_reward, GameManager.coins]
+	reward_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	reward_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	reward_label.add_theme_font_size_override("font_size", 15)
+	reward_label.add_theme_color_override("font_color", Color(0.94, 0.72, 0.42, 1.0))
+	title_box.add_child(reward_label)
 	get_viewport().size_changed.connect(_apply_layout)
 	_apply_layout()
 

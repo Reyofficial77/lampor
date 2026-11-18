@@ -38,7 +38,7 @@ var step_interval: float = 2.2
 # Flashlight state
 var flashlight_on: bool = true
 var flashlight_battery: float = 100.0
-var flashlight_drain_rate: float = 0.7
+var flashlight_drain_rate: float = 0.25
 
 # Hiding
 var is_hiding: bool = false
@@ -50,6 +50,8 @@ const HIDE_LOOK_PITCH: float = 40.0
 # House Interior
 var is_inside_house: bool = false
 var current_house: Node = null
+var initial_spawn_position: Vector3 = Vector3.ZERO
+var initial_spawn_rotation: float = 0.0
 
 # Noise
 var current_noise_level: float = 0.0
@@ -62,10 +64,13 @@ func _ready() -> void:
 	else:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	initial_camera_pos = camera.position
+	initial_spawn_position = global_position
+	initial_spawn_rotation = rotation.y
 	GameManager.player_character = self
+	GameManager.call_deferred("deliver_stored_items", inventory_system)
 	SettingsManager.apply_player_settings(self)
 	var sanity_cfg: Dictionary = GameManager.get_sanity_settings_for_difficulty(GameManager.selected_difficulty)
-	flashlight_drain_rate = sanity_cfg.get("flash_drain", 0.7)
+	flashlight_drain_rate = sanity_cfg.get("flash_drain", 0.25)
 	
 	SignalBus.flashlight_toggled.emit(flashlight_on)
 	SignalBus.flashlight_battery_changed.emit(flashlight_battery, 100.0)
@@ -285,5 +290,42 @@ func _try_use_equipped_item() -> void:
 	if item.get("id") == "jamu":
 		sanity_system.restore_sanity(45.0)
 		current_stamina = max_stamina
+		SignalBus.player_stamina_changed.emit(current_stamina, max_stamina)
 		inventory_system.consume_equipped_item()
 		AudioManager.play_sound("item_pickup", -4.0, 0.8)
+	elif item.get("id") == "baterai":
+		if flashlight_battery >= 99.0:
+			SignalBus.dialog_requested.emit("Baterai senter masih penuh.", 2.0)
+			return
+		flashlight_battery = minf(100.0, flashlight_battery + 50.0)
+		SignalBus.flashlight_battery_changed.emit(flashlight_battery, 100.0)
+		inventory_system.consume_equipped_item()
+		AudioManager.play_sound("item_pickup", -4.0, 0.8)
+
+func revive_from_extra_life() -> void:
+	is_caught = false
+	is_hiding = false
+	hiding_spot = null
+	is_inside_house = false
+	current_house = null
+	virtual_move_input = Vector2.ZERO
+	virtual_sprint_pressed = false
+	velocity = Vector3.ZERO
+	global_position = initial_spawn_position + Vector3(0.0, 0.08, 0.0)
+	rotation.y = initial_spawn_rotation
+	head.rotation = Vector3.ZERO
+	$CollisionShape3D.set_deferred("disabled", false)
+	set_physics_process(true)
+	set_process_unhandled_input(true)
+	current_stamina = max_stamina
+	flashlight_battery = 100.0
+	flashlight_on = true
+	flashlight.visible = true
+	sanity_system.current_sanity = sanity_system.max_sanity
+	sanity_system.safe_sources.clear()
+	sanity_system.lampor_distance = 999.0
+	sanity_system.is_staring_at_lampor = false
+	SignalBus.player_sanity_changed.emit(sanity_system.current_sanity, sanity_system.max_sanity)
+	SignalBus.player_stamina_changed.emit(current_stamina, max_stamina)
+	SignalBus.flashlight_battery_changed.emit(flashlight_battery, 100.0)
+	SignalBus.flashlight_toggled.emit(true)

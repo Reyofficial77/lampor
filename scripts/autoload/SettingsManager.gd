@@ -5,12 +5,20 @@ const DEFAULT_MOUSE_SENSITIVITY: float = 1.0
 const DEFAULT_CAMERA_SENSITIVITY: float = 1.0
 const DEFAULT_GRAPHICS_QUALITY: String = "auto"
 const DEFAULT_BRIGHTNESS: float = 1.0
+const DEFAULT_AUTO_UPDATE: bool = false
+const DEFAULT_MOBILE_BUTTON_SCALE: float = 1.0
+const DEFAULT_MOBILE_JOYSTICK_SCALE: float = 1.0
 
 var mouse_sensitivity: float = DEFAULT_MOUSE_SENSITIVITY
 var camera_sensitivity: float = DEFAULT_CAMERA_SENSITIVITY
 var graphics_quality: String = DEFAULT_GRAPHICS_QUALITY
 var brightness: float = DEFAULT_BRIGHTNESS
 var recommended_graphics_quality: String = "medium"
+var auto_update: bool = DEFAULT_AUTO_UPDATE
+var mobile_button_scale: float = DEFAULT_MOBILE_BUTTON_SCALE
+var mobile_joystick_scale: float = DEFAULT_MOBILE_JOYSTICK_SCALE
+var mobile_joystick_position: Vector2 = Vector2(-1.0, -1.0)
+var mobile_button_positions: Array = []
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -30,6 +38,15 @@ func _load_settings() -> void:
 	if graphics_quality not in ["auto", "low", "medium", "high"]:
 		graphics_quality = DEFAULT_GRAPHICS_QUALITY
 	brightness = clampf(float(config.get_value("video", "brightness", DEFAULT_BRIGHTNESS)), 0.5, 1.5)
+	auto_update = bool(config.get_value("update", "auto_update", DEFAULT_AUTO_UPDATE))
+	mobile_button_scale = clampf(float(config.get_value("mobile", "button_scale", DEFAULT_MOBILE_BUTTON_SCALE)), 0.75, 1.5)
+	mobile_joystick_scale = clampf(float(config.get_value("mobile", "joystick_scale", DEFAULT_MOBILE_JOYSTICK_SCALE)), 0.8, 1.4)
+	var loaded_joystick_position: Variant = config.get_value("mobile", "joystick_position", Vector2(-1.0, -1.0))
+	if loaded_joystick_position is Vector2:
+		mobile_joystick_position = loaded_joystick_position
+	var loaded_button_positions: Variant = config.get_value("mobile", "button_positions", [])
+	if loaded_button_positions is Array:
+		mobile_button_positions = loaded_button_positions.duplicate(true)
 
 func _save_settings() -> void:
 	var config := ConfigFile.new()
@@ -37,6 +54,11 @@ func _save_settings() -> void:
 	config.set_value("controls", "camera_sensitivity", camera_sensitivity)
 	config.set_value("video", "graphics_quality", graphics_quality)
 	config.set_value("video", "brightness", brightness)
+	config.set_value("update", "auto_update", auto_update)
+	config.set_value("mobile", "button_scale", mobile_button_scale)
+	config.set_value("mobile", "joystick_scale", mobile_joystick_scale)
+	config.set_value("mobile", "joystick_position", mobile_joystick_position)
+	config.set_value("mobile", "button_positions", mobile_button_positions)
 	config.save(CONFIG_PATH)
 
 func set_mouse_sensitivity(value: float) -> void:
@@ -60,6 +82,32 @@ func set_graphics_quality(value: String) -> void:
 func set_brightness(value: float) -> void:
 	brightness = clampf(value, 0.5, 1.5)
 	_apply_brightness_overlay()
+	_save_settings()
+
+func set_auto_update(enabled: bool) -> void:
+	auto_update = enabled
+	_save_settings()
+	if auto_update:
+		UpdateManager.check_for_updates(true)
+
+func set_mobile_button_scale(value: float) -> void:
+	mobile_button_scale = clampf(value, 0.75, 1.5)
+	_save_settings()
+
+func set_mobile_joystick_scale(value: float) -> void:
+	mobile_joystick_scale = clampf(value, 0.8, 1.4)
+	_save_settings()
+
+func set_mobile_control_layout(joystick_position: Vector2, button_positions: Array) -> void:
+	mobile_joystick_position = joystick_position
+	mobile_button_positions = button_positions.duplicate(true)
+	_save_settings()
+
+func reset_mobile_control_layout() -> void:
+	mobile_joystick_position = Vector2(-1.0, -1.0)
+	mobile_button_positions.clear()
+	mobile_button_scale = DEFAULT_MOBILE_BUTTON_SCALE
+	mobile_joystick_scale = DEFAULT_MOBILE_JOYSTICK_SCALE
 	_save_settings()
 
 func apply_player_settings(player: Node) -> void:

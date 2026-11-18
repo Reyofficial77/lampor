@@ -1,7 +1,7 @@
 class_name MainMenu
 extends Control
 
-const GAME_VERSION: String = "v1.1.4"
+const GAME_VERSION: String = "v1.1.6"
 const ACCENT: Color = Color(0.72, 0.12, 0.14, 1.0)
 const TEXT_MAIN: Color = Color(0.93, 0.91, 0.88, 1.0)
 const TEXT_MUTED: Color = Color(0.63, 0.61, 0.60, 1.0)
@@ -13,12 +13,23 @@ var subtitle_label: Label
 var version_label: Label
 var copyright_label: Label
 var exit_button: Button
+var continue_button: Button
 var modal_overlays: Array[ColorRect] = []
 var modal_panels: Array[PanelContainer] = []
 var warning_overlay: ColorRect
 var difficulty_overlay: ColorRect
 var settings_overlay: ColorRect
 var credits_overlay: ColorRect
+var shop_overlay: ColorRect
+var currency_label: Label
+var shop_balance_label: Label
+var shop_result_label: Label
+var redeem_input: LineEdit
+var redeem_result_label: Label
+var auto_update_check: CheckButton
+var update_button: Button
+var update_check_button: Button
+var update_status_label: Label
 var nightmare_button: Button
 var nightmare_lock_label: Label
 var volume_slider: HSlider
@@ -36,8 +47,13 @@ func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	GameManager.current_state = GameManager.GameState.MENU
 	_build_menu()
+	UpdateManager.update_available.connect(_on_update_available)
+	UpdateManager.update_downloaded.connect(_on_update_downloaded)
+	UpdateManager.update_failed.connect(_on_update_failed)
+	UpdateManager.up_to_date.connect(_on_update_up_to_date)
 	get_viewport().size_changed.connect(_apply_layout)
 	_apply_layout()
+	call_deferred("_check_for_game_updates")
 
 func _build_menu() -> void:
 	var background := ColorRect.new()
@@ -76,20 +92,45 @@ func _build_menu() -> void:
 	wins_label.name = "WinsLabel"
 	wins_label.text = "Kemenangan tersimpan: %d" % GameManager.total_wins
 	main_content.add_child(wins_label)
+	currency_label = _make_label("Koin Emas: %d  ·  Nyawa tambahan: %d" % [GameManager.coins, GameManager.extra_lives], 13, Color(0.9, 0.76, 0.42, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
+	currency_label.name = "CurrencyLabel"
+	main_content.add_child(currency_label)
 
 	var menu_buttons := VBoxContainer.new()
 	menu_buttons.name = "MenuButtons"
 	menu_buttons.add_theme_constant_override("separation", 10)
 	main_content.add_child(menu_buttons)
-	var start_button := _make_button("MULAI PERMAINAN", true)
+	continue_button = _make_button("LANJUTKAN PERMAINAN", true)
+	continue_button.visible = GameManager.has_saved_run()
+	continue_button.pressed.connect(_on_continue_pressed)
+	menu_buttons.add_child(continue_button)
+	var start_button := _make_button("MULAI PERMAINAN")
 	start_button.pressed.connect(func() -> void: warning_overlay.visible = true)
 	menu_buttons.add_child(start_button)
+	var shop_button := _make_button("TOKO ITEM")
+	shop_button.pressed.connect(func() -> void:
+		_refresh_shop_display()
+		shop_overlay.visible = true
+	)
+	menu_buttons.add_child(shop_button)
 	var settings_button := _make_button("PENGATURAN")
 	settings_button.pressed.connect(func() -> void: settings_overlay.visible = true)
 	menu_buttons.add_child(settings_button)
 	var credits_button := _make_button("HAK CIPTA")
 	credits_button.pressed.connect(func() -> void: credits_overlay.visible = true)
 	menu_buttons.add_child(credits_button)
+
+	update_button = _make_button("UPDATE TERSEDIA", true)
+	update_button.visible = false
+	update_button.custom_minimum_size = Vector2(190.0, 40.0)
+	update_button.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	update_button.offset_left = 18.0
+	update_button.offset_top = 16.0
+	update_button.offset_right = 210.0
+	update_button.offset_bottom = 58.0
+	update_button.add_theme_font_size_override("font_size", 12)
+	update_button.pressed.connect(_on_update_button_pressed)
+	add_child(update_button)
 
 	version_label = _make_label(GAME_VERSION, 13, TEXT_MUTED, HORIZONTAL_ALIGNMENT_RIGHT)
 	version_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
@@ -120,6 +161,7 @@ func _build_menu() -> void:
 	_build_warning_modal()
 	_build_difficulty_modal()
 	_build_settings_modal()
+	_build_shop_modal()
 	_build_credits_modal()
 
 func _build_warning_modal() -> void:
@@ -223,6 +265,39 @@ func _build_settings_modal() -> void:
 	graphics_row.add_child(graphics_option)
 	content.add_child(graphics_row)
 
+	auto_update_check = CheckButton.new()
+	auto_update_check.text = "Unduh paket update otomatis"
+	auto_update_check.button_pressed = SettingsManager.auto_update
+	auto_update_check.toggled.connect(SettingsManager.set_auto_update)
+	content.add_child(auto_update_check)
+	update_check_button = _make_button("PERIKSA PEMBARUAN GAME")
+	update_check_button.pressed.connect(func() -> void:
+		update_check_button.text = "MEMERIKSA PEMBARUAN..."
+		update_status_label.text = "Menghubungi GitHub..."
+		UpdateManager.check_for_updates(true)
+	)
+	content.add_child(update_check_button)
+	update_status_label = _make_label("Pembaruan diperiksa melalui commit branch main GitHub.", 11, TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT)
+	update_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	content.add_child(update_status_label)
+
+	var redeem_title := _make_label("KODE REDEEM", 15, Color(0.85, 0.25, 0.25, 1.0), HORIZONTAL_ALIGNMENT_LEFT)
+	content.add_child(redeem_title)
+	var redeem_row := HBoxContainer.new()
+	redeem_input = LineEdit.new()
+	redeem_input.placeholder_text = "Masukkan kode redeem"
+	redeem_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	redeem_input.max_length = 32
+	redeem_row.add_child(redeem_input)
+	var redeem_button := _make_button("TUKAR")
+	redeem_button.custom_minimum_size = Vector2(92.0, 42.0)
+	redeem_button.pressed.connect(_on_redeem_pressed)
+	redeem_row.add_child(redeem_button)
+	content.add_child(redeem_row)
+	redeem_result_label = _make_label("Setiap kode hanya dapat digunakan sekali pada save ini.", 11, TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT)
+	redeem_result_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	content.add_child(redeem_result_label)
+
 	fullscreen_button = _make_button("GANTI MODE LAYAR")
 	fullscreen_button.pressed.connect(_toggle_fullscreen)
 	content.add_child(fullscreen_button)
@@ -266,6 +341,135 @@ func _add_slider_setting(parent: VBoxContainer, title_text: String, initial_valu
 		brightness_value = value_label
 	slider.value_changed.connect(callback)
 	return slider
+
+
+func _build_shop_modal() -> void:
+	var modal: Dictionary = _create_modal("TOKO ITEM")
+	shop_overlay = modal["overlay"] as ColorRect
+	var body: VBoxContainer = modal["body"] as VBoxContainer
+	shop_balance_label = _make_label("Koin Emas: %d" % GameManager.coins, 15, Color(0.9, 0.76, 0.42, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
+	body.add_child(shop_balance_label)
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(0.0, 270.0)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	body.add_child(scroll)
+	var offers := VBoxContainer.new()
+	offers.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	offers.add_theme_constant_override("separation", 8)
+	scroll.add_child(offers)
+	_add_shop_offer(offers, "Jamu Tolak Bala x1", "Memulihkan 45 kewarasan dan seluruh stamina.", "30 koin", "jamu", 1)
+	_add_shop_offer(offers, "Jamu Tolak Bala x3", "Persediaan jamu untuk tiga kali pemakaian.", "90 koin", "jamu", 3)
+	_add_shop_offer(offers, "Baterai Senter x1", "Mengisi ulang 50% daya senter saat digunakan.", "20 koin", "baterai", 1)
+	_add_shop_offer(offers, "Nyawa Tambahan x1", "Bangkit sekali di titik awal saat terbunuh.", "80 koin", "extra_life", 1)
+	_add_shop_offer(offers, "Nyawa Tambahan x2", "Dua kesempatan bangkit tambahan.", "150 koin", "extra_life", 2)
+	_add_shop_offer(offers, "Nyawa Tambahan x3", "Tiga kesempatan bangkit tambahan.", "210 koin", "extra_life", 3)
+	shop_result_label = _make_label("Barang masuk ke persediaan dan dibawa saat permainan berikutnya.", 11, TEXT_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	shop_result_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.add_child(shop_result_label)
+	var close := _make_button("TUTUP")
+	close.pressed.connect(func() -> void: shop_overlay.visible = false)
+	body.add_child(close)
+
+func _add_shop_offer(parent: VBoxContainer, title_text: String, description: String, price_text: String, item_id: String, quantity: int) -> void:
+	var offer := PanelContainer.new()
+	offer.add_theme_stylebox_override("panel", _panel_style())
+	parent.add_child(offer)
+	var margin := MarginContainer.new()
+	for side in ["left", "right"]:
+		margin.add_theme_constant_override("margin_" + side, 10)
+	for side in ["top", "bottom"]:
+		margin.add_theme_constant_override("margin_" + side, 8)
+	offer.add_child(margin)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 5)
+	margin.add_child(column)
+	var heading := _make_label(title_text, 14, TEXT_MAIN, HORIZONTAL_ALIGNMENT_LEFT)
+	column.add_child(heading)
+	var detail := _make_label(description, 11, TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT)
+	detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	column.add_child(detail)
+	var buy := _make_button("BELI · " + price_text, true)
+	buy.custom_minimum_size.y = 40.0
+	buy.pressed.connect(func() -> void: _purchase_shop_item(item_id, quantity))
+	column.add_child(buy)
+
+func _refresh_currency_display() -> void:
+	if currency_label:
+		currency_label.text = "Koin Emas: %d  ·  Nyawa tambahan: %d" % [GameManager.coins, GameManager.extra_lives]
+	if main_content and is_instance_valid(main_content):
+		var wins: Label = main_content.get_node_or_null("WinsLabel") as Label
+		if wins:
+			wins.text = "Kemenangan tersimpan: %d" % GameManager.total_wins
+
+func _refresh_shop_display() -> void:
+	if shop_balance_label:
+		shop_balance_label.text = "Koin Emas: %d  ·  Nyawa: %d" % [GameManager.coins, GameManager.extra_lives]
+
+func _purchase_shop_item(item_id: String, quantity: int) -> void:
+	var result: Dictionary = GameManager.purchase_shop_item(item_id, quantity)
+	shop_result_label.text = str(result.get("message", "Transaksi gagal."))
+	shop_result_label.add_theme_color_override("font_color", Color(0.55, 0.88, 0.58, 1.0) if bool(result.get("success", false)) else Color(0.95, 0.48, 0.45, 1.0))
+	_refresh_shop_display()
+	_refresh_currency_display()
+
+func _on_redeem_pressed() -> void:
+	var result: Dictionary = GameManager.redeem_code(redeem_input.text)
+	redeem_result_label.text = str(result.get("message", "Kode gagal diproses."))
+	redeem_result_label.add_theme_color_override("font_color", Color(0.55, 0.88, 0.58, 1.0) if bool(result.get("success", false)) else Color(0.95, 0.48, 0.45, 1.0))
+	if bool(result.get("success", false)):
+		redeem_input.clear()
+	_refresh_currency_display()
+	_refresh_shop_display()
+
+func _on_continue_pressed() -> void:
+	for overlay: ColorRect in modal_overlays:
+		overlay.visible = false
+	if GameManager.has_saved_run():
+		GameManager.resume_saved_game()
+	else:
+		if continue_button:
+			continue_button.visible = false
+
+func _check_for_game_updates() -> void:
+	UpdateManager.check_for_updates()
+
+func _on_update_available(commit_sha: String, commit_message: String) -> void:
+	update_button.visible = true
+	update_button.text = "PEMBARUAN TERSEDIA"
+	update_button.tooltip_text = commit_message
+	update_check_button.text = "PERIKSA PEMBARUAN GAME"
+	update_status_label.text = "Commit terbaru %s: %s" % [commit_sha.substr(0, 10), commit_message]
+	if UpdateManager.downloaded_commit == UpdateManager.latest_commit and FileAccess.file_exists(UpdateManager.downloaded_path):
+		update_button.text = "PAKET UPDATE SIAP"
+
+func _on_update_up_to_date(commit_sha: String) -> void:
+	update_check_button.text = "PERIKSA PEMBARUAN GAME"
+	update_status_label.text = "Game sudah sama dengan commit terbaru (%s)." % commit_sha.substr(0, 10)
+	update_button.visible = false
+
+func _on_update_downloaded(file_path: String, commit_sha: String) -> void:
+	update_button.visible = true
+	update_button.text = "PAKET UPDATE DIUNDUH"
+	update_button.tooltip_text = "Paket sumber sudah diunduh. Buka untuk melihat arsip dan memasang build terbaru secara manual.\n%s\nCommit: %s" % [file_path, commit_sha]
+	update_check_button.text = "PERIKSA PEMBARUAN GAME"
+	update_status_label.text = "Paket source sudah diunduh. Pasang manual; tidak mengganti executable yang sedang berjalan."
+
+func _on_update_failed(message: String) -> void:
+	if update_button:
+		update_button.visible = true
+		update_button.text = "UPDATE GAGAL · COBA LAGI"
+		update_button.tooltip_text = message
+	if update_check_button:
+		update_check_button.text = "PERIKSA PEMBARUAN GAME"
+	if update_status_label:
+		update_status_label.text = message
+
+func _on_update_button_pressed() -> void:
+	if not UpdateManager.downloaded_path.is_empty() and FileAccess.file_exists(UpdateManager.downloaded_path) and UpdateManager.downloaded_commit == UpdateManager.latest_commit:
+		UpdateManager.open_downloaded_package()
+	else:
+		update_button.text = "MENGUNDUH UPDATE..."
+		UpdateManager.download_update()
 
 func _build_credits_modal() -> void:
 	var modal: Dictionary = _create_modal("HAK CIPTA")
@@ -384,6 +588,12 @@ func _apply_layout() -> void:
 	exit_button.offset_right = -14 if narrow else -24
 	exit_button.offset_bottom = -14 if narrow else -18
 	exit_button.custom_minimum_size = Vector2(146 if narrow else 166, 42)
+	if update_button:
+		update_button.custom_minimum_size = Vector2(168.0 if narrow else 190.0, 38.0 if narrow else 42.0)
+		update_button.offset_left = 10.0 if narrow else 18.0
+		update_button.offset_top = 12.0 if narrow else 16.0
+		update_button.offset_right = 178.0 if narrow else 210.0
+		update_button.offset_bottom = 52.0 if narrow else 58.0
 	version_label.offset_left = -94 if narrow else -120
 	version_label.offset_top = 14 if narrow else 20
 	version_label.offset_right = -14 if narrow else -24

@@ -54,6 +54,8 @@ var look_touch_index: int = -1
 var touch_buttons: Array[Button] = []
 var desktop_hint_panel: PanelContainer
 var pause_settings_panel: PanelContainer
+var pause_settings_container: CenterContainer
+var pause_settings_scroll: ScrollContainer
 var objective_texts: Dictionary = {}
 var mission_panel: PanelContainer
 var mission_title: Label
@@ -62,6 +64,12 @@ var mission_tween: Tween
 var dialog_panel: PanelContainer
 var exit_confirm_overlay: ColorRect
 var exit_panel: PanelContainer
+var mobile_editor_active: bool = false
+var editor_touch_index: int = -1
+var editor_drag_target: Control = null
+var editor_drag_offset: Vector2 = Vector2.ZERO
+var editor_hint_label: Label
+var editor_done_button: Button
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -102,12 +110,14 @@ func _ready() -> void:
 	settings_button.text = "Pengaturan"
 	settings_button.pressed.connect(_open_pause_settings)
 	_build_pause_settings_panel()
+	_layout_pause_settings_panel()
 
 	# Setup Barricade buttons
 	confirm_barricade_btn.pressed.connect(_on_confirm_barricade)
 	cancel_barricade_btn.pressed.connect(_on_cancel_barricade)
 
 	get_viewport().size_changed.connect(_apply_mobile_hud_layout)
+	get_viewport().size_changed.connect(_layout_pause_settings_panel)
 	call_deferred("_connect_player")
 	call_deferred("_setup_mobile_controls")
 	call_deferred("_apply_mobile_hud_layout")
@@ -158,6 +168,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			toggle_pause()
 
 func toggle_pause() -> void:
+	if mobile_editor_active:
+		_finish_mobile_editor()
 	# Jangan izinkan pemain membatalkan jeda paksa selama rangkaian jumpscare.
 	if GameManager.death_sequence_active:
 		return
@@ -175,6 +187,7 @@ func toggle_pause() -> void:
 	if touch_root:
 		touch_root.visible = not is_paused
 	if is_paused:
+		GameManager.save_active_run()
 		joystick_vector = Vector2.ZERO
 		var player: PlayerController = GameManager.player_character as PlayerController
 		if player:
@@ -182,28 +195,49 @@ func toggle_pause() -> void:
 			player.set_virtual_sprint(false)
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	else:
-		if pause_settings_panel:
-			pause_settings_panel.visible = false
+		if pause_settings_container:
+			pause_settings_container.visible = false
 		pause_menu.get_node("Center").visible = true
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _is_touch_device() else Input.MOUSE_MODE_CAPTURED
 
 func _build_pause_settings_panel() -> void:
+	pause_settings_container = CenterContainer.new()
+	pause_settings_container.name = "PauseSettingsContainer"
+	pause_settings_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	pause_settings_container.offset_left = 0.0
+	pause_settings_container.offset_top = 0.0
+	pause_settings_container.offset_right = 0.0
+	pause_settings_container.offset_bottom = 0.0
+	pause_settings_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pause_settings_container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	pause_settings_container.mouse_filter = Control.MOUSE_FILTER_STOP
+	pause_settings_container.visible = false
+	pause_settings_container.z_index = 20
+	pause_settings_container.z_as_relative = false
+	self.add_child(pause_settings_container)
+	pause_settings_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	pause_settings_container.z_index = 1000
 	pause_settings_panel = PanelContainer.new()
 	pause_settings_panel.name = "PauseSettingsPanel"
-	pause_settings_panel.visible = false
-	pause_settings_panel.set_anchors_preset(Control.PRESET_CENTER)
-	pause_settings_panel.position = Vector2(-220.0, -190.0)
-	pause_settings_panel.custom_minimum_size = Vector2(440.0, 380.0)
-	pause_menu.add_child(pause_settings_panel)
+	pause_settings_panel.custom_minimum_size = Vector2(460.0, 460.0)
+	pause_settings_panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	pause_settings_panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	pause_settings_container.add_child(pause_settings_panel)
 	var margin := MarginContainer.new()
 	for side in ["left", "right"]:
-		margin.add_theme_constant_override("margin_" + side, 20)
-	for side in ["top", "bottom"]:
 		margin.add_theme_constant_override("margin_" + side, 18)
+	for side in ["top", "bottom"]:
+		margin.add_theme_constant_override("margin_" + side, 16)
 	pause_settings_panel.add_child(margin)
+	pause_settings_scroll = ScrollContainer.new()
+	pause_settings_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	pause_settings_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pause_settings_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	margin.add_child(pause_settings_scroll)
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 8)
-	margin.add_child(box)
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pause_settings_scroll.add_child(box)
 	var title := Label.new()
 	title.text = "PENGATURAN"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -221,13 +255,56 @@ func _build_pause_settings_panel() -> void:
 	quality.tooltip_text = "Otomatis menggunakan preset %s berdasarkan perangkat ini" % SettingsManager.recommended_graphics_quality.capitalize()
 	quality.item_selected.connect(func(index: int) -> void: SettingsManager.set_graphics_quality(["auto", "low", "medium", "high"][index]))
 	box.add_child(quality)
+	var auto_update := CheckButton.new()
+	auto_update.text = "Unduh update otomatis"
+	auto_update.button_pressed = SettingsManager.auto_update
+	auto_update.toggled.connect(SettingsManager.set_auto_update)
+	box.add_child(auto_update)
+	if _is_touch_device():
+		_add_pause_slider(box, "Ukuran tombol mobile", SettingsManager.mobile_button_scale * 100.0, 75.0, 150.0, func(v: float) -> void:
+			SettingsManager.set_mobile_button_scale(v / 100.0)
+			_layout_touch_controls()
+		)
+		_add_pause_slider(box, "Ukuran joystick", SettingsManager.mobile_joystick_scale * 100.0, 80.0, 140.0, func(v: float) -> void:
+			SettingsManager.set_mobile_joystick_scale(v / 100.0)
+			_layout_touch_controls()
+		)
+		var editor_button := Button.new()
+		editor_button.text = "EDITOR POSISI TOMBOL MOBILE"
+		editor_button.custom_minimum_size.y = 42.0
+		editor_button.pressed.connect(_start_mobile_editor)
+		box.add_child(editor_button)
+		var reset_layout := Button.new()
+		reset_layout.text = "RESET TATA LETAK MOBILE"
+		reset_layout.pressed.connect(func() -> void:
+			SettingsManager.reset_mobile_control_layout()
+			_layout_touch_controls()
+		)
+		box.add_child(reset_layout)
 	var close := Button.new()
 	close.text = "Kembali ke Jeda"
 	close.pressed.connect(func() -> void:
-		pause_settings_panel.visible = false
+		_pause_settings_container_hide()
 		pause_menu.get_node("Center").visible = true
 	)
 	box.add_child(close)
+
+func _pause_settings_container_hide() -> void:
+	if pause_settings_container:
+		pause_settings_container.visible = false
+
+func _layout_pause_settings_panel() -> void:
+	if not pause_settings_panel or not pause_settings_scroll or not pause_settings_container:
+		return
+	pause_settings_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var view_size: Vector2 = get_viewport().get_visible_rect().size
+	var panel_width: float = maxf(180.0, minf(460.0, view_size.x - 24.0))
+	var panel_height: float = maxf(220.0, minf(560.0, view_size.y - 24.0))
+	var panel_size := Vector2(panel_width, panel_height)
+	pause_settings_panel.custom_minimum_size = panel_size
+	pause_settings_panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	pause_settings_panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	pause_settings_scroll.custom_minimum_size = Vector2(panel_width - 36.0, maxf(180.0, panel_height - 82.0))
 
 func _add_pause_slider(parent: VBoxContainer, caption: String, initial: float, minimum: float, maximum: float, callback: Callable) -> void:
 	var row := VBoxContainer.new()
@@ -248,9 +325,30 @@ func _add_pause_slider(parent: VBoxContainer, caption: String, initial: float, m
 
 func _open_pause_settings() -> void:
 	pause_menu.get_node("Center").visible = false
-	pause_settings_panel.visible = true
+	if pause_settings_container:
+		pause_settings_container.visible = true
+		pause_settings_container.move_to_front()
+		pause_settings_container.z_index = 1000
+		_layout_pause_settings_panel()
+		call_deferred("_finish_open_pause_settings")
+
+func _finish_open_pause_settings() -> void:
+	if not is_instance_valid(pause_settings_container) or not pause_menu.visible:
+		return
+	pause_menu.get_node("Center").visible = false
+	pause_settings_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	pause_settings_container.offset_left = 0.0
+	pause_settings_container.offset_top = 0.0
+	pause_settings_container.offset_right = 0.0
+	pause_settings_container.offset_bottom = 0.0
+	pause_settings_container.z_index = 1000
+	pause_settings_container.visible = true
+	_layout_pause_settings_panel()
 
 func _on_main_menu_pressed() -> void:
+	GameManager.save_active_run()
+	if mobile_editor_active:
+		_finish_mobile_editor()
 	if desktop_hint_panel:
 		desktop_hint_panel.visible = false
 	barricade_dialog.visible = false
@@ -452,7 +550,7 @@ func _build_exit_confirm() -> void:
 	title.add_theme_color_override("font_color", Color(0.85, 0.25, 0.25, 1.0))
 	box.add_child(title)
 	var message := Label.new()
-	message.text = "Yakin ingin keluar dari game?\nProgres permainan yang sedang berjalan tidak akan disimpan."
+	message.text = "Yakin ingin keluar dari game?\nProgres tersimpan otomatis setiap 5 detik dan dapat dilanjutkan dari menu utama."
 	message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	message.add_theme_font_size_override("font_size", 15)
@@ -470,7 +568,10 @@ func _build_exit_confirm() -> void:
 	)
 	buttons.add_child(cancel)
 	var confirm := _make_exit_button("YA, KELUAR", true)
-	confirm.pressed.connect(func() -> void: get_tree().quit())
+	confirm.pressed.connect(func() -> void:
+		GameManager.save_active_run()
+		get_tree().quit()
+	)
 	buttons.add_child(confirm)
 
 func _show_exit_confirm() -> void:
@@ -569,22 +670,34 @@ func _layout_touch_controls() -> void:
 		return
 	var view_size: Vector2 = get_viewport().get_visible_rect().size
 	var compact: bool = view_size.x < 700.0
-	var joystick_size: float = 142.0 if compact else 168.0
-	var button_size: float = 66.0 if compact else 86.0
-	joystick_base.position = Vector2(16.0, view_size.y - joystick_size - 24.0)
+	var joystick_size: float = (142.0 if compact else 168.0) * SettingsManager.mobile_joystick_scale
+	var button_size: float = (66.0 if compact else 86.0) * SettingsManager.mobile_button_scale
+	var default_joystick_position := Vector2(32.0, view_size.y - joystick_size - 100.0)
+	if SettingsManager.mobile_joystick_position.x >= 0.0:
+		joystick_base.position = SettingsManager.mobile_joystick_position * view_size
+	else:
+		joystick_base.position = default_joystick_position
 	joystick_base.size = Vector2(joystick_size, joystick_size)
-	var x_right: float = view_size.x - button_size - 14.0
-	var x_left: float = x_right - button_size - 10.0
-	var y_bottom: float = view_size.y - button_size - 24.0
-	var y_top: float = y_bottom - button_size - 10.0
-	var positions: Array[Vector2] = [Vector2(x_left, y_top), Vector2(x_right, y_top), Vector2(x_left, y_bottom), Vector2(x_right, y_bottom), Vector2(view_size.x - 58.0, 16.0)]
+	var x_right: float = view_size.x - button_size - 18.0
+	var x_left: float = x_right - button_size - 12.0
+	var y_bottom: float = view_size.y - button_size - 100.0
+	var y_top: float = y_bottom - button_size - 12.0
+	var defaults: Array[Vector2] = [Vector2(x_left, y_top), Vector2(x_right, y_top), Vector2(x_left, y_bottom), Vector2(x_right, y_bottom), Vector2(view_size.x - 72.0, 18.0)]
+	var saved_positions: Array = SettingsManager.mobile_button_positions
 	for i: int in range(touch_buttons.size()):
 		var button: Button = touch_buttons[i]
-		button.position = positions[i]
+		var button_position: Vector2 = defaults[i]
+		if saved_positions.size() == touch_buttons.size() and saved_positions[i] is Vector2:
+			button_position = saved_positions[i] * view_size
+		button.position = button_position
 		button.size = Vector2(button_size, button_size)
 		if i == 4:
-			button.position = Vector2(view_size.x - 66.0, 14.0)
-			button.size = Vector2(54.0, 54.0)
+			button.position = Vector2(view_size.x - 72.0, 18.0) if saved_positions.size() != touch_buttons.size() else button_position
+			button.size = Vector2(56.0, 56.0) * SettingsManager.mobile_button_scale
+		button.position.x = clampf(button.position.x, 8.0, maxf(8.0, view_size.x - button.size.x - 8.0))
+		button.position.y = clampf(button.position.y, 8.0, maxf(8.0, view_size.y - button.size.y - 8.0))
+	if editor_done_button:
+		editor_done_button.position = Vector2(view_size.x - 142.0, 86.0)
 
 func _apply_mobile_hud_layout() -> void:
 	if not _is_touch_device():
@@ -592,7 +705,7 @@ func _apply_mobile_hud_layout() -> void:
 	var view_size: Vector2 = get_viewport().get_visible_rect().size
 	top_left.offset_left = 12.0
 	top_left.offset_top = 12.0
-	top_left.offset_right = minf(view_size.x * 0.52, 420.0)
+	top_left.offset_right = minf(view_size.x * 0.34, 260.0)
 	top_left.offset_bottom = 208.0
 	clock_label.add_theme_font_size_override("font_size", 18)
 	act_label.add_theme_font_size_override("font_size", 12)
@@ -603,23 +716,25 @@ func _apply_mobile_hud_layout() -> void:
 	bottom_left.anchor_right = 1.0
 	bottom_left.anchor_top = 0.0
 	bottom_left.anchor_bottom = 0.0
-	bottom_left.offset_left = -248.0
-	bottom_left.offset_top = 72.0
-	bottom_left.offset_right = -10.0
-	bottom_left.offset_bottom = 178.0
-	bottom_left.scale = Vector2(0.84, 0.84)
+	var stats_width: float = clampf(view_size.x * 0.54, 190.0, 300.0)
+	bottom_left.offset_left = -stats_width - 12.0
+	bottom_left.offset_top = 78.0
+	bottom_left.offset_right = -12.0
+	bottom_left.offset_bottom = 190.0
+	bottom_left.scale = Vector2.ONE
 	var stats_vbox: VBoxContainer = bottom_left.get_node("VBox") as VBoxContainer
-	stats_vbox.add_theme_constant_override("separation", 3)
+	stats_vbox.add_theme_constant_override("separation", 5)
 	for container_name: String in ["SanityContainer", "StaminaContainer", "BatteryContainer"]:
 		var row: HBoxContainer = bottom_left.get_node("VBox/" + container_name) as HBoxContainer
+		row.add_theme_constant_override("separation", 4)
 		var row_label: Label = row.get_child(0) as Label
 		var row_bar: ProgressBar = row.get_child(1) as ProgressBar
 		var row_value: Label = row.get_child(2) as Label
-		row_label.custom_minimum_size.x = 62.0
-		row_label.add_theme_font_size_override("font_size", 10)
-		row_bar.custom_minimum_size = Vector2(105.0, 13.0)
-		row_value.custom_minimum_size.x = 32.0
-		row_value.add_theme_font_size_override("font_size", 9)
+		row_label.custom_minimum_size.x = 54.0
+		row_label.add_theme_font_size_override("font_size", 11)
+		row_bar.custom_minimum_size = Vector2(maxf(72.0, stats_width - 96.0), 17.0)
+		row_value.custom_minimum_size.x = 34.0
+		row_value.add_theme_font_size_override("font_size", 10)
 	bottom_right.visible = false
 	slots_container.add_theme_constant_override("separation", 4)
 	var slot_size: Vector2 = Vector2(76.0, 58.0) if view_size.x < 700.0 else Vector2(86.0, 64.0)
@@ -682,11 +797,14 @@ func _draw_virtual_joystick() -> void:
 	var radius: float = joystick_base.size.x * 0.43
 	joystick_base.draw_circle(center, radius, Color(0.02, 0.02, 0.025, 0.42))
 	joystick_base.draw_arc(center, radius, 0.0, TAU, 48, Color(0.82, 0.72, 0.68, 0.6), 2.0, true)
-	var knob_center: Vector2 = center + Vector2(joystick_vector.x, -joystick_vector.y) * radius * 0.68
+	var knob_center: Vector2 = center + joystick_vector * radius * 0.68
 	joystick_base.draw_circle(knob_center, radius * 0.38, Color(0.55, 0.12, 0.15, 0.76))
 	joystick_base.draw_arc(knob_center, radius * 0.38, 0.0, TAU, 36, Color(0.95, 0.72, 0.68, 0.72), 2.0, true)
 
 func _input(event: InputEvent) -> void:
+	if mobile_editor_active:
+		_handle_mobile_editor_input(event)
+		return
 	if not touch_controls_enabled or get_tree().paused or GameManager.current_state != GameManager.GameState.PLAYING:
 		return
 	if event is InputEventScreenTouch:
@@ -718,6 +836,99 @@ func _input(event: InputEvent) -> void:
 			if player:
 				player.apply_touch_look(drag.relative)
 
+func _handle_mobile_editor_input(event: InputEvent) -> void:
+	if event is InputEventScreenTouch:
+		var touch: InputEventScreenTouch = event as InputEventScreenTouch
+		if touch.pressed:
+			editor_touch_index = touch.index
+			editor_drag_target = null
+			if joystick_base and joystick_base.get_global_rect().has_point(touch.position):
+				editor_drag_target = joystick_base
+			else:
+				for button: Button in touch_buttons:
+					if button.get_global_rect().has_point(touch.position):
+						editor_drag_target = button
+						break
+			if editor_drag_target:
+				editor_drag_offset = touch.position - editor_drag_target.global_position
+		else:
+			if touch.index == editor_touch_index:
+				editor_touch_index = -1
+				editor_drag_target = null
+				_save_mobile_control_layout()
+	elif event is InputEventScreenDrag:
+		var drag: InputEventScreenDrag = event as InputEventScreenDrag
+		if drag.index == editor_touch_index and is_instance_valid(editor_drag_target):
+			var view_size: Vector2 = get_viewport().get_visible_rect().size
+			var next_position: Vector2 = drag.position - editor_drag_offset
+			editor_drag_target.position = Vector2(
+				clampf(next_position.x, 8.0, maxf(8.0, view_size.x - editor_drag_target.size.x - 8.0)),
+				clampf(next_position.y, 8.0, maxf(8.0, view_size.y - editor_drag_target.size.y - 8.0))
+			)
+			if editor_drag_target == joystick_base:
+				joystick_base.queue_redraw()
+
+func _start_mobile_editor() -> void:
+	if not touch_controls_enabled or mobile_editor_active:
+		return
+	mobile_editor_active = true
+	_pause_settings_container_hide()
+	pause_menu.get_node("Center").visible = false
+	touch_root.visible = true
+	touch_root.z_index = 20
+	joystick_base.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	for button: Button in touch_buttons:
+		button.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	editor_hint_label = Label.new()
+	editor_hint_label.text = "SERET JOYSTICK DAN TOMBOL KE POSISI YANG DIINGINKAN"
+	editor_hint_label.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	editor_hint_label.offset_left = 12.0
+	editor_hint_label.offset_top = 14.0
+	editor_hint_label.offset_right = -150.0
+	editor_hint_label.offset_bottom = 48.0
+	editor_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	editor_hint_label.add_theme_font_size_override("font_size", 12)
+	editor_hint_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.78, 1.0))
+	editor_hint_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	touch_root.add_child(editor_hint_label)
+	editor_done_button = _make_touch_button("SELESAI")
+	editor_done_button.position = Vector2(get_viewport().get_visible_rect().size.x - 142.0, 86.0)
+	editor_done_button.size = Vector2(128.0, 48.0)
+	editor_done_button.mouse_filter = Control.MOUSE_FILTER_STOP
+	editor_done_button.pressed.connect(_finish_mobile_editor)
+	touch_root.add_child(editor_done_button)
+
+func _finish_mobile_editor() -> void:
+	if not mobile_editor_active:
+		return
+	_save_mobile_control_layout()
+	mobile_editor_active = false
+	editor_touch_index = -1
+	editor_drag_target = null
+	if is_instance_valid(editor_hint_label):
+		editor_hint_label.queue_free()
+	if is_instance_valid(editor_done_button):
+		editor_done_button.queue_free()
+	editor_hint_label = null
+	editor_done_button = null
+	if touch_root:
+		touch_root.z_index = 1
+		touch_root.visible = false
+	if joystick_base:
+		joystick_base.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	for button: Button in touch_buttons:
+		button.mouse_filter = Control.MOUSE_FILTER_STOP
+	pause_menu.get_node("Center").visible = true
+
+func _save_mobile_control_layout() -> void:
+	if not touch_controls_enabled or not joystick_base:
+		return
+	var view_size: Vector2 = get_viewport().get_visible_rect().size
+	var normalized_buttons: Array = []
+	for button: Button in touch_buttons:
+		normalized_buttons.append(Vector2(button.position.x / view_size.x, button.position.y / view_size.y))
+	SettingsManager.set_mobile_control_layout(Vector2(joystick_base.position.x / view_size.x, joystick_base.position.y / view_size.y), normalized_buttons)
+
 func _update_virtual_joystick(screen_position: Vector2) -> void:
 	if not joystick_base:
 		return
@@ -725,7 +936,7 @@ func _update_virtual_joystick(screen_position: Vector2) -> void:
 	var center: Vector2 = joystick_base.size * 0.5
 	var radius: float = joystick_base.size.x * 0.38
 	var offset: Vector2 = (local_position - center).limit_length(radius)
-	joystick_vector = Vector2(offset.x / radius, -offset.y / radius)
+	joystick_vector = Vector2(offset.x / radius, offset.y / radius)
 	var player: PlayerController = GameManager.player_character as PlayerController
 	if player:
 		player.set_virtual_move(joystick_vector)

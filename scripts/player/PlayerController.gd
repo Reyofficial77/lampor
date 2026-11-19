@@ -43,6 +43,7 @@ var flashlight_drain_rate: float = 0.25
 # Hiding
 var is_hiding: bool = false
 var hiding_spot: Node = null
+var is_inventory_open: bool = false
 var hide_yaw_center: float = 0.0
 const HIDE_LOOK_YAW: float = 55.0
 const HIDE_LOOK_PITCH: float = 40.0
@@ -80,6 +81,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if GameManager.current_state != GameManager.GameState.PLAYING:
 		return
 
+	if is_inventory_open:
+		return
+
 	if is_hiding:
 		if event.is_action_pressed("interact"):
 			_request_exit_hiding()
@@ -111,6 +115,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		inventory_system.select_slot(2)
 	elif event.is_action_pressed("slot_4"):
 		inventory_system.select_slot(3)
+	elif event.is_action_pressed("slot_5"):
+		inventory_system.select_slot(4)
 		
 	if event.is_action_pressed("ui_accept"):
 		_try_use_equipped_item()
@@ -123,7 +129,7 @@ func _physics_process(delta: float) -> void:
 	if GameManager.current_state != GameManager.GameState.PLAYING:
 		return
 		
-	if is_hiding:
+	if is_hiding or is_inventory_open:
 		current_noise_level = 0.0
 		velocity = Vector3.ZERO
 		return

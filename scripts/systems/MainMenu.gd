@@ -321,7 +321,7 @@ func _build_settings_modal() -> void:
 	guide.scroll_active = false
 	guide.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	guide.custom_minimum_size = Vector2(0, 330)
-	guide.text = "[color=#d9b76c][b]TUJUAN PERMAINAN[/b][/color]\nBertahan dari pukul 01.00 hingga fajar. Nyalakan 5 obor, amankan 3 pintu rumah, kumpulkan 4 benda ritual, lalu bakar semuanya di tungku balai desa. Bertahanlah sampai ritual selesai.\n\n[color=#d9b76c][b]KONTROL DESKTOP[/b][/color]\n• W, A, S, D: Bergerak\n• Mouse: Melihat ke sekitar\n• Shift: Berlari\n• E: Berinteraksi, mengambil barang, membuka pintu, dan bersembunyi\n• F: Menyalakan/mematikan senter\n• 1–4: Memilih slot barang\n• Enter / Space: Menggunakan barang\n• G: Menjatuhkan barang\n• Esc: Jeda permainan\n\n[color=#d9b76c][b]KONTROL MOBILE[/b][/color]\nGunakan joystick kiri untuk bergerak dan geser sisi kanan layar untuk melihat sekitar. Tombol di sisi kanan digunakan untuk berlari, berinteraksi, menyalakan senter, menggunakan barang, dan jeda. Sentuh slot inventaris untuk memilih barang.\n\n[color=#e66a68][b]CARA MENGHINDARI LAMPOR[/b][/color]\n• Jangan menatap langsung ke Lampor. Segera alihkan pandangan.\n• Saat lonceng terdengar dekat, matikan senter dan cari tempat bersembunyi.\n• Rumah dan area obor dapat membantu melindungimu.\n• Simpan jamu untuk memulihkan kewarasan dan stamina.\n• Nightmare terbuka setelah 5 kemenangan."
+	guide.text = "[color=#d9b76c][b]TUJUAN PERMAINAN[/b][/color]\nBertahan dari pukul 01.00 hingga fajar. Nyalakan 5 obor, amankan 3 pintu rumah, kumpulkan 4 benda ritual, lalu bakar semuanya di tungku balai desa. Bertahanlah sampai ritual selesai.\n\n[color=#d9b76c][b]KONTROL DESKTOP[/b][/color]\n• W, A, S, D: Bergerak\n• Mouse: Melihat ke sekitar\n• Shift: Berlari\n• E: Berinteraksi, mengambil barang, membuka pintu, dan bersembunyi\n• F: Menyalakan/mematikan senter\n• 1–5: Memilih slot hotbar\n• Tab / B: Membuka/menutup tas inventori (15 slot) & drag-and-drop barang\n• Enter / Space: Menggunakan barang\n• G: Menjatuhkan barang\n• Esc: Jeda permainan\n\n[color=#d9b76c][b]KONTROL MOBILE[/b][/color]\nGunakan joystick kiri untuk bergerak dan geser sisi kanan layar untuk melihat sekitar. Tombol di sisi kanan digunakan untuk berlari, berinteraksi, menyalakan senter, menggunakan barang, dan jeda. Sentuh slot inventaris untuk memilih barang, atau tekan tombol TAS untuk membuka sistem inventori.\n\n[color=#e66a68][b]CARA MENGHINDARI LAMPOR[/b][/color]\n• Jangan menatap langsung ke Lampor. Segera alihkan pandangan.\n• Saat lonceng terdengar dekat, matikan senter dan cari tempat bersembunyi.\n• Rumah dan area obor dapat membantu melindungimu.\n• Simpan jamu untuk memulihkan kewarasan dan stamina.\n• Nightmare terbuka setelah 5 kemenangan."
 	content.add_child(guide)
 
 	var close := _make_button("TUTUP")
@@ -374,7 +374,7 @@ func _build_shop_modal() -> void:
 	_add_shop_offer(offers, "Nyawa Tambahan x1", "Bangkit sekali di titik awal saat terbunuh.", "80 koin", "extra_life", 1)
 	_add_shop_offer(offers, "Nyawa Tambahan x2", "Dua kesempatan bangkit tambahan.", "150 koin", "extra_life", 2)
 	_add_shop_offer(offers, "Nyawa Tambahan x3", "Tiga kesempatan bangkit tambahan.", "210 koin", "extra_life", 3)
-	shop_result_label = _make_label("Barang masuk ke persediaan dan dibawa saat permainan berikutnya.", 11, TEXT_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	shop_result_label = _make_label("Batas pembelian: maksimal 5 per item & 5 nyawa tambahan. Jamu dapat di-stack hingga 10 di hotbar.", 11, TEXT_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
 	shop_result_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_child(shop_result_label)
 	var close := _make_button("TUTUP")
@@ -414,7 +414,15 @@ func _refresh_currency_display() -> void:
 
 func _refresh_shop_display() -> void:
 	if shop_balance_label:
-		shop_balance_label.text = "Koin Emas: %d  ·  Nyawa: %d" % [GameManager.coins, GameManager.extra_lives]
+		shop_balance_label.text = "Koin: %d  ·  Nyawa: %d/%d  ·  Jamu: %d/%d  ·  Baterai: %d/%d" % [
+			GameManager.coins,
+			GameManager.extra_lives,
+			GameManager.MAX_EXTRA_LIVES,
+			GameManager.item_stash.get("jamu", 0),
+			GameManager.MAX_SHOP_ITEM_QTY,
+			GameManager.item_stash.get("baterai", 0),
+			GameManager.MAX_SHOP_ITEM_QTY
+		]
 
 func _purchase_shop_item(item_id: String, quantity: int) -> void:
 	var result: Dictionary = GameManager.purchase_shop_item(item_id, quantity)

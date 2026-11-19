@@ -1,23 +1,29 @@
 class_name InventorySystem
 extends Node
 
-const MAX_SLOTS: int = 4
+const HOTBAR_SLOTS: int = 5
+const INVENTORY_ROWS: int = 3
+const INVENTORY_COLS: int = 5
+const INVENTORY_SLOTS: int = INVENTORY_ROWS * INVENTORY_COLS # 15 slot penyimpanan
+const TOTAL_SLOTS: int = HOTBAR_SLOTS + INVENTORY_SLOTS # 20 slot total
+const MAX_SLOTS: int = TOTAL_SLOTS
+
 var slots: Array = []
 var active_slot: int = 0
 
 const STACK_LIMITS: Dictionary = {
 	"minyak_tanah": 5,
 	"papan_paku": 4,
-	"jamu": 3,
-	"baterai": 5
+	"jamu": 10,
+	"baterai": 10
 }
 
 func _ready() -> void:
-	slots.resize(MAX_SLOTS)
-	for i in range(MAX_SLOTS):
+	slots.resize(TOTAL_SLOTS)
+	for i in range(TOTAL_SLOTS):
 		slots[i] = {}
 	
-	# Start player with Flashlight in slot 0 and 1 Jamu in slot 1
+	# Mulai dengan Senter di hotbar slot 0 dan 1 Jamu di hotbar slot 1
 	slots[0] = {
 		"id": "flashlight",
 		"name": "Senter",
@@ -39,28 +45,28 @@ func _initial_update() -> void:
 	SignalBus.item_equipped.emit(active_slot, get_equipped_item())
 
 func select_slot(slot_index: int) -> void:
-	if slot_index < 0 or slot_index >= MAX_SLOTS:
+	if slot_index < 0 or slot_index >= HOTBAR_SLOTS:
 		return
 	active_slot = slot_index
 	SignalBus.item_equipped.emit(active_slot, get_equipped_item())
 
 func get_equipped_item() -> Dictionary:
-	if active_slot >= 0 and active_slot < slots.size():
+	if active_slot >= 0 and active_slot < HOTBAR_SLOTS and active_slot < slots.size():
 		return slots[active_slot]
 	return {}
 
 func can_add_item(item_id: String, qty: int = 1) -> bool:
 	var max_stack: int = STACK_LIMITS.get(item_id, 1)
 	
-	# Check existing stack
-	for i in range(MAX_SLOTS):
+	# Periksa stack yang sudah ada di semua slot
+	for i in range(TOTAL_SLOTS):
 		if not slots[i].is_empty() and slots[i].get("id") == item_id:
 			var current_qty: int = slots[i].get("quantity", 1)
 			if current_qty + qty <= max_stack:
 				return true
 				
-	# Check empty slot
-	for i in range(MAX_SLOTS):
+	# Periksa slot kosong
+	for i in range(TOTAL_SLOTS):
 		if slots[i].is_empty():
 			return true
 			
@@ -71,29 +77,80 @@ func add_item(item_data: Dictionary) -> bool:
 	var qty: int = item_data.get("quantity", 1)
 	var max_stack: int = STACK_LIMITS.get(item_id, 1)
 
-	# Try to stack onto existing item
-	for i in range(MAX_SLOTS):
+	# Coba stack ke item yang sama (prioritaskan hotbar lalu inventaris)
+	for i in range(TOTAL_SLOTS):
 		if not slots[i].is_empty() and slots[i].get("id") == item_id:
 			if slots[i].has("quantity"):
 				var current_qty: int = slots[i]["quantity"]
 				if current_qty < max_stack:
 					var add_qty: int = min(qty, max_stack - current_qty)
 					slots[i]["quantity"] += add_qty
-					SignalBus.inventory_updated.emit(slots)
-					SignalBus.item_equipped.emit(active_slot, get_equipped_item())
-					AudioManager.play_sound("item_pickup")
-					return true
+					qty -= add_qty
+					if qty <= 0:
+						SignalBus.inventory_updated.emit(slots)
+						SignalBus.item_equipped.emit(active_slot, get_equipped_item())
+						AudioManager.play_sound("item_pickup")
+						return true
 
-	# Put in first empty slot
-	for i in range(MAX_SLOTS):
+	# Masukkan ke slot kosong pertama
+	for i in range(TOTAL_SLOTS):
 		if slots[i].is_empty():
-			slots[i] = item_data.duplicate(true)
+			var new_item: Dictionary = item_data.duplicate(true)
+			new_item["quantity"] = qty
+			slots[i] = new_item
 			SignalBus.inventory_updated.emit(slots)
 			SignalBus.item_equipped.emit(active_slot, get_equipped_item())
 			AudioManager.play_sound("item_pickup")
 			return true
 
 	return false
+
+func move_or_swap_slots(from_index: int, to_index: int) -> bool:
+	if from_index < 0 or from_index >= TOTAL_SLOTS or to_index < 0 or to_index >= TOTAL_SLOTS:
+		return false
+	if from_index == to_index:
+		return false
+	if slots[from_index].is_empty():
+		return false
+
+	var source_item: Dictionary = slots[from_index]
+	var target_item: Dictionary = slots[to_index]
+
+	# Jika target kosong, pindahkan item
+	if target_item.is_empty():
+		slots[to_index] = source_item
+		slots[from_index] = {}
+		SignalBus.inventory_updated.emit(slots)
+		SignalBus.item_equipped.emit(active_slot, get_equipped_item())
+		return true
+
+	# Jika target item bertipe sama dan memiliki kuantitas, coba gabungkan (stack)
+	var source_id: String = str(source_item.get("id", ""))
+	var target_id: String = str(target_item.get("id", ""))
+	if source_id == target_id and source_item.has("quantity") and target_item.has("quantity"):
+		var max_stack: int = STACK_LIMITS.get(source_id, 1)
+		var current_target_qty: int = int(target_item.get("quantity", 1))
+		if current_target_qty < max_stack:
+			var source_qty: int = int(source_item.get("quantity", 1))
+			var space: int = max_stack - current_target_qty
+			if source_qty <= space:
+				target_item["quantity"] = current_target_qty + source_qty
+				slots[from_index] = {}
+			else:
+				target_item["quantity"] = max_stack
+				source_item["quantity"] = source_qty - space
+			SignalBus.inventory_updated.emit(slots)
+			SignalBus.item_equipped.emit(active_slot, get_equipped_item())
+			return true
+
+	# Jika slot sudah ada isinya (atau beda item), tukar tempat (mirip sistem inventory Minecraft)
+	var temp: Dictionary = slots[to_index]
+	slots[to_index] = slots[from_index]
+	slots[from_index] = temp
+
+	SignalBus.inventory_updated.emit(slots)
+	SignalBus.item_equipped.emit(active_slot, get_equipped_item())
+	return true
 
 func has_item_id(item_id: String) -> bool:
 	for slot: Dictionary in slots:
@@ -109,7 +166,7 @@ func get_item_quantity(item_id: String) -> int:
 	return total
 
 func consume_item_by_id(item_id: String) -> bool:
-	for i in range(MAX_SLOTS):
+	for i in range(TOTAL_SLOTS):
 		if not slots[i].is_empty() and slots[i].get("id") == item_id:
 			if slots[i].has("quantity") and slots[i]["quantity"] > 1:
 				slots[i]["quantity"] -= 1
@@ -149,7 +206,13 @@ func drop_equipped_item(drop_position: Vector3) -> bool:
 	# global_position baru valid setelah Node3D masuk SceneTree.
 	world.add_child(inst)
 	inst.global_position = drop_position
-	slots[active_slot] = {}
+
+	# Jika jumlah > 1, kurangi 1 kuantitas agar sisa stack tidak hilang
+	if slots[active_slot].has("quantity") and slots[active_slot]["quantity"] > 1:
+		slots[active_slot]["quantity"] -= 1
+	else:
+		slots[active_slot] = {}
+
 	SignalBus.inventory_updated.emit(slots)
 	SignalBus.item_equipped.emit(active_slot, get_equipped_item())
 	AudioManager.play_sound("item_pickup", -6.0, 0.8)

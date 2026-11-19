@@ -71,6 +71,15 @@ var editor_drag_offset: Vector2 = Vector2.ZERO
 var editor_hint_label: Label
 var editor_done_button: Button
 
+# Inventory Overlay Nodes
+var inventory_overlay: ColorRect
+var inventory_modal_panel: PanelContainer
+var inventory_storage_slots: Array[InventorySlotUI] = []
+var inventory_hotbar_slots: Array[InventorySlotUI] = []
+var selected_swap_slot: int = -1
+var cached_inventory_slots: Array = []
+var hud_bag_button: Button = null
+
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 
@@ -99,6 +108,8 @@ func _ready() -> void:
 	_build_mission_card()
 	_build_exit_confirm()
 	_build_desktop_hints()
+	_build_inventory_overlay()
+	_build_hud_bag_button()
 	SettingsManager.call_deferred("_apply_brightness_overlay")
 	act_banner.visible = false
 	pause_menu.visible = false
@@ -155,6 +166,11 @@ func _on_inventory_slot_input(event: InputEvent, slot_index: int) -> void:
 			player.touch_select_slot(slot_index)
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event.is_action_pressed("toggle_inventory") or (event is InputEventKey and event.pressed and not event.echo and (event.keycode == KEY_TAB or event.keycode == KEY_B or event.keycode == KEY_I)):
+		if not pause_menu.visible and not barricade_dialog.visible and GameManager.current_state == GameManager.GameState.PLAYING:
+			toggle_inventory()
+			return
+
 	if event.is_action_pressed("pause"):
 		if exit_confirm_overlay and exit_confirm_overlay.visible:
 			exit_confirm_overlay.visible = false
@@ -164,12 +180,16 @@ func _unhandled_input(event: InputEvent) -> void:
 				Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _is_touch_device() else Input.MOUSE_MODE_CAPTURED
 		elif barricade_dialog.visible:
 			_close_barricade_dialog()
+		elif inventory_overlay and inventory_overlay.visible:
+			toggle_inventory()
 		else:
 			toggle_pause()
 
 func toggle_pause() -> void:
 	if mobile_editor_active:
 		_finish_mobile_editor()
+	if inventory_overlay and inventory_overlay.visible:
+		toggle_inventory()
 	# Jangan izinkan pemain membatalkan jeda paksa selama rangkaian jumpscare.
 	if GameManager.death_sequence_active:
 		return
@@ -606,6 +626,10 @@ func _apply_overlay_layouts() -> void:
 		mission_body.add_theme_font_size_override("font_size", 12 if compact else 17)
 	if exit_panel:
 		exit_panel.custom_minimum_size.x = minf(440.0, view_size.x - 32.0)
+	if inventory_modal_panel:
+		var panel_w: float = minf(540.0, view_size.x - 24.0)
+		var panel_h: float = minf(460.0, view_size.y - 24.0)
+		inventory_modal_panel.custom_minimum_size = Vector2(panel_w, panel_h)
 
 func _is_touch_device() -> bool:
 	return DisplayServer.is_touchscreen_available() or OS.has_feature("android") or OS.has_feature("ios") or OS.has_feature("web_android") or OS.has_feature("web_ios")
@@ -636,11 +660,14 @@ func _setup_mobile_controls() -> void:
 	use_button.pressed.connect(_on_touch_use)
 	var pause_button := _make_touch_button("Ⅱ")
 	pause_button.pressed.connect(toggle_pause)
+	var bag_button := _make_touch_button("TAS")
+	bag_button.pressed.connect(toggle_inventory)
 	touch_buttons.append(run_button)
 	touch_buttons.append(interact_button)
 	touch_buttons.append(flashlight_button)
 	touch_buttons.append(use_button)
 	touch_buttons.append(pause_button)
+	touch_buttons.append(bag_button)
 	for button: Button in touch_buttons:
 		touch_root.add_child(button)
 	get_viewport().size_changed.connect(_layout_touch_controls)
@@ -682,7 +709,14 @@ func _layout_touch_controls() -> void:
 	var x_left: float = x_right - button_size - 12.0
 	var y_bottom: float = view_size.y - button_size - 100.0
 	var y_top: float = y_bottom - button_size - 12.0
-	var defaults: Array[Vector2] = [Vector2(x_left, y_top), Vector2(x_right, y_top), Vector2(x_left, y_bottom), Vector2(x_right, y_bottom), Vector2(view_size.x - 72.0, 18.0)]
+	var defaults: Array[Vector2] = [
+		Vector2(x_left, y_top),
+		Vector2(x_right, y_top),
+		Vector2(x_left, y_bottom),
+		Vector2(x_right, y_bottom),
+		Vector2(view_size.x - 72.0, 18.0),
+		Vector2(view_size.x - 138.0, 18.0)
+	]
 	var saved_positions: Array = SettingsManager.mobile_button_positions
 	for i: int in range(touch_buttons.size()):
 		var button: Button = touch_buttons[i]
@@ -693,6 +727,9 @@ func _layout_touch_controls() -> void:
 		button.size = Vector2(button_size, button_size)
 		if i == 4:
 			button.position = Vector2(view_size.x - 72.0, 18.0) if saved_positions.size() != touch_buttons.size() else button_position
+			button.size = Vector2(56.0, 56.0) * SettingsManager.mobile_button_scale
+		elif i == 5:
+			button.position = Vector2(view_size.x - 138.0, 18.0) if saved_positions.size() != touch_buttons.size() else button_position
 			button.size = Vector2(56.0, 56.0) * SettingsManager.mobile_button_scale
 		button.position.x = clampf(button.position.x, 8.0, maxf(8.0, view_size.x - button.size.x - 8.0))
 		button.position.y = clampf(button.position.y, 8.0, maxf(8.0, view_size.y - button.size.y - 8.0))
@@ -759,7 +796,7 @@ func _build_desktop_hints() -> void:
 	desktop_hint_panel.z_index = 2
 	desktop_hint_panel.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
 	desktop_hint_panel.offset_left = -282.0
-	desktop_hint_panel.offset_top = -238.0
+	desktop_hint_panel.offset_top = -258.0
 	desktop_hint_panel.offset_right = -22.0
 	desktop_hint_panel.offset_bottom = -94.0
 	desktop_hint_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -783,7 +820,7 @@ func _build_desktop_hints() -> void:
 	heading.add_theme_color_override("font_color", Color(0.88, 0.55, 0.48, 1.0))
 	hint_column.add_child(heading)
 	var hints := Label.new()
-	hints.text = "W A S D  ·  Bergerak     Mouse  ·  Lihat\nShift  ·  Berlari        E  ·  Interaksi\nF  ·  Senter            1–4  ·  Pilih item\nEnter / Space  ·  Gunakan item\nG  ·  Jatuhkan item      Esc  ·  Jeda"
+	hints.text = "W A S D  ·  Bergerak     Mouse  ·  Lihat\nShift  ·  Berlari        E  ·  Interaksi\nF  ·  Senter            1–5  ·  Pilih hotbar\nTab / B  ·  Tas Inventaris (Drag & Drop)\nEnter / Space  ·  Gunakan item\nG  ·  Jatuhkan item      Esc  ·  Jeda"
 	hints.add_theme_font_size_override("font_size", 11)
 	hints.add_theme_color_override("font_color", Color(0.9, 0.88, 0.85, 0.94))
 	hints.add_theme_constant_override("line_spacing", 2)
@@ -1070,6 +1107,7 @@ func _on_objective_updated(id: String, text: String, current: int, required: int
 	_refresh_mission_card()
 
 func _on_inventory_updated(slots: Array) -> void:
+	cached_inventory_slots = slots
 	for i in range(min(slots.size(), slots_container.get_child_count())):
 		var slot_panel: PanelContainer = slots_container.get_child(i) as PanelContainer
 		var label: Label = slot_panel.get_node("VBox/ItemName") as Label
@@ -1087,6 +1125,8 @@ func _on_inventory_updated(slots: Array) -> void:
 				qty_label.text = "%d%%" % int(item["battery"])
 			else:
 				qty_label.text = ""
+	if inventory_overlay and inventory_overlay.visible:
+		_refresh_inventory_ui()
 
 func _on_item_equipped(slot_index: int, _item: Dictionary) -> void:
 	for i in range(slots_container.get_child_count()):
@@ -1095,6 +1135,8 @@ func _on_item_equipped(slot_index: int, _item: Dictionary) -> void:
 			slot_panel.modulate = Color(1.3, 1.3, 0.4)
 		else:
 			slot_panel.modulate = Color(1, 1, 1)
+	if inventory_overlay and inventory_overlay.visible:
+		_refresh_inventory_ui()
 
 func _on_lampor_stare(intensity: float) -> void:
 	if intensity > 0.4:
@@ -1161,6 +1203,8 @@ func _draw_jumpscare_face() -> void:
 		jumpscare_face.draw_colored_polygon(bot_tri, Color(0.95, 0.93, 0.82))
 
 func _on_screamer() -> void:
+	if inventory_overlay and inventory_overlay.visible:
+		toggle_inventory()
 	if desktop_hint_panel:
 		desktop_hint_panel.visible = false
 	if jumpscare_tween:
@@ -1180,3 +1224,214 @@ func _on_screamer() -> void:
 	jumpscare_tween.tween_interval(0.35)
 	jumpscare_tween.tween_property(jumpscare_rect, "modulate:a", 0.0, 0.5)
 	jumpscare_tween.tween_callback(func() -> void: jumpscare_rect.visible = false)
+
+func _build_hud_bag_button() -> void:
+	if _is_touch_device():
+		return
+	hud_bag_button = Button.new()
+	hud_bag_button.name = "HudBagButton"
+	hud_bag_button.text = "🎒 TAS [TAB]"
+	hud_bag_button.focus_mode = Control.FOCUS_NONE
+	hud_bag_button.custom_minimum_size = Vector2(100.0, 26.0)
+	hud_bag_button.add_theme_font_size_override("font_size", 11)
+	hud_bag_button.add_theme_color_override("font_color", Color(0.95, 0.88, 0.72, 1.0))
+	var btn_style := StyleBoxFlat.new()
+	btn_style.bg_color = Color(0.08, 0.08, 0.1, 0.82)
+	btn_style.border_color = Color(0.65, 0.45, 0.35, 0.85)
+	btn_style.set_border_width_all(1)
+	btn_style.set_corner_radius_all(4)
+	hud_bag_button.add_theme_stylebox_override("normal", btn_style)
+	var hover_style := btn_style.duplicate() as StyleBoxFlat
+	hover_style.bg_color = Color(0.2, 0.15, 0.16, 0.95)
+	hover_style.border_color = Color(0.85, 0.65, 0.45, 1.0)
+	hud_bag_button.add_theme_stylebox_override("hover", hover_style)
+	hud_bag_button.add_theme_stylebox_override("pressed", hover_style)
+	hud_bag_button.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	hud_bag_button.anchor_left = 0.5
+	hud_bag_button.anchor_right = 0.5
+	hud_bag_button.anchor_top = 1.0
+	hud_bag_button.anchor_bottom = 1.0
+	hud_bag_button.offset_left = -50.0
+	hud_bag_button.offset_right = 50.0
+	hud_bag_button.offset_top = -116.0
+	hud_bag_button.offset_bottom = -90.0
+	hud_bag_button.pressed.connect(toggle_inventory)
+	add_child(hud_bag_button)
+
+func _build_inventory_overlay() -> void:
+	inventory_overlay = ColorRect.new()
+	inventory_overlay.name = "InventoryOverlay"
+	inventory_overlay.color = Color(0.0, 0.0, 0.0, 0.75)
+	inventory_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	inventory_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	inventory_overlay.z_index = 25
+	inventory_overlay.visible = false
+	add_child(inventory_overlay)
+
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_PASS
+	inventory_overlay.add_child(center)
+
+	inventory_modal_panel = PanelContainer.new()
+	inventory_modal_panel.name = "InventoryModalPanel"
+	inventory_modal_panel.custom_minimum_size = Vector2(510.0, 440.0)
+	inventory_modal_panel.add_theme_stylebox_override("panel", _make_overlay_style(0.96, 20.0, 16.0))
+	center.add_child(inventory_modal_panel)
+
+	var main_vbox := VBoxContainer.new()
+	main_vbox.add_theme_constant_override("separation", 10)
+	inventory_modal_panel.add_child(main_vbox)
+
+	var header := HBoxContainer.new()
+	main_vbox.add_child(header)
+
+	var title_lbl := Label.new()
+	title_lbl.text = "🎒 INVENTARIS"
+	title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_lbl.add_theme_font_size_override("font_size", 20)
+	title_lbl.add_theme_color_override("font_color", Color(0.95, 0.82, 0.45, 1.0))
+	header.add_child(title_lbl)
+
+	var close_btn := Button.new()
+	close_btn.text = "✕ Tutup [Tab]"
+	close_btn.custom_minimum_size = Vector2(110.0, 32.0)
+	close_btn.pressed.connect(toggle_inventory)
+	header.add_child(close_btn)
+
+	var storage_lbl := Label.new()
+	storage_lbl.text = "PENYIMPANAN TAS (15 Slot)"
+	storage_lbl.add_theme_font_size_override("font_size", 13)
+	storage_lbl.add_theme_color_override("font_color", Color(0.85, 0.75, 0.65, 1.0))
+	main_vbox.add_child(storage_lbl)
+
+	var storage_grid := GridContainer.new()
+	storage_grid.columns = 5
+	storage_grid.add_theme_constant_override("h_separation", 6)
+	storage_grid.add_theme_constant_override("v_separation", 6)
+	main_vbox.add_child(storage_grid)
+
+	inventory_storage_slots.clear()
+	for i in range(15):
+		var slot_idx: int = InventorySystem.HOTBAR_SLOTS + i
+		var slot_ui := InventorySlotUI.new()
+		slot_ui.setup(slot_idx, false, "")
+		slot_ui.slot_dropped.connect(_on_inventory_slot_dropped)
+		slot_ui.slot_clicked.connect(_on_inventory_slot_clicked)
+		storage_grid.add_child(slot_ui)
+		inventory_storage_slots.append(slot_ui)
+
+	var sep := HSeparator.new()
+	main_vbox.add_child(sep)
+
+	var hotbar_lbl := Label.new()
+	hotbar_lbl.text = "HOTBAR (5 Slot)"
+	hotbar_lbl.add_theme_font_size_override("font_size", 13)
+	hotbar_lbl.add_theme_color_override("font_color", Color(0.85, 0.75, 0.65, 1.0))
+	main_vbox.add_child(hotbar_lbl)
+
+	var hotbar_grid := GridContainer.new()
+	hotbar_grid.columns = 5
+	hotbar_grid.add_theme_constant_override("h_separation", 6)
+	hotbar_grid.add_theme_constant_override("v_separation", 6)
+	main_vbox.add_child(hotbar_grid)
+
+	inventory_hotbar_slots.clear()
+	for i in range(InventorySystem.HOTBAR_SLOTS):
+		var slot_ui := InventorySlotUI.new()
+		slot_ui.setup(i, true, "[%d]" % (i + 1))
+		slot_ui.slot_dropped.connect(_on_inventory_slot_dropped)
+		slot_ui.slot_clicked.connect(_on_inventory_slot_clicked)
+		hotbar_grid.add_child(slot_ui)
+		inventory_hotbar_slots.append(slot_ui)
+
+	var hint_lbl := Label.new()
+	hint_lbl.text = "💡 Tarik & taruh (drag & drop) barang ke hotbar/tas. Jika slot sudah ada isinya, posisi barang akan ditukar (mirip Minecraft)."
+	hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint_lbl.add_theme_font_size_override("font_size", 11)
+	hint_lbl.add_theme_color_override("font_color", Color(0.75, 0.72, 0.68, 0.9))
+	main_vbox.add_child(hint_lbl)
+
+func toggle_inventory() -> void:
+	if pause_menu.visible or barricade_dialog.visible:
+		return
+	if GameManager.death_sequence_active or GameManager.current_state != GameManager.GameState.PLAYING:
+		return
+	if not inventory_overlay:
+		return
+
+	var is_open: bool = not inventory_overlay.visible
+	inventory_overlay.visible = is_open
+	selected_swap_slot = -1
+
+	var player: PlayerController = GameManager.player_character as PlayerController
+	if is_open:
+		_refresh_inventory_ui()
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		if player:
+			player.is_inventory_open = true
+			player.set_virtual_move(Vector2.ZERO)
+			player.set_virtual_sprint(false)
+	else:
+		if player:
+			player.is_inventory_open = false
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _is_touch_device() else Input.MOUSE_MODE_CAPTURED
+
+func _refresh_inventory_ui() -> void:
+	var player: PlayerController = GameManager.player_character as PlayerController
+	var current_slots: Array = cached_inventory_slots
+	var active_slot_idx: int = 0
+	if player and player.inventory_system:
+		current_slots = player.inventory_system.slots
+		active_slot_idx = player.inventory_system.active_slot
+	cached_inventory_slots = current_slots
+
+	for i in range(inventory_hotbar_slots.size()):
+		var slot_idx: int = i
+		var data: Dictionary = current_slots[slot_idx] if slot_idx < current_slots.size() else {}
+		inventory_hotbar_slots[i].update_slot(data, slot_idx == active_slot_idx)
+		inventory_hotbar_slots[i].set_selected(slot_idx == selected_swap_slot)
+
+	for i in range(inventory_storage_slots.size()):
+		var slot_idx: int = InventorySystem.HOTBAR_SLOTS + i
+		var data: Dictionary = current_slots[slot_idx] if slot_idx < current_slots.size() else {}
+		inventory_storage_slots[i].update_slot(data, false)
+		inventory_storage_slots[i].set_selected(slot_idx == selected_swap_slot)
+
+func _update_slot_selections() -> void:
+	for i in range(inventory_hotbar_slots.size()):
+		inventory_hotbar_slots[i].set_selected(i == selected_swap_slot)
+	for i in range(inventory_storage_slots.size()):
+		var slot_idx: int = InventorySystem.HOTBAR_SLOTS + i
+		inventory_storage_slots[i].set_selected(slot_idx == selected_swap_slot)
+
+func _on_inventory_slot_dropped(from_slot: int, to_slot: int) -> void:
+	var player: PlayerController = GameManager.player_character as PlayerController
+	if not player or not player.inventory_system:
+		return
+	var success: bool = player.inventory_system.move_or_swap_slots(from_slot, to_slot)
+	if success:
+		AudioManager.play_sound("item_pickup", -4.0, 1.1)
+	selected_swap_slot = -1
+	_refresh_inventory_ui()
+
+func _on_inventory_slot_clicked(slot_idx: int) -> void:
+	var player: PlayerController = GameManager.player_character as PlayerController
+	if not player or not player.inventory_system:
+		return
+	if selected_swap_slot == -1:
+		if slot_idx >= 0 and slot_idx < player.inventory_system.slots.size():
+			if not player.inventory_system.slots[slot_idx].is_empty():
+				selected_swap_slot = slot_idx
+				_update_slot_selections()
+	else:
+		if selected_swap_slot == slot_idx:
+			selected_swap_slot = -1
+			_update_slot_selections()
+		else:
+			var from_slot: int = selected_swap_slot
+			selected_swap_slot = -1
+			var success: bool = player.inventory_system.move_or_swap_slots(from_slot, slot_idx)
+			if success:
+				AudioManager.play_sound("item_pickup", -4.0, 1.1)
+			_refresh_inventory_ui()

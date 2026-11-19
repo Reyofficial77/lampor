@@ -88,7 +88,7 @@ func get_interaction_prompt(player: Node) -> String:
 			if current_qty >= max_stack:
 				return item_name + " (Kapasitas Penuh: %d)" % max_stack
 			else:
-				return item_name + " (Tas Penuh! 4 Slot Terisi)"
+				return item_name + " (Tas Penuh!)"
 
 	return "[E] Ambil " + item_name
 

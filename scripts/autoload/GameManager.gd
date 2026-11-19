@@ -49,6 +49,8 @@ var death_sequence_active: bool = false
 var total_wins: int = 0
 var coins: int = 0
 var extra_lives: int = 0
+const MAX_EXTRA_LIVES: int = 5
+const MAX_SHOP_ITEM_QTY: int = 5
 var item_stash: Dictionary = {"jamu": 0, "baterai": 0}
 var redeemed_codes: Array[String] = []
 var run_reward_awarded: bool = false
@@ -88,11 +90,11 @@ func load_save_data() -> void:
 	var data: Dictionary = json.data
 	total_wins = maxi(0, int(data.get("total_wins", 0)))
 	coins = maxi(0, int(data.get("coins", 0)))
-	extra_lives = maxi(0, int(data.get("extra_lives", 0)))
+	extra_lives = clampi(int(data.get("extra_lives", 0)), 0, MAX_EXTRA_LIVES)
 	var saved_stash: Variant = data.get("item_stash", {})
 	if saved_stash is Dictionary:
-		item_stash["jamu"] = maxi(0, int(saved_stash.get("jamu", 0)))
-		item_stash["baterai"] = maxi(0, int(saved_stash.get("baterai", 0)))
+		item_stash["jamu"] = clampi(int(saved_stash.get("jamu", 0)), 0, MAX_SHOP_ITEM_QTY)
+		item_stash["baterai"] = clampi(int(saved_stash.get("baterai", 0)), 0, MAX_SHOP_ITEM_QTY)
 	var saved_codes: Variant = data.get("redeemed_codes", [])
 	if saved_codes is Array:
 		for code: Variant in saved_codes:
@@ -475,8 +477,11 @@ func _restore_player_snapshot(world_root: Node, raw_player: Variant) -> void:
 	var saved_inventory: Variant = saved_player.get("inventory", [])
 	if saved_inventory is Array and is_instance_valid(player.inventory_system):
 		player.inventory_system.slots = saved_inventory.duplicate(true)
-		player.inventory_system.slots.resize(InventorySystem.MAX_SLOTS)
-		player.inventory_system.active_slot = clampi(int(saved_player.get("active_slot", 0)), 0, InventorySystem.MAX_SLOTS - 1)
+		player.inventory_system.slots.resize(InventorySystem.TOTAL_SLOTS)
+		for i in range(InventorySystem.TOTAL_SLOTS):
+			if player.inventory_system.slots[i] == null:
+				player.inventory_system.slots[i] = {}
+		player.inventory_system.active_slot = clampi(int(saved_player.get("active_slot", 0)), 0, InventorySystem.HOTBAR_SLOTS - 1)
 		SignalBus.inventory_updated.emit(player.inventory_system.slots)
 		SignalBus.item_equipped.emit(player.inventory_system.active_slot, player.inventory_system.get_equipped_item())
 	SignalBus.player_sanity_changed.emit(player.sanity_system.current_sanity, player.sanity_system.max_sanity)
@@ -515,6 +520,20 @@ func purchase_shop_item(item_id: String, quantity: int = 1) -> Dictionary:
 			price = 80 if safe_quantity == 1 else (150 if safe_quantity == 2 else 210)
 		_:
 			return {"success": false, "message": "Item tidak tersedia di toko."}
+
+	# Periksa batas maksimal kuantitas (maksimal 5 per item dan nyawa)
+	if item_id == "extra_life":
+		if extra_lives >= MAX_EXTRA_LIVES:
+			return {"success": false, "message": "Batas maksimal nyawa tambahan (%d) sudah tercapai." % MAX_EXTRA_LIVES}
+		if extra_lives + safe_quantity > MAX_EXTRA_LIVES:
+			return {"success": false, "message": "Pembelian melebihi batas maksimal %d nyawa (saat ini: %d)." % [MAX_EXTRA_LIVES, extra_lives]}
+	else:
+		var current_qty: int = int(item_stash.get(item_id, 0))
+		if current_qty >= MAX_SHOP_ITEM_QTY:
+			return {"success": false, "message": "Batas maksimal persediaan (%d) untuk item ini sudah tercapai." % MAX_SHOP_ITEM_QTY}
+		if current_qty + safe_quantity > MAX_SHOP_ITEM_QTY:
+			return {"success": false, "message": "Pembelian melebihi batas maksimal %d untuk item ini (saat ini: %d)." % [MAX_SHOP_ITEM_QTY, current_qty]}
+
 	if coins < price:
 		return {"success": false, "message": "Koin tidak cukup. Dibutuhkan %d koin." % price}
 	coins -= price
@@ -546,11 +565,11 @@ func apply_reward(reward: Dictionary) -> void:
 		"coins":
 			coins += quantity
 		"lives":
-			extra_lives += quantity
+			extra_lives = mini(MAX_EXTRA_LIVES, extra_lives + quantity)
 		"item":
 			var item_id: String = str(reward.get("item_id", ""))
 			if item_id in ["jamu", "baterai"]:
-				item_stash[item_id] = maxi(0, int(item_stash.get(item_id, 0))) + quantity
+				item_stash[item_id] = mini(MAX_SHOP_ITEM_QTY, maxi(0, int(item_stash.get(item_id, 0))) + quantity)
 
 func deliver_stored_items(inventory: Node) -> void:
 	if is_resuming_saved_run:
@@ -564,10 +583,13 @@ func deliver_stored_items(inventory: Node) -> void:
 			continue
 		stash_changed = true
 		var item_name: String = "Jamu Tolak Bala" if item_id == "jamu" else "Baterai Senter"
-		while remaining > 0:
+		# Batas maksimal yang dapat dibawa/digunakan saat permainan adalah 5
+		var deliver_qty: int = mini(MAX_SHOP_ITEM_QTY, remaining)
+		while deliver_qty > 0:
 			var accepted: bool = bool(inventory.add_item({"id": item_id, "name": item_name, "type": "consumable", "quantity": 1}))
 			if not accepted:
 				break
+			deliver_qty -= 1
 			remaining -= 1
 		item_stash[item_id] = remaining
 	if stash_changed:

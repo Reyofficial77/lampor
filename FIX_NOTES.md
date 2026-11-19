@@ -1,28 +1,32 @@
-# LAMPOR v1.1.9
+# LAMPOR v1.2.0
 
-## Pembaruan sistem
+## Fitur Baru (Update)
 
-- Updater kini menyinkronkan seluruh isi proyek dari commit terbaru branch `main`.
-- File baru ditambahkan dan file yang berubah diperbarui otomatis.
-- File serta folder yang sudah dihapus dari repository ikut dihapus dari proyek lokal.
-- Direktori `.git` dan `.godot` tidak pernah disentuh updater.
-- Backup dibuat sebelum sinkronisasi. Jika pemasangan gagal, file proyek dipulihkan.
+- **Sistem Inventori Tas (15 Slot)**:
+  - Ditambahkan ruang penyimpanan tas berisi 15 slot dengan tata letak 5 kolom ke kanan dan 3 baris ke bawah (5x3).
+  - Dapat dibuka dan ditutup kapan saja selama permainan menggunakan tombol **Tab**, **B**, atau **I** di desktop, tombol `🎒 TAS [TAB]` di atas hotbar, atau tombol sentuh `TAS` di layar kontrol mobile.
+- **Peningkatan Kapasitas Hotbar Menjadi 5 Slot**:
+  - Hotbar ditingkatkan dari 4 slot menjadi **5 slot**.
+  - Mendukung tombol angka **[1] - [5]** untuk memilih barang secara langsung, serta dukungan penuh input sentuh mobile.
+- **Sistem Drag & Drop serta Tukar Tempat (Mirip Minecraft)**:
+  - Pemain dapat memindahkan barang dari inventori ke hotbar atau antar slot dengan cara drag & drop.
+  - Jika slot hotbar tujuan sudah memiliki item, posisi item akan otomatis saling bertukar tempat (swap), persis seperti mekanisme inventori Minecraft.
+  - Tersedia pula fitur tap/klik dua slot untuk memindahkan/menukar posisi item secara mudah di mouse maupun layar sentuh HP.
 
-## Catatan pembaruan
+## Perbaikan & Penyesuaian (Fix)
 
-- Menu utama memiliki tombol **Catatan Pembaruan** untuk membaca `FIX_NOTES.md`.
-- Tampilan catatan mendukung Markdown: heading, **bold**, *italic*, ~~strikethrough~~, link, daftar, blockquote, inline code, dan fenced code block.
-- Setiap update harus menyertakan `FIX_NOTES.md` yang tidak kosong.
+- **Perbaikan Stacking Item Hotbar (Maks. 10 Stack)**:
+  - Memperbaiki masalah Jamu Tolak Bala yang dibeli dalam jumlah banyak dari toko sehingga memenuhi slot-slot hotbar.
+  - Kapasitas tumpukan (stack) untuk Jamu Tolak Bala dan item habis pakai di hotbar kini ditingkatkan hingga **maksimal 10** per slot. Seluruh jamu yang dibawa dari toko kini menumpuk rapi di slot yang sama.
+- **Batas Kuantitas Item Toko & Nyawa (Maks. 5/Item)**:
+  - Item yang dibeli di toko (seperti Jamu Tolak Bala dan Baterai Senter) memiliki batas persediaan dan penggunaan saat permainan maksimal **5 kuantitas per item**.
+  - Batas maksimal untuk **nyawa tambahan** juga ditetapkan maksimal **5 nyawa**.
+  - Antarmuka toko di menu utama kini menampilkan informasi kapasitas kuota dan mencegah pembelian yang melebihi batas.
+- **Perbaikan Drop Item Bertumpuk**:
+  - Menjatuhkan barang yang memiliki kuantitas lebih dari 1 kini hanya membuang 1 buah ke tanah dan mempertahankan sisa tumpukan di inventori/hotbar pemain.
 
-## Perilaku tombol update
+## Catatan Pembaruan Sistem Sebelumnya
 
-- Tombol update hilang setelah commit berhasil diterapkan.
-- Tombol muncul kembali hanya ketika GitHub memiliki commit yang lebih baru.
-- Data save pemain tetap berada di `user://` dan tidak ikut dihapus oleh sinkronisasi proyek.
-
-## Mulai ulang setelah update
-
-- Setelah sinkronisasi repository berhasil, game menampilkan dialog yang meminta pemain memulai ulang permainan.
-- Tombol **Mulai Ulang Sekarang** menyimpan progress dan mencoba menjalankan ulang proyek dengan executable Godot yang sama.
-- Pemain juga dapat memilih mulai ulang manual nanti; pemberitahuan tetap menjelaskan bahwa sesi harus dibuka ulang agar seluruh skrip dan resource terbaru dimuat.
-- Tombol update disembunyikan setelah commit berhasil diterapkan.
+- Updater menyinkronkan seluruh isi proyek dari commit branch `main`.
+- Data save pemain tetap aman di `user://` dan tidak terhapus oleh sinkronisasi proyek.
+- Setelah pembaruan selesai diterapkan, permainan meminta konfirmasi untuk memulai ulang sesi.

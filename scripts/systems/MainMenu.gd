@@ -1,7 +1,7 @@
 class_name MainMenu
 extends Control
 
-const GAME_VERSION: String = "v1.1.9"
+const GAME_VERSION: String = "v1.2.1"
 const ACCENT: Color = Color(0.72, 0.12, 0.14, 1.0)
 const TEXT_MAIN: Color = Color(0.93, 0.91, 0.88, 1.0)
 const TEXT_MUTED: Color = Color(0.63, 0.61, 0.60, 1.0)

@@ -153,17 +153,20 @@ func _apply_graphics_quality() -> void:
 	var viewport: Viewport = get_viewport()
 	match get_effective_graphics_quality():
 		"low":
-			viewport.scaling_3d_scale = 0.7
+			viewport.scaling_3d_scale = 0.6
 			viewport.msaa_3d = Viewport.MSAA_DISABLED
 			viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
+			RenderingServer.directional_shadow_atlas_set_size(512, true)
 		"medium":
 			viewport.scaling_3d_scale = 0.85
 			viewport.msaa_3d = Viewport.MSAA_2X
 			viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
+			RenderingServer.directional_shadow_atlas_set_size(2048, true)
 		"high":
 			viewport.scaling_3d_scale = 1.0
 			viewport.msaa_3d = Viewport.MSAA_4X
 			viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA
+			RenderingServer.directional_shadow_atlas_set_size(4096, true)
 
 func _apply_brightness_overlay() -> void:
 	var overlay: ColorRect = get_tree().root.find_child("BrightnessOverlay", true, false) as ColorRect

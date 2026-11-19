@@ -683,9 +683,14 @@ func start_new_game(diff: Difficulty = Difficulty.NORMAL) -> void:
 		ritual_items[k] = false
 		
 	get_tree().paused = false
-	get_tree().change_scene_to_file("res://scenes/world/VillageMap.tscn")
-	await get_tree().process_frame
+	var scene_error: Error = get_tree().change_scene_to_file("res://scenes/world/VillageMap.tscn")
+	if scene_error != OK:
+		current_state = GameState.MENU
+		push_error("[GameManager] Gagal memuat map permainan: %d" % scene_error)
+		return
+	await get_tree().scene_changed
 	_enter_act_1()
+	_broadcast_resumed_run_state()
 
 func _process(delta: float) -> void:
 	if current_state == GameState.PLAYING:
@@ -700,6 +705,8 @@ func _process(delta: float) -> void:
 		autosave_elapsed = 0.0
 	if current_state != GameState.PLAYING or get_tree().paused:
 		return
+	if current_act == Act.BABAK_1 and torches_lit >= REQUIRED_TORCHES and doors_barricaded >= REQUIRED_BARRICADES:
+		_enter_act_2()
 	if not dawn_reached:
 		time_accumulator += delta
 		while time_accumulator >= seconds_per_game_minute and not dawn_reached:
@@ -726,8 +733,7 @@ func _advance_time(minutes: int) -> void:
 	SignalBus.time_tick.emit(time_str, current_hour, current_minute)
 
 	if current_act == Act.BABAK_1 and (current_hour * 60 + current_minute) >= (2 * 60 + 30):
-		# Transisi Babak II hanya dipicu jam permainan, tepat mulai 02.30.
-		# Penyelesaian misi Babak I lebih awal tidak boleh memajukan babak.
+		# Batas waktu tetap memajukan babak bila objektif Babak I belum selesai.
 		_enter_act_2()
 	elif current_act == Act.BABAK_2 and current_hour >= 4:
 		if get_ritual_item_count() >= TOTAL_RITUAL_ITEMS:
@@ -768,6 +774,7 @@ func _enter_act_2() -> void:
 		current_hour = 2
 		current_minute = 30
 	SignalBus.time_tick.emit("%02d:%02d" % [current_hour, current_minute], current_hour, current_minute)
+	# Sinkronkan waktu dan misi ke scene HUD yang baru aktif.
 	SignalBus.act_started.emit(2, "Babak II: Ritual Pemutus Kutukan (02.30 - 04.00)")
 	SignalBus.objective_updated.emit(
 		"ritual_items",
@@ -848,6 +855,8 @@ func _on_torch_lit(_torch_id: int, total_lit: int, _req: int) -> void:
 			REQUIRED_TORCHES,
 			torches_lit >= REQUIRED_TORCHES
 		)
+	if current_act == Act.BABAK_1 and torches_lit >= REQUIRED_TORCHES and doors_barricaded >= REQUIRED_BARRICADES:
+		_enter_act_2()
 
 func record_door_barricaded() -> void:
 	doors_barricaded += 1
@@ -863,6 +872,8 @@ func record_door_barricaded() -> void:
 			REQUIRED_BARRICADES,
 			doors_barricaded >= REQUIRED_BARRICADES
 		)
+	if current_act == Act.BABAK_1 and torches_lit >= REQUIRED_TORCHES and doors_barricaded >= REQUIRED_BARRICADES:
+		_enter_act_2()
 
 func record_door_unbarricaded() -> void:
 	doors_barricaded = maxi(0, doors_barricaded - 1)

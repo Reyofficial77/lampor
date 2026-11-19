@@ -70,6 +70,7 @@ var editor_drag_target: Control = null
 var editor_drag_offset: Vector2 = Vector2.ZERO
 var editor_hint_label: Label
 var editor_done_button: Button
+var descent_camera_tween: Tween
 
 # Inventory Overlay Nodes
 var inventory_overlay: ColorRect
@@ -111,6 +112,8 @@ func _ready() -> void:
 	_build_inventory_overlay()
 	_build_hud_bag_button()
 	SettingsManager.call_deferred("_apply_brightness_overlay")
+	if is_instance_valid(GameManager.player_character):
+		SignalBus.flashlight_battery_changed.emit(GameManager.player_character.flashlight_battery, 100.0)
 	act_banner.visible = false
 	pause_menu.visible = false
 	barricade_dialog.visible = false
@@ -706,16 +709,16 @@ func _layout_touch_controls() -> void:
 		joystick_base.position = default_joystick_position
 	joystick_base.size = Vector2(joystick_size, joystick_size)
 	var x_right: float = view_size.x - button_size - 18.0
-	var x_left: float = x_right - button_size - 12.0
+	var x_left: float = x_right - button_size - 30.0
 	var y_bottom: float = view_size.y - button_size - 100.0
-	var y_top: float = y_bottom - button_size - 12.0
+	var y_top: float = y_bottom - button_size - 30.0
 	var defaults: Array[Vector2] = [
 		Vector2(x_left, y_top),
 		Vector2(x_right, y_top),
 		Vector2(x_left, y_bottom),
 		Vector2(x_right, y_bottom),
-		Vector2(view_size.x - 72.0, 18.0),
-		Vector2(view_size.x - 138.0, 18.0)
+		Vector2(view_size.x - 150.0, 18.0),
+		Vector2(view_size.x - 78.0, 18.0)
 	]
 	var saved_positions: Array = SettingsManager.mobile_button_positions
 	for i: int in range(touch_buttons.size()):
@@ -726,10 +729,10 @@ func _layout_touch_controls() -> void:
 		button.position = button_position
 		button.size = Vector2(button_size, button_size)
 		if i == 4:
-			button.position = Vector2(view_size.x - 72.0, 18.0) if saved_positions.size() != touch_buttons.size() else button_position
+			button.position = Vector2(view_size.x - 150.0, 18.0) if saved_positions.size() != touch_buttons.size() else button_position
 			button.size = Vector2(56.0, 56.0) * SettingsManager.mobile_button_scale
 		elif i == 5:
-			button.position = Vector2(view_size.x - 138.0, 18.0) if saved_positions.size() != touch_buttons.size() else button_position
+			button.position = Vector2(view_size.x - 78.0, 18.0) if saved_positions.size() != touch_buttons.size() else button_position
 			button.size = Vector2(56.0, 56.0) * SettingsManager.mobile_button_scale
 		button.position.x = clampf(button.position.x, 8.0, maxf(8.0, view_size.x - button.size.x - 8.0))
 		button.position.y = clampf(button.position.y, 8.0, maxf(8.0, view_size.y - button.size.y - 8.0))
@@ -1045,6 +1048,12 @@ func _on_battery_changed(current: float, max_val: float) -> void:
 	battery_bar.max_value = max_val
 	battery_bar.value = current
 	battery_val.text = "%d%%" % int((current / max_val) * 100.0)
+	var player: PlayerController = GameManager.player_character as PlayerController
+	if player and player.inventory_system:
+		for item: Dictionary in player.inventory_system.slots:
+			if item.get("id", "") == "flashlight":
+				item["battery"] = current
+		SignalBus.inventory_updated.emit(player.inventory_system.slots)
 
 func _on_noise_made(level: float, _pos: Vector3) -> void:
 	noise_bar.value = max(noise_bar.value, level * 100.0)
@@ -1063,6 +1072,41 @@ func _on_act_started(num: int, title: String) -> void:
 	if mission_body:
 		mission_body.text = "Memuat misi..."
 	_show_act_banner(num, title)
+	if num == 2 and not GameManager.is_resuming_saved_run:
+		_play_lampor_descent_cutscene()
+
+func _play_lampor_descent_cutscene() -> void:
+	var player: PlayerController = GameManager.player_character as PlayerController
+	if not is_instance_valid(player) or not player.camera:
+		return
+	var lampor: LamporStateMachine = get_tree().current_scene.find_child("LamporAI", true, false) as LamporStateMachine
+	if not lampor:
+		return
+	if descent_camera_tween and descent_camera_tween.is_running():
+		descent_camera_tween.kill()
+	player.camera.current = false
+	player.set_virtual_move(Vector2.ZERO)
+	player.set_virtual_sprint(false)
+	player.set_physics_process(false)
+	player.set_process_unhandled_input(false)
+	var cutscene_camera := Camera3D.new()
+	cutscene_camera.name = "LamporDescentCamera"
+	cutscene_camera.fov = player.camera.fov
+	get_tree().current_scene.add_child(cutscene_camera)
+	cutscene_camera.global_position = player.camera.global_position
+	cutscene_camera.look_at(lampor.global_position, Vector3.UP)
+	cutscene_camera.current = true
+	AudioManager.play_sound("lampor_roar", 1.0)
+	descent_camera_tween = create_tween()
+	descent_camera_tween.tween_property(cutscene_camera, "global_position", lampor.descend_target + Vector3(5.0, 3.0, 8.0), 4.0)
+	descent_camera_tween.tween_callback(func() -> void:
+		if is_instance_valid(player):
+			player.camera.current = true
+			player.set_physics_process(true)
+			player.set_process_unhandled_input(true)
+		if is_instance_valid(cutscene_camera):
+			cutscene_camera.queue_free()
+	)
 
 func _show_act_banner(num: int, _title: String) -> void:
 	if banner_tween:
@@ -1119,7 +1163,9 @@ func _on_inventory_updated(slots: Array) -> void:
 			qty_label.text = ""
 		else:
 			label.text = item.get("name", "")
-			if item.has("quantity") and item["quantity"] > 1:
+			if item.get("id", "") == "flashlight":
+				qty_label.text = "%d%%" % int(round(float(item.get("battery", 0.0))))
+			elif item.has("quantity") and item["quantity"] > 1:
 				qty_label.text = "x" + str(item["quantity"])
 			elif item.has("battery"):
 				qty_label.text = "%d%%" % int(item["battery"])
@@ -1346,7 +1392,7 @@ func _build_inventory_overlay() -> void:
 		inventory_hotbar_slots.append(slot_ui)
 
 	var hint_lbl := Label.new()
-	hint_lbl.text = "💡 Tarik & taruh (drag & drop) barang ke hotbar/tas. Jika slot sudah ada isinya, posisi barang akan ditukar (mirip Minecraft)."
+	hint_lbl.text = "💡 Tarik & taruh (drag & drop) barang ke hotbar/tas. Jika slot sudah ada isinya, posisi barang akan ditukar."
 	hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint_lbl.add_theme_font_size_override("font_size", 11)
 	hint_lbl.add_theme_color_override("font_color", Color(0.75, 0.72, 0.68, 0.9))

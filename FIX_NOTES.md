@@ -1,5 +1,12 @@
 # LAMPOR v1.2.0
 
+## v1.2.1
+
+- Memperbaiki pengiriman misi setelah map dimuat dan transisi Babak II setelah objektif Babak I selesai.
+- Menambahkan cutscene kamera saat Lampor turun, sinkronisasi baterai hotbar, dan jarak tombol mobile yang lebih lega.
+- Mengurangi beban preset grafis rendah dan menyertakan FIX_NOTES.md dalam export.
+- Memulihkan status updater setelah kegagalan agar pengguna dapat mencoba pemeriksaan lagi.
+
 ## Fitur Baru (Update)
 
 - **Sistem Inventori Tas (15 Slot)**:
@@ -8,7 +15,7 @@
 - **Peningkatan Kapasitas Hotbar Menjadi 5 Slot**:
   - Hotbar ditingkatkan dari 4 slot menjadi **5 slot**.
   - Mendukung tombol angka **[1] - [5]** untuk memilih barang secara langsung, serta dukungan penuh input sentuh mobile.
-- **Sistem Drag & Drop serta Tukar Tempat (Mirip Minecraft)**:
+- **Sistem Drag & Drop serta Tukar Tempat**:
   - Pemain dapat memindahkan barang dari inventori ke hotbar atau antar slot dengan cara drag & drop.
   - Jika slot hotbar tujuan sudah memiliki item, posisi item akan otomatis saling bertukar tempat (swap), persis seperti mekanisme inventori Minecraft.
   - Tersedia pula fitur tap/klik dua slot untuk memindahkan/menukar posisi item secara mudah di mouse maupun layar sentuh HP.

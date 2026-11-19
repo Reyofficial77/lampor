@@ -6,7 +6,7 @@ signal update_failed(message: String)
 signal up_to_date(commit_sha: String)
 
 const FULL_TREE_SYNC_VERSION: int = 1
-const BUILD_COMMIT: String = "aaf147bf8428d017a09a7e58d4e2a59a5c9e95b7"
+const BUILD_COMMIT: String = "a71d2525629a13768bc27ceeaf6414162438e32c"
 const API_URL: String = "https://api.github.com/repos/Reyofficial77/lampor/commits/main"
 const ATOM_URL: String = "https://github.com/Reyofficial77/lampor/commits/main.atom"
 const ARCHIVE_URL: String = "https://codeload.github.com/Reyofficial77/lampor/zip/"
@@ -68,6 +68,8 @@ func check_for_updates(force: bool = false) -> void:
 	is_checking = true
 	using_atom_fallback = false
 	last_error = ""
+	latest_commit = ""
+	latest_message = ""
 	var headers: PackedStringArray = ["User-Agent: Lampor-Game", "Accept: application/vnd.github+json", "X-GitHub-Api-Version: 2022-11-28"]
 	var request_error: Error = api_request.request(API_URL, headers)
 	if request_error != OK:
@@ -444,5 +446,10 @@ func _format_network_error(result: int, response_code: int, service: String) -> 
 	return message
 
 func _fail(message: String) -> void:
+	is_checking = false
+	is_downloading = false
+	using_atom_fallback = false
+	if download_request:
+		download_request.download_file = ""
 	last_error = message
 	update_failed.emit(message)

@@ -2,6 +2,32 @@
 
 ## v1.2.2
 
+- **Tangan Asli Model 3D (`Hand.R`), Barang Sesuai Slot Hotbar, & Pencahayaan Grafik Low**:
+  - Menghapus objek lengan FPP terpisah (`FPPRightArm`) sehingga hanya memakai tangan asli dari tulang `Skeleton3D` model karakter (`Suit.glb`) tanpa duplikasi lengan.
+  - Menghubungkan `BoneAttachment3D` pada tulang `Hand.R` untuk memegang model 3D barang sesuai slot hotbar yang aktif (`Senter`, `Jamu Tolak Bala`, `Minyak Tanah & Korek`, `Papan & Paku`, atau `Baterai`), mematikan sorotan senter saat slot lain dipilih, serta membiarkan tangan turun kosong saat slot `[Kosong]` dipilih.
+  - Memberikan lantai pancaran ambient tipis pada material tangan/jas agar tangan tetap terlihat saat ruangan gelap, sekaligus menaikkan cahaya bulan, subdivisi permukaan tanah (`32x32`), dan ambient lingkungan pada preset grafis `Low` agar desa tetap jelas tanpa mengorbankan performa.
+- **Perbaikan Tangan FPP, Model Manusia Berjas Proporsional (`Suit.glb`), & Penyempurnaan Tata Letak HUD**:
+  - Menghilangkan duplikasi tangan dan bagian torso yang menghalangi kamera FPP dengan memakai satu model manusia pria berjas proporsional CC0 (`Suit.glb`) yang diposisikan rapi di belakang bidang kamera (`z = +0.34`) beserta `AnimationLibrary` skeletal (`idle`, `walk`, `sprint`, `jump`, `fall`, `crouch`, `interact-right`, `pick-up`, `die`) dan satu lengan kanan pemegang senter di sudut kanan bawah.
+  - Menyempurnakan desain kiri atas dengan **Jam sebagai Title (`28px`)**, **Babak sebagai H1 (`19px`)**, dan **garis pemisah horizontal (`HSeparator`)** merah horor menuju daftar misi (`◆`).
+  - Mengembalikan angka persentase pada indikator **Waras**, **Stamina**, dan **Senter**, menambahkan bingkai tipis bernuansa horor pada progress bar, serta mengubah kelima slot hotbar menjadi **kotak persegi 1:1 (`76x76` desktop / `58x58` mobile)** dengan border merah-emas pada slot aktif.
+- **Kamera FPP Penuh, Model Manusia Berjas, Item Ritual Babak II, Optimasi Low, & UI Minimalis**:
+  - Mempertahankan sudut pandang First-Person Perspective (FPP) penuh dengan tampilan lengan kanan berjas yang memegang senter serta animasi tubuh saat bergerak, berinteraksi, bersembunyi, dan cutscene.
+  - Menggunakan model karakter manusia Kenney CC0 (`character-suit.glb`) dengan setelan jas formal hitam, kemeja putih, dasi merah, dan manset putih yang ikut bergerak mengikuti animasi tulang `Skeleton3D`.
+  - Memastikan 4 Benda Ritual baru muncul dan aktif saat Babak II dimulai (tersembunyi dan tidak dapat diinteraksi selama Babak I).
+  - Mengoptimalkan preset grafis `Low` dengan menonaktifkan shader post-process layar penuh, shadow lampu utama/senter, lampu dinamis item pickup di tanah, dan kabut berat serta memangkas jarak render kamera (`far = 70.0`).
+  - Menyederhanakan HUD agar jauh lebih bersih dan tidak ramai: menghapus kotak petunjuk desktop permanen, tombol melayang tas, bar kebisingan, angka persentase redundan, serta merampingkan daftar misi, bar status, hotbar, dan banner pergantian babak (`2.4` detik).
+- **Tipografi Horor untuk Judul & Antarmuka Bersih Tanpa Emoji**:
+  - Menerapkan font horor *Nosifer* (`assets/fonts/HorrorTitle.ttf`) pada seluruh judul (`Title`) di Menu Utama, HUD (judul babak, judul cutscene, judul kartu misi, judul jeda, judul inventori, peringatan tatapan), layar Game Over, dan layar Victory.
+  - Menghapus penggunaan emoji berlebihan di tombol, prompt interaksi, daftar objektif, serta status HUD dan menggantinya dengan teks bersih agar nuansa horor lebih serius.
+- **Perbaikan Misi Babak, Cutscene Bebas Pop-Up, UI Transparan, & Model 3D Player Beranimasi**:
+  - Memperbaiki pop-up kartu babak (`MissionCard`) agar tidak muncul menutupi cutscene saat Lampor turun ke desa, serta menghapus kotak bar hitam pada overlay cutscene agar tampilan lebih bersih.
+  - Mengembalikan pengelompokan misi per babak (Babak I hanya menampilkan 2 misi awal, Babak II misi ritual, Babak III klimaks pembakaran) serta mengunci pengambilan Benda Ritual selama masih di Babak I sehingga permainan tidak langsung melompat dari Babak I ke Babak III.
+  - Menghapus seluruh background panel dan border pada UI permainan (kecuali hotbar dan inventori), termasuk panel status kiri bawah/kanan atas, kartu misi tengah, petunjuk kontrol desktop, garis pemisah misi, dan bingkai progress bar.
+  - Menambahkan model karakter 3D CC0 dari Kenney.nl (`character-keeper.glb`) untuk Player lengkap dengan animasi otomatis (`idle`, `walk`, `sprint`, `jump`, `fall`, `crouch`, `interact-right`, `pick-up`, `die`) serta dukungan kamera Third-Person & First-Person (`[V]`).
+- **Cutscene Sinematik Lampor Turun & Langsung Mengejar (3.8 Detik)**:
+  - Menambahkan cutscene sinematik berdurasi **3.8 detik** saat Babak II dimulai ketika keranda hijau Lampor turun dari langit ke jalan desa di sekitar pemain.
+  - Kamera cutscene mengikuti posisi keranda hijau Lampor secara dinamis di setiap frame lengkap dengan bar letterbox, cahaya sinematik, dan suara gemuruh/lonceng tanpa tertutup kartu misi.
+  - Tepat saat cutscene berakhir, kendali kembali ke pemain dan Lampor langsung mengejar pemain (`State.CHASE`).
 - **Perbaikan Tampilan `FIX_NOTES.md` pada Export APK & EXE (Sinkron Commit Terbaru)**:
   - Menambahkan pengunduh langsung `FIX_NOTES.md` dari commit terbaru repository GitHub (`raw.githubusercontent.com`) yang otomatis menyimpan cache ke `user://lampor_fix_notes.md` sehingga APK Android maupun EXE Windows hasil export selalu menampilkan `FIX_NOTES.md` dari commit terbaru tanpa perlu menimpa paket APK/PCK.
   - Menyematkan salinan cadangan `FIX_NOTES.md` langsung di dalam bytecode skrip serta menambahkan preset export Android (`include_filter="FIX_NOTES.md,*.md"` & permission `INTERNET`) agar catatan pembaruan tetap tampil meski perangkat sedang offline.
@@ -12,11 +38,13 @@
 - **Perbaikan Bug Gagal Masuk In-Game di Mobile**:
   - Memperbaiki kegagalan pemuatan `VillageMap.tscn` di perangkat mobile setelah memilih tingkat kesulitan akibat tekstur 3D (`wood_albedo.png`, `bamboo_albedo.png`, `cloth_green.png`) yang terimpor eksklusif ke format desktop `s3tc_bptc`.
   - Mengubah seluruh `.import` tekstur ke mode lossless `.ctex` lintas-platform (`compress/mode=0`, `detect_3d/compress_to=0`) serta mengaktifkan `textures/vram_compression/import_etc2_astc=true`.
-- **Tampilan Objektif Langsung Muncul di Kiri Atas**:
-  - Daftar objektif malam kini langsung diinisialisasi dan ditampilkan di panel kiri atas sejak frame pertama memasuki in-game serta diperbarui lebih dulu sebelum banner/kartu babak ditampilkan.
+- **Perbaikan Nama Item Hotbar, Misi Lengkap (5 Misi), & Tampilan Transparan**:
+  - Memperbaiki bug nama item di hotbar yang hilang akibat pengaturan pemotongan teks pada label di dalam `VBoxContainer`.
+  - Menghilangkan background dan border pada daftar misi di kiri atas serta pada teks dialog narasi di bawah agar tampilan HUD lebih bersih.
+  - Menampilkan seluruh **5 misi utama** sejak awal permainan di kiri atas (termasuk 3 misi lanjutan: mengumpulkan 4 benda ritual, membakar benda ritual di tungku balai desa, dan bertahan hidup hingga ritual selesai beserta hitungan detik langsung).
 - **Tata Letak UI Mobile Lebih Rapi & Anti-Berdempetan**:
   - Menata ulang posisi panel status (`Waras`, `Stamina`, `Senter`) di sudut kanan atas dan memindahkan tombol `Ⅱ` (Jeda) serta `TAS` ke sisi kiri panel status agar tidak saling bertabrakan.
-  - Membatasi ukuran slot hotbar (`clip_contents`) dan pemotongan teks nama item panjang agar hotbar tidak melebar menabrak joystick maupun tombol aksi kanan.
+  - Mengatur pembungkus teks nama item slot hotbar (`autowrap_mode`) dengan ukuran minimum tetap agar nama item tetap tampil utuh dan hotbar tidak bertabrakan dengan joystick maupun tombol aksi kanan.
 - **Visual UI Nuansa Horor & Model Lampor Keranda Hijau Realistis**:
   - Menambahkan latar belakang horor beranimasi di Menu Utama serta memperbarui palet visual seluruh layar menu dan HUD.
   - Merombak model 3D Lampor menjadi keranda jenazah hijau sungguhan lengkap dengan batang pikulan tandu panjang, 4 kaki keranda, lengkungan kurung batang, lipatan kain beludru hijau, bordir kaligrafi Arab emas, rumbai-rumbai emas di keempat sisi, dan celah tirai depan dengan siluet kain kafan serta mata merah menyala.

@@ -39,6 +39,7 @@ const TOTAL_RITUAL_ITEMS: int = 4
 
 var furnace_burning: bool = false
 var furnace_time_left: float = 90.0
+var last_furnace_elapsed_sec: int = -1
 const FURNACE_TOTAL_TIME: float = 90.0
 
 var player_character: Node = null
@@ -325,6 +326,7 @@ func resume_saved_game() -> void:
 		ritual_items[ritual_name] = bool(saved_ritual.get(ritual_name, false)) if saved_ritual is Dictionary else false
 	furnace_burning = bool(snapshot.get("furnace_burning", false))
 	furnace_time_left = clampf(float(snapshot.get("furnace_time_left", FURNACE_TOTAL_TIME)), 0.0, FURNACE_TOTAL_TIME)
+	last_furnace_elapsed_sec = int(FURNACE_TOTAL_TIME - furnace_time_left) if furnace_burning else -1
 	death_sequence_active = false
 	last_death_reason = ""
 	is_resuming_saved_run = true
@@ -471,7 +473,8 @@ func _restore_player_snapshot(world_root: Node, raw_player: Variant) -> void:
 	player.current_stamina = clampf(float(saved_player.get("stamina", 100.0)), 0.0, player.max_stamina)
 	player.sanity_system.current_sanity = clampf(float(saved_player.get("sanity", 100.0)), 0.0, player.sanity_system.max_sanity)
 	player.flashlight_battery = clampf(float(saved_player.get("flashlight_battery", 100.0)), 0.0, 100.0)
-	player.flashlight_on = bool(saved_player.get("flashlight_on", true)) and player.flashlight_battery > 0.0
+	player.flashlight_preferred_on = bool(saved_player.get("flashlight_on", true))
+	player.flashlight_on = player.flashlight_preferred_on and player.flashlight_battery > 0.0
 	player.flashlight.visible = player.flashlight_on
 	player.is_hiding = false
 	player.hiding_spot = null
@@ -545,27 +548,24 @@ func get_current_objectives_data() -> Array[Dictionary]:
 				"completed": false
 			})
 		Act.BABAK_3:
-			if furnace_burning:
-				list.append({
-					"id": "survive_furnace",
-					"text": "Bertahan hidup dari amukan Lampor hingga fajar tiba!",
-					"current": int(FURNACE_TOTAL_TIME - furnace_time_left),
-					"required": int(FURNACE_TOTAL_TIME),
-					"completed": false
-				})
-			else:
-				list.append({
-					"id": "burn_ritual",
-					"text": "Bakar semua benda ritual di Tungku Balai Desa!",
-					"current": 0,
-					"required": 1,
-					"completed": false
-				})
+			var survive_elapsed: int = clampi(int(FURNACE_TOTAL_TIME - furnace_time_left), 0, int(FURNACE_TOTAL_TIME)) if furnace_burning else 0
+			list.append({
+				"id": "burn_ritual",
+				"text": "Bakar semua benda ritual di Tungku Balai Desa",
+				"current": 1 if furnace_burning else 0,
+				"required": 1,
+				"completed": furnace_burning
+			})
+			list.append({
+				"id": "survive_furnace",
+				"text": "Bertahan hidup dari amukan Lampor hingga ritual selesai",
+				"current": survive_elapsed,
+				"required": int(FURNACE_TOTAL_TIME),
+				"completed": furnace_burning and furnace_time_left <= 0.0
+			})
 	return list
 
-func _broadcast_resumed_run_state() -> void:
-	SignalBus.time_tick.emit("%02d:%02d" % [current_hour, current_minute], current_hour, current_minute)
-	SignalBus.act_started.emit(get_current_act_number(), get_current_act_title())
+func broadcast_all_objectives() -> void:
 	for obj: Dictionary in get_current_objectives_data():
 		SignalBus.objective_updated.emit(
 			str(obj.get("id", "")),
@@ -574,6 +574,11 @@ func _broadcast_resumed_run_state() -> void:
 			int(obj.get("required", 1)),
 			bool(obj.get("completed", false))
 		)
+
+func _broadcast_resumed_run_state() -> void:
+	SignalBus.time_tick.emit("%02d:%02d" % [current_hour, current_minute], current_hour, current_minute)
+	SignalBus.act_started.emit(get_current_act_number(), get_current_act_title())
+	broadcast_all_objectives()
 	if current_act >= Act.BABAK_2:
 		SignalBus.lampor_state_changed.emit("CHASE" if furnace_burning else "PATROL")
 	if furnace_burning:
@@ -748,6 +753,7 @@ func start_new_game(diff: Difficulty = Difficulty.NORMAL) -> void:
 	doors_barricaded = 0
 	furnace_burning = false
 	furnace_time_left = FURNACE_TOTAL_TIME
+	last_furnace_elapsed_sec = -1
 	
 	last_death_reason = ""
 	death_sequence_active = false
@@ -826,6 +832,16 @@ func _process(delta: float) -> void:
 	if furnace_burning:
 		furnace_time_left = maxf(0.0, furnace_time_left - delta)
 		SignalBus.furnace_progress_updated.emit(furnace_time_left, FURNACE_TOTAL_TIME)
+		var elapsed_sec: int = clampi(int(FURNACE_TOTAL_TIME - furnace_time_left), 0, int(FURNACE_TOTAL_TIME))
+		if elapsed_sec != last_furnace_elapsed_sec:
+			last_furnace_elapsed_sec = elapsed_sec
+			SignalBus.objective_updated.emit(
+				"survive_furnace",
+				"Bertahan hidup dari amukan Lampor hingga ritual selesai",
+				elapsed_sec,
+				int(FURNACE_TOTAL_TIME),
+				furnace_time_left <= 0.0
+			)
 		if furnace_time_left <= 0.0:
 			trigger_victory()
 
@@ -860,20 +876,7 @@ func _enter_act_1() -> void:
 	current_act = Act.BABAK_1
 	SignalBus.time_tick.emit("%02d:%02d" % [current_hour, current_minute], current_hour, current_minute)
 	SignalBus.act_started.emit(1, "Babak I: Pertahanan Awal (01.00 - 02.30)")
-	SignalBus.objective_updated.emit(
-		"torches",
-		"Nyalakan 5 Obor Penolak Bala",
-		torches_lit,
-		REQUIRED_TORCHES,
-		torches_lit >= REQUIRED_TORCHES
-	)
-	SignalBus.objective_updated.emit(
-		"barricades",
-		"Barikade 3 Pintu Rumah dengan Papan & Paku",
-		doors_barricaded,
-		REQUIRED_BARRICADES,
-		doors_barricaded >= REQUIRED_BARRICADES
-	)
+	broadcast_all_objectives()
 
 func _enter_act_2() -> void:
 	if current_act >= Act.BABAK_2:
@@ -891,25 +894,9 @@ func _enter_act_2() -> void:
 		SignalBus.dialog_requested.emit("Semua misi Babak I selesai! Waktu dipercepat ke 02.30 WIB — Babak II dimulai, Lampor turun ke desa!", 4.0)
 	else:
 		SignalBus.dialog_requested.emit("Lampor telah turun ke desa. Jangan menatap kerandanya!", 3.5)
-	# Sinkronkan waktu dan misi ke scene HUD yang aktif.
+	# Sinkronkan waktu dan seluruh misi ke scene HUD yang aktif.
 	SignalBus.act_started.emit(2, "Babak II: Ritual Pemutus Kutukan (02.30 - 04.00)")
-	SignalBus.objective_updated.emit(
-		"ritual_items",
-		"Kumpulkan 4 Benda Ritual (Kemenyan, Bunga 7 Rupa, Keris, Tanah)",
-		get_ritual_item_count(),
-		TOTAL_RITUAL_ITEMS,
-		get_ritual_item_count() >= TOTAL_RITUAL_ITEMS
-	)
-	SignalBus.objective_updated.emit(
-		"beware_lampor",
-		"Hati-hati: Lampor berpatroli! Dilarang menatap langsung!",
-		0,
-		1,
-		false
-	)
-	# Benda ritual yang sudah terkumpul sejak Babak 1 tidak boleh membuat ritual macet
-	if get_ritual_item_count() >= TOTAL_RITUAL_ITEMS:
-		_enter_act_3()
+	broadcast_all_objectives()
 
 func _enter_act_3() -> void:
 	if current_act == Act.BABAK_3:
@@ -922,13 +909,7 @@ func _enter_act_3() -> void:
 		current_minute = 0
 	SignalBus.time_tick.emit("%02d:%02d" % [current_hour, current_minute], current_hour, current_minute)
 	SignalBus.act_started.emit(3, "Babak III: Klimaks Pembakaran (04.00 - 05.00)")
-	SignalBus.objective_updated.emit(
-		"burn_ritual",
-		"Bakar semua benda ritual di Tungku Balai Desa!",
-		0,
-		1,
-		false
-	)
+	broadcast_all_objectives()
 
 # Dipanggil altar saat pemain menekan [E]. Mengembalikan true jika ritual berjalan.
 func try_start_ritual() -> bool:
@@ -949,13 +930,8 @@ func start_furnace_burning() -> void:
 	if not furnace_burning and current_act == Act.BABAK_3:
 		furnace_burning = true
 		furnace_time_left = FURNACE_TOTAL_TIME
-		SignalBus.objective_updated.emit(
-			"survive_furnace",
-			"Bertahan hidup dari amukan Lampor hingga fajar tiba!",
-			int(FURNACE_TOTAL_TIME - furnace_time_left),
-			int(FURNACE_TOTAL_TIME),
-			false
-		)
+		last_furnace_elapsed_sec = 0
+		broadcast_all_objectives()
 		SignalBus.lampor_state_changed.emit("CHASE")
 
 func _on_torch_lit(_torch_id: int, total_lit: int, _req: int) -> void:
@@ -1011,13 +987,14 @@ func _on_ritual_item_collected(item_name: String, count: int, total: int) -> voi
 		SignalBus.dialog_requested.emit("Tinggal satu benda ritual lagi. Jangan lengah, Lampor semakin dekat!", 3.5)
 	elif count >= total:
 		SignalBus.dialog_requested.emit("Semua benda ritual terkumpul. Kembali ke tungku balai desa!", 3.5)
-	SignalBus.objective_updated.emit(
-		"ritual_items",
-		"Kumpulkan 4 Benda Ritual (Kemenyan, Bunga 7 Rupa, Keris, Tanah)",
-		count,
-		total,
-		count >= total
-	)
+	if current_act == Act.BABAK_2:
+		SignalBus.objective_updated.emit(
+			"ritual_items",
+			"Kumpulkan 4 Benda Ritual (Kemenyan, Bunga 7 Rupa, Keris, Tanah)",
+			count,
+			total,
+			count >= total
+		)
 	if count >= total and current_act == Act.BABAK_2:
 		_enter_act_3()
 

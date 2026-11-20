@@ -1,6 +1,8 @@
 class_name GameOverScreen
 extends Control
 
+const HORROR_TITLE_FONT: Font = preload("res://assets/fonts/HorrorTitle.ttf")
+
 @onready var retry_btn: Button = $VBoxContainer/RetryButton
 @onready var menu_btn: Button = $VBoxContainer/MenuButton
 @onready var reason_label: Label = $TitleBox/ReasonLabel
@@ -12,18 +14,19 @@ func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	reason_label.text = GameManager.last_death_reason if GameManager.last_death_reason != "" else "Malam ini belum menjadi milikmu."
 	var lower_reason: String = reason_label.text.to_lower()
+	title_label.add_theme_font_override("font", HORROR_TITLE_FONT)
 	if lower_reason.contains("keranda") or lower_reason.contains("ditarik"):
-		title_label.text = "⚰️ DITELAN KERANDA LAMPOR"
+		title_label.text = "DITELAN KERANDA LAMPOR"
 	elif lower_reason.contains("fajar"):
-		title_label.text = "🌑 FAJAR TAK MENYELAMATKANMU"
+		title_label.text = "FAJAR TAK MENYELAMATKANMU"
 	else:
-		title_label.text = "☠️ JIWAMU TELAH HANCUR"
+		title_label.text = "JIWAMU TELAH HANCUR"
 	_style_horror_button(retry_btn, true)
 	_style_horror_button(menu_btn, false)
 	retry_btn.pressed.connect(func() -> void: GameManager.start_new_game(GameManager.selected_difficulty))
 	menu_btn.pressed.connect(func() -> void: get_tree().change_scene_to_file("res://scenes/ui/MainMenu.tscn"))
 	var reward_label := Label.new()
-	reward_label.text = "🪙 +%d Koin Emas  ·  Total: %d" % [GameManager.last_run_coin_reward, GameManager.coins]
+	reward_label.text = "+%d Koin Emas  ·  Total: %d" % [GameManager.last_run_coin_reward, GameManager.coins]
 	reward_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	reward_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	reward_label.add_theme_font_size_override("font_size", 15)
@@ -61,7 +64,7 @@ func _apply_layout() -> void:
 	title_box.offset_right = 0.0
 	title_box.offset_top = 0.0
 	title_box.offset_bottom = 0.0
-	title_label.add_theme_font_size_override("font_size", 32 if compact else 46)
+	title_label.add_theme_font_size_override("font_size", 24 if compact else 36)
 	reason_label.add_theme_font_size_override("font_size", 15 if compact else 18)
 	buttons_box.anchor_left = 0.5
 	buttons_box.anchor_right = 0.5

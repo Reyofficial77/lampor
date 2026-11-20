@@ -2,6 +2,7 @@ class_name HUD
 extends CanvasLayer
 
 const INVENTORY_SLOT_UI_SCRIPT = preload("res://scripts/ui/InventorySlotUI.gd")
+const HORROR_TITLE_FONT: Font = preload("res://assets/fonts/HorrorTitle.ttf")
 
 @onready var interaction_label: Label = $CenterContainer/InteractionLabel
 @onready var act_banner: Label = $CenterContainer/ActBanner
@@ -73,9 +74,8 @@ var editor_drag_offset: Vector2 = Vector2.ZERO
 var editor_hint_label: Label
 var editor_done_button: Button
 var descent_camera_tween: Tween
-var top_left_panel: PanelContainer = null
+var descent_cutscene_overlay: Control = null
 var bottom_left_panel: PanelContainer = null
-var objectives_header_label: Label = null
 var last_synced_battery_pct: int = -1
 
 # Inventory Overlay Nodes
@@ -122,6 +122,10 @@ func _ready() -> void:
 	SettingsManager.call_deferred("_apply_brightness_overlay")
 	if is_instance_valid(GameManager.player_character):
 		SignalBus.flashlight_battery_changed.emit(GameManager.player_character.flashlight_battery, 100.0)
+		var player_node: PlayerController = GameManager.player_character as PlayerController
+		if player_node and player_node.inventory_system:
+			_on_inventory_updated(player_node.inventory_system.slots)
+			_on_item_equipped(player_node.inventory_system.active_slot, player_node.inventory_system.get_equipped_item())
 	act_banner.visible = false
 	pause_menu.visible = false
 	barricade_dialog.visible = false
@@ -147,83 +151,123 @@ func _ready() -> void:
 	call_deferred("_apply_overlay_layouts")
 
 func _style_horror_hud_containers() -> void:
+	var touch: bool = _is_touch_device()
 	var tl_vbox: VBoxContainer = top_left.get_node_or_null("VBox") as VBoxContainer
-	if tl_vbox and top_left_panel == null:
-		top_left.remove_child(tl_vbox)
-		top_left_panel = PanelContainer.new()
-		top_left_panel.name = "HorrorObjectivePanel"
-		top_left_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var tl_style := StyleBoxFlat.new()
-		tl_style.bg_color = Color(0.022, 0.010, 0.014, 0.84)
-		tl_style.border_color = Color(0.54, 0.10, 0.12, 0.90)
-		tl_style.border_width_left = 3
-		tl_style.border_width_top = 1
-		tl_style.border_width_right = 1
-		tl_style.border_width_bottom = 2
-		tl_style.set_corner_radius_all(5)
-		tl_style.content_margin_left = 12.0
-		tl_style.content_margin_right = 12.0
-		tl_style.content_margin_top = 8.0
-		tl_style.content_margin_bottom = 10.0
-		tl_style.shadow_color = Color(0.0, 0.0, 0.0, 0.65)
-		tl_style.shadow_size = 8
-		top_left_panel.add_theme_stylebox_override("panel", tl_style)
-		top_left.add_child(top_left_panel)
-		top_left_panel.add_child(tl_vbox)
+	var tl_sep: Control = top_left.get_node_or_null("VBox/HSeparator") as Control
 
-		objectives_header_label = Label.new()
-		objectives_header_label.name = "ObjectivesHeader"
-		objectives_header_label.text = "☠ OBJEKTIF MALAM INI"
-		objectives_header_label.add_theme_font_size_override("font_size", 11 if _is_touch_device() else 12)
-		objectives_header_label.add_theme_color_override("font_color", Color(0.86, 0.32, 0.30, 0.96))
-		objectives_header_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 1.0))
-		objectives_header_label.add_theme_constant_override("outline_size", 3)
-		tl_vbox.add_child(objectives_header_label)
-		tl_vbox.move_child(objectives_header_label, objectives_container.get_index())
+	clock_label.add_theme_font_size_override("font_size", 20 if touch else 28)
+	clock_label.add_theme_color_override("font_color", Color(0.98, 0.92, 0.80, 1.0))
+	clock_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 1.0))
+	clock_label.add_theme_constant_override("outline_size", 5)
 
-	var bl_vbox: VBoxContainer = bottom_left.get_node_or_null("VBox") as VBoxContainer
-	if bl_vbox and bottom_left_panel == null:
-		bottom_left.remove_child(bl_vbox)
-		bottom_left_panel = PanelContainer.new()
-		bottom_left_panel.name = "HorrorStatsPanel"
-		bottom_left_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var bl_style := StyleBoxFlat.new()
-		bl_style.bg_color = Color(0.022, 0.010, 0.014, 0.82)
-		bl_style.border_color = Color(0.48, 0.10, 0.12, 0.86)
-		bl_style.border_width_left = 2
-		bl_style.border_width_top = 1
-		bl_style.border_width_right = 2
-		bl_style.border_width_bottom = 2
-		bl_style.set_corner_radius_all(5)
-		bl_style.content_margin_left = 10.0
-		bl_style.content_margin_right = 10.0
-		bl_style.content_margin_top = 7.0
-		bl_style.content_margin_bottom = 7.0
-		bottom_left_panel.add_theme_stylebox_override("panel", bl_style)
-		bottom_left.add_child(bottom_left_panel)
-		bottom_left_panel.add_child(bl_vbox)
+	act_label.add_theme_font_size_override("font_size", 14 if touch else 19)
+	act_label.add_theme_color_override("font_color", Color(0.95, 0.70, 0.28, 1.0))
+	act_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 1.0))
+	act_label.add_theme_constant_override("outline_size", 4)
 
-	for slot_node: Node in slots_container.get_children():
+	if tl_sep:
+		tl_sep.visible = true
+		var sep_style := StyleBoxFlat.new()
+		sep_style.bg_color = Color(0.72, 0.16, 0.18, 0.88)
+		sep_style.content_margin_top = 1.0
+		sep_style.content_margin_bottom = 1.0
+		tl_sep.add_theme_stylebox_override("separator", sep_style)
+		if tl_vbox and objectives_container:
+			tl_vbox.move_child(clock_label, 0)
+			tl_vbox.move_child(act_label, 1)
+			tl_vbox.move_child(tl_sep, 2)
+			tl_vbox.move_child(objectives_container, 3)
+
+	bottom_right.visible = false
+	sanity_val.visible = true
+	stamina_val.visible = true
+	battery_val.visible = true
+
+	var stats_vbox: VBoxContainer = bottom_left.get_node_or_null("VBox") as VBoxContainer
+	if stats_vbox:
+		stats_vbox.add_theme_constant_override("separation", 5)
+		for container_name: String in ["SanityContainer", "StaminaContainer", "BatteryContainer"]:
+			var row: HBoxContainer = stats_vbox.get_node_or_null(container_name) as HBoxContainer
+			if row:
+				row.add_theme_constant_override("separation", 6)
+				var row_label: Label = row.get_child(0) as Label
+				var row_bar: ProgressBar = row.get_child(1) as ProgressBar
+				var row_val: Label = row.get_child(2) as Label
+				if row_label:
+					row_label.custom_minimum_size.x = 68.0
+					row_label.add_theme_font_size_override("font_size", 11 if touch else 13)
+					row_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 1.0))
+					row_label.add_theme_constant_override("outline_size", 3)
+				if row_bar:
+					row_bar.custom_minimum_size = Vector2(84.0, 11.0) if touch else Vector2(135.0, 13.0)
+				if row_val:
+					row_val.visible = true
+					row_val.custom_minimum_size.x = 38.0
+					row_val.add_theme_font_size_override("font_size", 10 if touch else 12)
+					row_val.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 1.0))
+					row_val.add_theme_constant_override("outline_size", 3)
+
+	stare_warning.add_theme_font_override("font", HORROR_TITLE_FONT)
+	stare_warning.add_theme_font_size_override("font_size", 17)
+	var pause_title: Label = pause_menu.get_node_or_null("Center/Panel/VBox/Title") as Label
+	if pause_title:
+		pause_title.add_theme_font_override("font", HORROR_TITLE_FONT)
+		pause_title.add_theme_font_size_override("font_size", 20)
+
+	if not touch:
+		slots_container.add_theme_constant_override("separation", 8)
+		bottom_center.offset_left = -220.0
+		bottom_center.offset_right = 220.0
+		bottom_center.offset_top = -90.0
+		bottom_center.offset_bottom = -14.0
+
+	for i: int in range(slots_container.get_child_count()):
+		var slot_node: Node = slots_container.get_child(i)
 		if slot_node is PanelContainer:
 			var panel: PanelContainer = slot_node as PanelContainer
-			panel.clip_contents = true
+			var slot_dim: Vector2 = Vector2(58.0, 58.0) if touch else Vector2(76.0, 76.0)
+			panel.custom_minimum_size = slot_dim
+			panel.size = slot_dim
+			_apply_slot_horror_style(panel, i == 0)
+			var vbox: VBoxContainer = panel.get_node_or_null("VBox") as VBoxContainer
+			if vbox:
+				vbox.add_theme_constant_override("separation", 1)
 			var item_lbl: Label = panel.get_node_or_null("VBox/ItemName") as Label
 			if item_lbl:
+				item_lbl.clip_text = false
 				item_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-				item_lbl.clip_text = true
 				item_lbl.max_lines_visible = 2
 				item_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+				item_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+				item_lbl.custom_minimum_size = Vector2(50.0, 20.0) if touch else Vector2(68.0, 26.0)
+				item_lbl.add_theme_font_size_override("font_size", 8 if touch else 10)
 			var key_lbl: Label = panel.get_node_or_null("VBox/Key") as Label
 			if key_lbl:
 				key_lbl.add_theme_color_override("font_color", Color(0.84, 0.68, 0.38, 0.95))
+				key_lbl.add_theme_font_size_override("font_size", 9 if touch else 10)
+			var qty_lbl: Label = panel.get_node_or_null("VBox/Qty") as Label
+			if qty_lbl:
+				qty_lbl.add_theme_font_size_override("font_size", 8 if touch else 10)
+
+func _apply_slot_horror_style(panel: PanelContainer, is_active: bool) -> void:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.14, 0.035, 0.045, 0.94) if is_active else Color(0.045, 0.020, 0.026, 0.90)
+	style.border_color = Color(0.95, 0.72, 0.28, 1.0) if is_active else Color(0.45, 0.12, 0.14, 0.88)
+	style.set_border_width_all(2)
+	style.set_corner_radius_all(4)
+	style.content_margin_left = 2.0
+	style.content_margin_right = 2.0
+	style.content_margin_top = 2.0
+	style.content_margin_bottom = 2.0
+	panel.add_theme_stylebox_override("panel", style)
+	panel.modulate = Color.WHITE
 
 func _initialize_objectives_immediate() -> void:
-	var diff_name: String = GameManager.get_difficulty_name(GameManager.selected_difficulty)
 	var time_str: String = "%02d:%02d" % [GameManager.current_hour, GameManager.current_minute]
-	clock_label.text = "🕒 " + time_str + " WIB  [" + diff_name + "]"
-	clock_label.add_theme_color_override("font_color", Color(0.95, 0.88, 0.78, 1.0))
+	clock_label.text = time_str + " WIB"
+	clock_label.add_theme_color_override("font_color", Color(0.98, 0.92, 0.80, 1.0))
 	act_label.text = GameManager.get_current_act_title()
-	act_label.add_theme_color_override("font_color", Color(0.92, 0.70, 0.30, 1.0))
+	act_label.add_theme_color_override("font_color", Color(0.95, 0.70, 0.28, 1.0))
 	_populate_current_act_objectives()
 
 func _populate_current_act_objectives() -> void:
@@ -287,6 +331,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			toggle_pause()
 
 func toggle_pause() -> void:
+	if descent_cutscene_overlay and is_instance_valid(descent_cutscene_overlay) and descent_cutscene_overlay.visible:
+		return
 	if mobile_editor_active:
 		_finish_mobile_editor()
 	if inventory_overlay and inventory_overlay.visible:
@@ -538,7 +584,7 @@ func _build_dialog_label() -> void:
 	dialog_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	dialog_panel.z_index = 5
 	dialog_panel.modulate.a = 0.0
-	dialog_panel.add_theme_stylebox_override("panel", _make_overlay_style(0.84, 14.0, 10.0))
+	dialog_panel.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 
 	dialog_label = Label.new()
 	dialog_label.name = "NarrativeDialog"
@@ -576,7 +622,7 @@ func _build_mission_card() -> void:
 	mission_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	mission_panel.z_index = 4
 	mission_panel.visible = false
-	mission_panel.add_theme_stylebox_override("panel", _make_overlay_style(0.88, 18.0, 14.0))
+	mission_panel.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 8)
 	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -584,23 +630,27 @@ func _build_mission_card() -> void:
 	mission_title = Label.new()
 	mission_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	mission_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	mission_title.add_theme_font_size_override("font_size", 19)
+	mission_title.add_theme_font_override("font", HORROR_TITLE_FONT)
+	mission_title.add_theme_font_size_override("font_size", 18)
 	mission_title.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 1.0))
 	mission_title.add_theme_constant_override("outline_size", 4)
 	box.add_child(mission_title)
-	var separator := HSeparator.new()
-	separator.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	box.add_child(separator)
 	var heading := Label.new()
 	heading.text = "MISI"
+	heading.visible = false
 	heading.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	heading.add_theme_font_size_override("font_size", 14)
 	heading.add_theme_color_override("font_color", Color(0.85, 0.7, 0.4, 1.0))
+	heading.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 1.0))
+	heading.add_theme_constant_override("outline_size", 4)
 	box.add_child(heading)
 	mission_body = Label.new()
+	mission_body.visible = false
 	mission_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	mission_body.add_theme_font_size_override("font_size", 17)
 	mission_body.add_theme_color_override("font_color", Color(0.95, 0.93, 0.9, 1.0))
+	mission_body.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 1.0))
+	mission_body.add_theme_constant_override("outline_size", 4)
 	box.add_child(mission_body)
 	add_child(mission_panel)
 
@@ -613,6 +663,8 @@ func _refresh_mission_card() -> void:
 	mission_body.text = "\n".join(lines) if not lines.is_empty() else "Misi sedang disiapkan..."
 
 func _show_mission_card(num: int, banner_text: String) -> void:
+	if descent_cutscene_overlay and is_instance_valid(descent_cutscene_overlay):
+		return
 	if not mission_panel:
 		return
 	if mission_tween:
@@ -624,9 +676,9 @@ func _show_mission_card(num: int, banner_text: String) -> void:
 	mission_panel.modulate.a = 0.0
 	mission_panel.visible = true
 	mission_tween = create_tween()
-	mission_tween.tween_property(mission_panel, "modulate:a", 1.0, 0.35)
-	mission_tween.tween_interval(7.0)
-	mission_tween.tween_property(mission_panel, "modulate:a", 0.0, 0.9)
+	mission_tween.tween_property(mission_panel, "modulate:a", 1.0, 0.25)
+	mission_tween.tween_interval(2.4)
+	mission_tween.tween_property(mission_panel, "modulate:a", 0.0, 0.5)
 	mission_tween.tween_callback(func() -> void: mission_panel.visible = false)
 
 func _make_exit_button(text_value: String, primary: bool) -> Button:
@@ -825,7 +877,7 @@ func _layout_touch_controls() -> void:
 	var y_bottom: float = view_size.y - button_size - 82.0
 	var y_top: float = y_bottom - button_size - btn_gap
 
-	var stats_width: float = clampf(view_size.x * 0.21, 220.0, 254.0)
+	var stats_width: float = clampf(view_size.x * 0.24, 198.0, 236.0)
 	var bag_x: float = view_size.x - stats_width - 26.0 - util_size
 	var pause_x: float = bag_x - util_size - 14.0
 	var defaults: Array[Vector2] = [
@@ -836,7 +888,7 @@ func _layout_touch_controls() -> void:
 		Vector2(pause_x, 16.0),
 		Vector2(bag_x, 16.0)
 	]
-	var stats_forbidden := Rect2(view_size.x - stats_width - 18.0, 8.0, stats_width + 18.0, 112.0)
+	var stats_forbidden := Rect2(view_size.x - stats_width - 18.0, 8.0, stats_width + 18.0, 94.0)
 	var saved_positions: Array = SettingsManager.mobile_button_positions
 	for i: int in range(touch_buttons.size()):
 		var button: Button = touch_buttons[i]
@@ -868,31 +920,29 @@ func _apply_mobile_hud_layout() -> void:
 	if not _is_touch_device():
 		return
 	var view_size: Vector2 = get_viewport().get_visible_rect().size
-	var tl_width: float = clampf(view_size.x * 0.30, 270.0, 350.0)
+	var tl_width: float = clampf(view_size.x * 0.34, 260.0, 350.0)
 	top_left.offset_left = 12.0
 	top_left.offset_top = 12.0
 	top_left.offset_right = 12.0 + tl_width
-	top_left.offset_bottom = 200.0
-	clock_label.add_theme_font_size_override("font_size", 16)
-	act_label.add_theme_font_size_override("font_size", 12)
-	if objectives_header_label:
-		objectives_header_label.add_theme_font_size_override("font_size", 11)
+	top_left.offset_bottom = 280.0
+	clock_label.add_theme_font_size_override("font_size", 20)
+	act_label.add_theme_font_size_override("font_size", 14)
 	for objective: Node in objectives_container.get_children():
 		if objective is Label:
 			var obj_lbl: Label = objective as Label
-			obj_lbl.add_theme_font_size_override("font_size", 12)
-			obj_lbl.custom_minimum_size.x = tl_width - 28.0
+			obj_lbl.add_theme_font_size_override("font_size", 11)
+			obj_lbl.custom_minimum_size.x = tl_width - 16.0
 	bottom_left.anchor_left = 1.0
 	bottom_left.anchor_right = 1.0
 	bottom_left.anchor_top = 0.0
 	bottom_left.anchor_bottom = 0.0
 	bottom_left.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	bottom_left.grow_vertical = Control.GROW_DIRECTION_END
-	var stats_width: float = clampf(view_size.x * 0.21, 220.0, 254.0)
+	var stats_width: float = clampf(view_size.x * 0.24, 198.0, 236.0)
 	bottom_left.offset_left = -stats_width - 12.0
 	bottom_left.offset_top = 12.0
 	bottom_left.offset_right = -12.0
-	bottom_left.offset_bottom = 112.0
+	bottom_left.offset_bottom = 94.0
 	bottom_left.scale = Vector2.ONE
 	var stats_vbox: VBoxContainer = (bottom_left_panel.get_node("VBox") if bottom_left_panel else bottom_left.get_node("VBox")) as VBoxContainer
 	stats_vbox.add_theme_constant_override("separation", 5)
@@ -902,21 +952,31 @@ func _apply_mobile_hud_layout() -> void:
 		var row_label: Label = row.get_child(0) as Label
 		var row_bar: ProgressBar = row.get_child(1) as ProgressBar
 		var row_value: Label = row.get_child(2) as Label
-		row_label.custom_minimum_size.x = 66.0
+		row_label.custom_minimum_size.x = 68.0
 		row_label.add_theme_font_size_override("font_size", 11)
-		row_bar.custom_minimum_size = Vector2(maxf(72.0, stats_width - 130.0), 14.0)
+		row_bar.custom_minimum_size = Vector2(84.0, 11.0)
+		row_value.visible = true
 		row_value.custom_minimum_size.x = 34.0
 		row_value.add_theme_font_size_override("font_size", 10)
 	bottom_right.visible = false
-	var slot_gap: float = 8.0
+	var slot_gap: float = 6.0
 	slots_container.add_theme_constant_override("separation", int(slot_gap))
-	var slot_size: Vector2 = Vector2(70.0, 52.0) if view_size.x < 700.0 else Vector2(78.0, 56.0)
+	var slot_size: Vector2 = Vector2(58.0, 58.0)
 	for slot: Node in slots_container.get_children():
 		var panel: PanelContainer = slot as PanelContainer
 		panel.custom_minimum_size = slot_size
-		panel.clip_contents = true
-		for label: Node in panel.find_children("*", "Label", true, false):
-			(label as Label).add_theme_font_size_override("font_size", 9)
+		panel.size = slot_size
+		var item_lbl: Label = panel.get_node_or_null("VBox/ItemName") as Label
+		if item_lbl:
+			item_lbl.custom_minimum_size = Vector2(50.0, 20.0)
+			item_lbl.max_lines_visible = 2
+			item_lbl.add_theme_font_size_override("font_size", 8)
+		var key_lbl: Label = panel.get_node_or_null("VBox/Key") as Label
+		if key_lbl:
+			key_lbl.add_theme_font_size_override("font_size", 9)
+		var qty_lbl: Label = panel.get_node_or_null("VBox/Qty") as Label
+		if qty_lbl:
+			qty_lbl.add_theme_font_size_override("font_size", 8)
 	var slot_count: int = slots_container.get_child_count()
 	var inventory_width: float = slot_size.x * float(slot_count) + slot_gap * float(maxi(0, slot_count - 1)) + 16.0
 	bottom_center.offset_left = -inventory_width * 0.5
@@ -927,43 +987,7 @@ func _apply_mobile_hud_layout() -> void:
 		dialog_label.add_theme_font_size_override("font_size", 16)
 
 func _build_desktop_hints() -> void:
-	if _is_touch_device():
-		return
-	desktop_hint_panel = PanelContainer.new()
-	desktop_hint_panel.name = "DesktopKeyHints"
-	desktop_hint_panel.z_index = 2
-	desktop_hint_panel.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	desktop_hint_panel.offset_left = -282.0
-	desktop_hint_panel.offset_top = -258.0
-	desktop_hint_panel.offset_right = -22.0
-	desktop_hint_panel.offset_bottom = -94.0
-	desktop_hint_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var panel_style := StyleBoxFlat.new()
-	panel_style.bg_color = Color(0.025, 0.022, 0.028, 0.78)
-	panel_style.border_color = Color(0.48, 0.13, 0.15, 0.72)
-	panel_style.set_border_width_all(1)
-	panel_style.set_corner_radius_all(5)
-	panel_style.content_margin_left = 12.0
-	panel_style.content_margin_top = 8.0
-	panel_style.content_margin_right = 12.0
-	panel_style.content_margin_bottom = 8.0
-	desktop_hint_panel.add_theme_stylebox_override("panel", panel_style)
-	add_child(desktop_hint_panel)
-	var hint_column := VBoxContainer.new()
-	hint_column.add_theme_constant_override("separation", 3)
-	desktop_hint_panel.add_child(hint_column)
-	var heading := Label.new()
-	heading.text = "KONTROL DESKTOP"
-	heading.add_theme_font_size_override("font_size", 12)
-	heading.add_theme_color_override("font_color", Color(0.88, 0.55, 0.48, 1.0))
-	hint_column.add_child(heading)
-	var hints := Label.new()
-	hints.text = "W A S D  ·  Bergerak     Mouse  ·  Lihat\nShift  ·  Berlari        E  ·  Interaksi\nF  ·  Senter            1–5  ·  Pilih hotbar\nTab / B  ·  Tas Inventaris (Drag & Drop)\nEnter / Space  ·  Gunakan item\nG  ·  Jatuhkan item      Esc  ·  Jeda"
-	hints.add_theme_font_size_override("font_size", 11)
-	hints.add_theme_color_override("font_color", Color(0.9, 0.88, 0.85, 0.94))
-	hints.add_theme_constant_override("line_spacing", 2)
-	hints.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint_column.add_child(hints)
+	return
 
 func _draw_virtual_joystick() -> void:
 	if not joystick_base:
@@ -1202,8 +1226,7 @@ func _on_noise_made(level: float, _pos: Vector3) -> void:
 	noise_bar.value = max(noise_bar.value, level * 100.0)
 
 func _on_time_tick(time_str: String, _h: int, _m: int) -> void:
-	var diff_name: String = GameManager.get_difficulty_name(GameManager.selected_difficulty)
-	clock_label.text = "🕒 " + time_str + " WIB  [" + diff_name + "]"
+	clock_label.text = time_str + " WIB"
 
 func _on_act_started(num: int, title: String) -> void:
 	act_label.text = title
@@ -1212,9 +1235,14 @@ func _on_act_started(num: int, title: String) -> void:
 	objective_labels.clear()
 	objective_texts.clear()
 	_populate_current_act_objectives()
-	_show_act_banner(num, title)
 	if num == 2 and not GameManager.is_resuming_saved_run:
+		if mission_tween and mission_tween.is_running():
+			mission_tween.kill()
+		if mission_panel:
+			mission_panel.visible = false
 		_play_lampor_descent_cutscene()
+	else:
+		_show_act_banner(num, title)
 
 func _play_lampor_descent_cutscene() -> void:
 	var player: PlayerController = GameManager.player_character as PlayerController
@@ -1223,30 +1251,151 @@ func _play_lampor_descent_cutscene() -> void:
 	var lampor: LamporStateMachine = get_tree().current_scene.find_child("LamporAI", true, false) as LamporStateMachine
 	if not lampor:
 		return
+
+	if inventory_overlay and inventory_overlay.visible:
+		inventory_overlay.visible = false
+		selected_swap_slot = -1
+		player.is_inventory_open = false
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _is_touch_device() else Input.MOUSE_MODE_CAPTURED
+
+	lampor.trigger_descent(true)
+
 	if descent_camera_tween and descent_camera_tween.is_running():
 		descent_camera_tween.kill()
+	if is_instance_valid(descent_cutscene_overlay):
+		descent_cutscene_overlay.queue_free()
+		descent_cutscene_overlay = null
+
+	if mission_tween and mission_tween.is_running():
+		mission_tween.kill()
+	if mission_panel:
+		mission_panel.visible = false
+	if touch_root:
+		touch_root.visible = false
+	if hud_bag_button:
+		hud_bag_button.visible = false
+	stare_warning.visible = false
+	interaction_label.text = ""
+	var crosshair: Control = get_node_or_null("CenterContainer/Crosshair") as Control
+	if crosshair:
+		crosshair.visible = false
+
 	player.camera.current = false
 	player.set_virtual_move(Vector2.ZERO)
 	player.set_virtual_sprint(false)
+	player.velocity = Vector3.ZERO
+	if player.has_method("prepare_for_cutscene"):
+		player.prepare_for_cutscene()
 	player.set_physics_process(false)
 	player.set_process_unhandled_input(false)
+
+	descent_cutscene_overlay = Control.new()
+	descent_cutscene_overlay.name = "DescentCutsceneOverlay"
+	descent_cutscene_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	descent_cutscene_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	descent_cutscene_overlay.z_index = 18
+	add_child(descent_cutscene_overlay)
+
+	var title_lbl := Label.new()
+	title_lbl.name = "CutsceneTitle"
+	title_lbl.text = "BABAK II: KERANDA LAMPOR TURUN KE DESA"
+	title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	title_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	title_lbl.anchor_left = 0.05
+	title_lbl.anchor_top = 0.03
+	title_lbl.anchor_right = 0.95
+	title_lbl.anchor_bottom = 0.14
+	title_lbl.add_theme_font_override("font", HORROR_TITLE_FONT)
+	title_lbl.add_theme_font_size_override("font_size", 16 if _is_touch_device() else 20)
+	title_lbl.add_theme_color_override("font_color", Color(1.0, 0.25, 0.2, 1.0))
+	title_lbl.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 1.0))
+	title_lbl.add_theme_constant_override("outline_size", 5)
+	descent_cutscene_overlay.add_child(title_lbl)
+
+	var subtitle_lbl := Label.new()
+	subtitle_lbl.name = "CutsceneSubtitle"
+	subtitle_lbl.text = "Lampor mendarat dari langit malam... Bersiaplah, Lampor langsung mengejarmu!"
+	subtitle_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	subtitle_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	subtitle_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	subtitle_lbl.anchor_left = 0.05
+	subtitle_lbl.anchor_top = 0.84
+	subtitle_lbl.anchor_right = 0.95
+	subtitle_lbl.anchor_bottom = 0.96
+	subtitle_lbl.add_theme_font_size_override("font_size", 15 if _is_touch_device() else 19)
+	subtitle_lbl.add_theme_color_override("font_color", Color(0.96, 0.88, 0.72, 1.0))
+	subtitle_lbl.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 1.0))
+	subtitle_lbl.add_theme_constant_override("outline_size", 4)
+	descent_cutscene_overlay.add_child(subtitle_lbl)
+
 	var cutscene_camera := Camera3D.new()
 	cutscene_camera.name = "LamporDescentCamera"
-	cutscene_camera.fov = player.camera.fov
+	cutscene_camera.fov = maxf(player.camera.fov, 68.0)
+
+	var fill_light := OmniLight3D.new()
+	fill_light.name = "CutsceneFillLight"
+	fill_light.omni_range = 24.0
+	fill_light.light_energy = 2.0
+	fill_light.light_color = Color(0.65, 0.95, 0.75)
+	cutscene_camera.add_child(fill_light)
+
 	get_tree().current_scene.add_child(cutscene_camera)
-	cutscene_camera.global_position = player.camera.global_position
-	cutscene_camera.look_at(lampor.global_position, Vector3.UP)
+
+	var target_pos: Vector3 = lampor.descend_target
+	var to_player: Vector3 = player.global_position - target_pos
+	to_player.y = 0.0
+	var view_dir: Vector3 = to_player.normalized() if to_player.length_squared() > 0.01 else Vector3(0.0, 0.0, 1.0)
+	var side_dir: Vector3 = view_dir.cross(Vector3.UP).normalized()
+	var cam_start: Vector3 = target_pos + view_dir * 12.5 + side_dir * 3.8 + Vector3(0.0, 7.2, 0.0)
+	var cam_end: Vector3 = target_pos + view_dir * 6.5 - side_dir * 1.4 + Vector3(0.0, 2.3, 0.0)
+
+	cutscene_camera.global_position = cam_start
+	var initial_focus: Vector3 = lampor.global_position + Vector3(0.0, 0.15, 0.0)
+	if cutscene_camera.global_position.distance_squared_to(initial_focus) > 0.05:
+		cutscene_camera.look_at(initial_focus, Vector3.UP)
 	cutscene_camera.current = true
 	AudioManager.play_sound("lampor_roar", 1.0)
+
 	descent_camera_tween = create_tween()
-	descent_camera_tween.tween_property(cutscene_camera, "global_position", lampor.descend_target + Vector3(5.0, 3.0, 8.0), 4.0)
+	descent_camera_tween.set_pause_mode(Tween.TWEEN_PAUSE_STOP)
+	descent_camera_tween.tween_method(func(progress: float) -> void:
+		if not is_instance_valid(cutscene_camera) or not is_instance_valid(lampor):
+			return
+		cutscene_camera.global_position = cam_start.lerp(cam_end, ease(progress, -1.6))
+		var focus_pos: Vector3 = lampor.global_position + Vector3(0.0, 0.15, 0.0)
+		if cutscene_camera.global_position.distance_squared_to(focus_pos) > 0.05:
+			cutscene_camera.look_at(focus_pos, Vector3.UP)
+	, 0.0, 1.0, LamporStateMachine.DESCENT_DURATION)
 	descent_camera_tween.tween_callback(func() -> void:
 		if is_instance_valid(player):
 			player.camera.current = true
 			player.set_physics_process(true)
 			player.set_process_unhandled_input(true)
+		if is_instance_valid(crosshair):
+			crosshair.visible = true
+		if touch_root and _is_touch_device() and not get_tree().paused:
+			touch_root.visible = true
+		if hud_bag_button:
+			hud_bag_button.visible = true
 		if is_instance_valid(cutscene_camera):
 			cutscene_camera.queue_free()
+		if is_instance_valid(descent_cutscene_overlay):
+			descent_cutscene_overlay.queue_free()
+			descent_cutscene_overlay = null
+		if is_instance_valid(lampor) and lampor.current_state != LamporStateMachine.State.CHASE and lampor.current_state != LamporStateMachine.State.BANISHED:
+			if lampor.descent_tween and lampor.descent_tween.is_running():
+				lampor.descent_tween.kill()
+			lampor.global_position = lampor.descend_target
+			lampor.is_descending = false
+			if lampor.collision_shape:
+				lampor.collision_shape.disabled = false
+			lampor.chase_cooldown = 0.0
+			lampor.chase_timer = 0.0
+			lampor.lost_sight_timer = -3.0
+			lampor._set_state(LamporStateMachine.State.CHASE)
+			SignalBus.lampor_state_changed.emit("CHASE")
+		_on_dialog_requested("LAMPOR TELAH TURUN DAN MENGEJARMU! Lari atau sembunyi di dalam rumah!", 4.5)
 	)
 
 func _show_act_banner(num: int, _title: String) -> void:
@@ -1260,14 +1409,14 @@ func _show_act_banner(num: int, _title: String) -> void:
 	match num:
 		1:
 			act_banner.add_theme_color_override("font_color", Color(1.0, 0.9, 0.4))
-			act_banner.text = "BABAK I: PERTAHANAN AWAL (01.00 WIB)\nNyalakan 5 Obor Penolak Bala & Barikade 3 Pintu Rumah!"
+			act_banner.text = "BABAK I: PERTAHANAN AWAL (01.00 WIB)"
 		2:
 			act_banner.add_theme_color_override("font_color", Color(1.0, 0.25, 0.2))
-			act_banner.text = "⚠️ BABAK II: LAMPOR TURUN KE DESA! ⚠️\nKeranda terbang mulai berpatroli!\nJangan menatap langsung & matikan senter jika mendengar lonceng!"
+			act_banner.text = "BABAK II: LAMPOR TURUN KE DESA"
 			AudioManager.play_sound("lampor_roar", 1.0)
 		3:
 			act_banner.add_theme_color_override("font_color", Color(1.0, 0.1, 0.1))
-			act_banner.text = "🔥 BABAK III: KLIMAKS PEMBAKARAN! 🔥\nBakar semua benda ritual di Tungku Balai Desa & Bertahanlah!"
+			act_banner.text = "BABAK III: KLIMAKS PEMBAKARAN"
 			AudioManager.play_sound("lampor_roar", 2.0)
 
 	_show_mission_card(num, act_banner.text)
@@ -1279,20 +1428,20 @@ func _on_objective_updated(id: String, text: String, current: int, required: int
 		label = objective_labels[id]
 	else:
 		label = Label.new()
-		label.add_theme_font_size_override("font_size", 12 if touch else 15)
+		label.add_theme_font_size_override("font_size", 11 if touch else 14)
 		label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.95))
 		label.add_theme_constant_override("outline_size", 3)
 		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		var view_w: float = get_viewport().get_visible_rect().size.x
-		var tl_w: float = clampf(view_w * 0.30, 270.0, 350.0) if touch else 340.0
-		label.custom_minimum_size.x = tl_w - 28.0
+		var tl_w: float = clampf(view_w * 0.34, 260.0, 350.0) if touch else 380.0
+		label.custom_minimum_size.x = tl_w - 16.0
 		objectives_container.add_child(label)
 		objective_labels[id] = label
 		
-	var status_icon: String = "✔" if is_completed else ("🩸" if id == "beware_lampor" else "🕯️")
+	var status_icon: String = "[Selesai]" if is_completed else "◆"
 	var progress_str: String = " (%d/%d)" % [current, required] if required > 1 else ""
 	label.text = "%s %s%s" % [status_icon, text, progress_str]
-	label.modulate = Color(0.55, 0.95, 0.62) if is_completed else (Color(0.98, 0.52, 0.50) if id == "beware_lampor" else Color(0.95, 0.91, 0.84))
+	label.modulate = Color(0.6, 1.0, 0.6) if is_completed else Color(1.0, 1.0, 1.0)
 	objective_texts[id] = label.text
 	_refresh_mission_card()
 
@@ -1323,17 +1472,14 @@ func _on_inventory_updated(slots: Array) -> void:
 func _on_item_equipped(slot_index: int, _item: Dictionary) -> void:
 	for i in range(slots_container.get_child_count()):
 		var slot_panel: PanelContainer = slots_container.get_child(i) as PanelContainer
-		if i == slot_index:
-			slot_panel.modulate = Color(1.3, 1.3, 0.4)
-		else:
-			slot_panel.modulate = Color(1, 1, 1)
+		_apply_slot_horror_style(slot_panel, i == slot_index)
 	if inventory_overlay and inventory_overlay.visible:
 		_refresh_inventory_ui()
 
 func _on_lampor_stare(intensity: float) -> void:
 	if intensity > 0.4:
 		stare_warning.visible = true
-		stare_warning.text = "⚠️ JANGAN MENATAP LANGSUNG! ALIKAN PANDANGANMU! ⚠️"
+		stare_warning.text = "JANGAN MENATAP LANGSUNG! ALIHKAN PANDANGANMU!"
 	else:
 		stare_warning.visible = false
 
@@ -1418,37 +1564,7 @@ func _on_screamer() -> void:
 	jumpscare_tween.tween_callback(func() -> void: jumpscare_rect.visible = false)
 
 func _build_hud_bag_button() -> void:
-	if _is_touch_device():
-		return
-	hud_bag_button = Button.new()
-	hud_bag_button.name = "HudBagButton"
-	hud_bag_button.text = "🎒 TAS [TAB]"
-	hud_bag_button.focus_mode = Control.FOCUS_NONE
-	hud_bag_button.custom_minimum_size = Vector2(100.0, 26.0)
-	hud_bag_button.add_theme_font_size_override("font_size", 11)
-	hud_bag_button.add_theme_color_override("font_color", Color(0.95, 0.88, 0.72, 1.0))
-	var btn_style := StyleBoxFlat.new()
-	btn_style.bg_color = Color(0.08, 0.08, 0.1, 0.82)
-	btn_style.border_color = Color(0.65, 0.45, 0.35, 0.85)
-	btn_style.set_border_width_all(1)
-	btn_style.set_corner_radius_all(4)
-	hud_bag_button.add_theme_stylebox_override("normal", btn_style)
-	var hover_style := btn_style.duplicate() as StyleBoxFlat
-	hover_style.bg_color = Color(0.2, 0.15, 0.16, 0.95)
-	hover_style.border_color = Color(0.85, 0.65, 0.45, 1.0)
-	hud_bag_button.add_theme_stylebox_override("hover", hover_style)
-	hud_bag_button.add_theme_stylebox_override("pressed", hover_style)
-	hud_bag_button.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	hud_bag_button.anchor_left = 0.5
-	hud_bag_button.anchor_right = 0.5
-	hud_bag_button.anchor_top = 1.0
-	hud_bag_button.anchor_bottom = 1.0
-	hud_bag_button.offset_left = -50.0
-	hud_bag_button.offset_right = 50.0
-	hud_bag_button.offset_top = -116.0
-	hud_bag_button.offset_bottom = -90.0
-	hud_bag_button.pressed.connect(toggle_inventory)
-	add_child(hud_bag_button)
+	return
 
 func _build_inventory_overlay() -> void:
 	inventory_overlay = ColorRect.new()
@@ -1479,14 +1595,15 @@ func _build_inventory_overlay() -> void:
 	main_vbox.add_child(header)
 
 	var title_lbl := Label.new()
-	title_lbl.text = "🎒 INVENTARIS"
+	title_lbl.text = "INVENTARIS"
 	title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	title_lbl.add_theme_font_size_override("font_size", 20)
+	title_lbl.add_theme_font_override("font", HORROR_TITLE_FONT)
+	title_lbl.add_theme_font_size_override("font_size", 17)
 	title_lbl.add_theme_color_override("font_color", Color(0.95, 0.82, 0.45, 1.0))
 	header.add_child(title_lbl)
 
 	var close_btn := Button.new()
-	close_btn.text = "✕ Tutup [Tab]"
+	close_btn.text = "Tutup [Tab]"
 	close_btn.custom_minimum_size = Vector2(110.0, 32.0)
 	close_btn.pressed.connect(toggle_inventory)
 	header.add_child(close_btn)
@@ -1538,13 +1655,15 @@ func _build_inventory_overlay() -> void:
 		inventory_hotbar_slots.append(slot_ui)
 
 	var hint_lbl := Label.new()
-	hint_lbl.text = "💡 Tarik & taruh (drag & drop) barang ke hotbar/tas. Jika slot sudah ada isinya, posisi barang akan ditukar."
+	hint_lbl.text = "Tarik & taruh (drag & drop) barang ke hotbar/tas. Jika slot sudah ada isinya, posisi barang akan ditukar."
 	hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint_lbl.add_theme_font_size_override("font_size", 11)
 	hint_lbl.add_theme_color_override("font_color", Color(0.75, 0.72, 0.68, 0.9))
 	main_vbox.add_child(hint_lbl)
 
 func toggle_inventory() -> void:
+	if descent_cutscene_overlay and is_instance_valid(descent_cutscene_overlay) and descent_cutscene_overlay.visible:
+		return
 	if pause_menu.visible or barricade_dialog.visible:
 		return
 	if GameManager.death_sequence_active or GameManager.current_state != GameManager.GameState.PLAYING:

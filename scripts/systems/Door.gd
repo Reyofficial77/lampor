@@ -64,7 +64,7 @@ func get_interaction_prompt(player: Node) -> String:
 		var equipped: Dictionary = inv.get_equipped_item()
 		if equipped.get("id") == "papan_paku":
 			if is_player_inside(player):
-				return "[E] ⚠️ Palang Pintu (PERINGATAN: Kamu di dalam rumah!)"
+				return "[E] Palang Pintu (PERINGATAN: Kamu di dalam rumah!)"
 			return "[E] Palang Pintu dengan Papan & Paku"
 		elif inv.has_item_id("papan_paku"):
 			return "[E] Buka Pintu | Pilih Slot Papan [1-5] untuk Memalang"

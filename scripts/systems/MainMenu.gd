@@ -2,6 +2,7 @@ class_name MainMenu
 extends Control
 
 const GAME_VERSION: String = "v1.2.2"
+const HORROR_TITLE_FONT: Font = preload("res://assets/fonts/HorrorTitle.ttf")
 const ACCENT: Color = Color(0.76, 0.10, 0.12, 1.0)
 const ACCENT_GOLD: Color = Color(0.84, 0.68, 0.34, 1.0)
 const TEXT_MAIN: Color = Color(0.94, 0.90, 0.85, 1.0)
@@ -139,10 +140,11 @@ func _build_menu() -> void:
 	main_content.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	main_card_margin.add_child(main_content)
 
-	ritual_header_label = _make_label("☠  KUTUKAN DESA TERKUTUK  ☠", 11, Color(0.76, 0.24, 0.24, 0.95), HORIZONTAL_ALIGNMENT_CENTER)
+	ritual_header_label = _make_label("KUTUKAN DESA TERKUTUK", 11, Color(0.76, 0.24, 0.24, 0.95), HORIZONTAL_ALIGNMENT_CENTER)
 	main_content.add_child(ritual_header_label)
 
-	title_label = _make_label("LAMPOR", 58, Color(0.86, 0.12, 0.14, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
+	title_label = _make_label("LAMPOR", 46, Color(0.86, 0.12, 0.14, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
+	title_label.add_theme_font_override("font", HORROR_TITLE_FONT)
 	title_label.add_theme_constant_override("outline_size", 12)
 	title_label.add_theme_color_override("font_outline_color", Color(0.03, 0.0, 0.0, 1.0))
 	main_content.add_child(title_label)
@@ -160,9 +162,9 @@ func _build_menu() -> void:
 
 	var wins_label := _make_label("", 13, Color(0.84, 0.68, 0.36, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
 	wins_label.name = "WinsLabel"
-	wins_label.text = "🕯 Malam Terlewati: %d Kemenangan" % GameManager.total_wins
+	wins_label.text = "Malam Terlewati: %d Kemenangan" % GameManager.total_wins
 	main_content.add_child(wins_label)
-	currency_label = _make_label("🪙 Koin Emas: %d   ·   🩸 Nyawa Cadangan: %d" % [GameManager.coins, GameManager.extra_lives], 13, Color(0.92, 0.76, 0.42, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
+	currency_label = _make_label("Koin Emas: %d   ·   Nyawa Cadangan: %d" % [GameManager.coins, GameManager.extra_lives], 13, Color(0.92, 0.76, 0.42, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
 	currency_label.name = "CurrencyLabel"
 	main_content.add_child(currency_label)
 
@@ -170,26 +172,26 @@ func _build_menu() -> void:
 	menu_buttons.name = "MenuButtons"
 	menu_buttons.add_theme_constant_override("separation", 8)
 	main_content.add_child(menu_buttons)
-	continue_button = _make_button("🩸  LANJUTKAN MALAM TERSIMPAN", true)
+	continue_button = _make_button("LANJUTKAN MALAM TERSIMPAN", true)
 	continue_button.visible = GameManager.has_saved_run()
 	continue_button.pressed.connect(_on_continue_pressed)
 	menu_buttons.add_child(continue_button)
-	var start_button := _make_button("⚰️  MULAI PERMAINAN", true)
+	var start_button := _make_button("MULAI PERMAINAN", true)
 	start_button.pressed.connect(func() -> void: warning_overlay.visible = true)
 	menu_buttons.add_child(start_button)
-	var shop_button := _make_button("🕯️  TOKO BEKAL RITUAL")
+	var shop_button := _make_button("TOKO BEKAL RITUAL")
 	shop_button.pressed.connect(func() -> void:
 		_refresh_shop_display()
 		shop_overlay.visible = true
 	)
 	menu_buttons.add_child(shop_button)
-	var settings_button := _make_button("⚙️  PENGATURAN & PANDUAN")
+	var settings_button := _make_button("PENGATURAN & PANDUAN")
 	settings_button.pressed.connect(func() -> void: settings_overlay.visible = true)
 	menu_buttons.add_child(settings_button)
-	fix_notes_button = _make_button("📜  CATATAN PEMBARUAN")
+	fix_notes_button = _make_button("CATATAN PEMBARUAN")
 	fix_notes_button.pressed.connect(_show_fix_notes)
 	menu_buttons.add_child(fix_notes_button)
-	var credits_button := _make_button("☠️  HAK CIPTA")
+	var credits_button := _make_button("HAK CIPTA")
 	credits_button.pressed.connect(func() -> void: credits_overlay.visible = true)
 	menu_buttons.add_child(credits_button)
 
@@ -261,26 +263,26 @@ func _build_warning_modal() -> void:
 	buttons.add_child(continue_button)
 
 func _build_difficulty_modal() -> void:
-	var modal: Dictionary = _create_modal("⚰️  PILIH TINGKAT KESULITAN")
+	var modal: Dictionary = _create_modal("PILIH TINGKAT KESULITAN")
 	difficulty_overlay = modal["overlay"] as ColorRect
 	var body: VBoxContainer = modal["body"] as VBoxContainer
 	var hint := _make_label("Semakin tinggi tingkat kutukan, semakin cepat malam berlalu dan semakin beringas Lampor memburu.", 12, TEXT_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_child(hint)
 	difficulty_buttons.clear()
-	var easy := _make_button("🕯️  EASY  ·  Malam Sunyi (1 mnt = 4,5 dtk)")
+	var easy := _make_button("EASY  ·  Malam Sunyi (1 mnt = 4,5 dtk)")
 	easy.pressed.connect(func() -> void: _start_with_difficulty(GameManager.Difficulty.EASY))
 	body.add_child(easy)
 	difficulty_buttons.append(easy)
-	var normal := _make_button("🌑  NORMAL  ·  Malam Keramat (1 mnt = 3 dtk)")
+	var normal := _make_button("NORMAL  ·  Malam Keramat (1 mnt = 3 dtk)")
 	normal.pressed.connect(func() -> void: _start_with_difficulty(GameManager.Difficulty.NORMAL))
 	body.add_child(normal)
 	difficulty_buttons.append(normal)
-	var hard := _make_button("🩸  HARD  ·  Malam Jahanam (1 mnt = 1 dtk)")
+	var hard := _make_button("HARD  ·  Malam Jahanam (1 mnt = 1 dtk)")
 	hard.pressed.connect(func() -> void: _start_with_difficulty(GameManager.Difficulty.HARD))
 	body.add_child(hard)
 	difficulty_buttons.append(hard)
-	nightmare_button = _make_button("☠️  NIGHTMARE  ·  Kutukan Keranda (1 mnt = 0,5 dtk)", true)
+	nightmare_button = _make_button("NIGHTMARE  ·  Kutukan Keranda (1 mnt = 0,5 dtk)", true)
 	nightmare_button.pressed.connect(func() -> void: _start_with_difficulty(GameManager.Difficulty.NIGHTMARE))
 	body.add_child(nightmare_button)
 	difficulty_buttons.append(nightmare_button)
@@ -476,11 +478,11 @@ func _add_shop_offer(parent: VBoxContainer, title_text: String, description: Str
 
 func _refresh_currency_display() -> void:
 	if currency_label:
-		currency_label.text = "🪙 Koin Emas: %d   ·   🩸 Nyawa Cadangan: %d" % [GameManager.coins, GameManager.extra_lives]
+		currency_label.text = "Koin Emas: %d   ·   Nyawa Cadangan: %d" % [GameManager.coins, GameManager.extra_lives]
 	if main_content and is_instance_valid(main_content):
 		var wins: Label = main_content.get_node_or_null("WinsLabel") as Label
 		if wins:
-			wins.text = "🕯 Malam Terlewati: %d Kemenangan" % GameManager.total_wins
+			wins.text = "Malam Terlewati: %d Kemenangan" % GameManager.total_wins
 
 func _refresh_shop_display() -> void:
 	if shop_balance_label:
@@ -754,7 +756,8 @@ func _build_credits_modal() -> void:
 	var modal: Dictionary = _create_modal("HAK CIPTA")
 	credits_overlay = modal["overlay"] as ColorRect
 	var body: VBoxContainer = modal["body"] as VBoxContainer
-	var company := _make_label("ASTRADEV", 30, Color(0.82, 0.18, 0.2, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
+	var company := _make_label("ASTRADEV", 22, Color(0.82, 0.18, 0.2, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
+	company.add_theme_font_override("font", HORROR_TITLE_FONT)
 	body.add_child(company)
 	var copy := _make_label("LAMPOR: MALAM JAHANAM\n\n© 2026 AstraDev. Seluruh hak cipta dilindungi.\nDibuat sebagai karya fiksi horor yang terinspirasi dari folklore Indonesia.", 14, TEXT_MAIN, HORIZONTAL_ALIGNMENT_CENTER)
 	copy.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -787,7 +790,9 @@ func _create_modal(title_text: String) -> Dictionary:
 	var body := VBoxContainer.new()
 	body.add_theme_constant_override("separation", 12)
 	margin.add_child(body)
-	var title := _make_label(title_text, 21, Color(0.85, 0.25, 0.25, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
+	var title := _make_label(title_text, 17, Color(0.85, 0.25, 0.25, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
+	title.add_theme_font_override("font", HORROR_TITLE_FONT)
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_child(title)
 	modal_overlays.append(overlay)
 	modal_panels.append(panel)
@@ -924,7 +929,7 @@ func _apply_layout() -> void:
 	var view_size: Vector2 = get_viewport_rect().size
 	var narrow: bool = view_size.x < 700.0
 	var short_screen: bool = view_size.y < 560.0
-	title_label.add_theme_font_size_override("font_size", 34 if short_screen else (42 if narrow else 56))
+	title_label.add_theme_font_size_override("font_size", 28 if short_screen else (34 if narrow else 46))
 	subtitle_label.add_theme_font_size_override("font_size", 11 if short_screen else (13 if narrow else 15))
 	if ritual_header_label:
 		ritual_header_label.visible = not short_screen

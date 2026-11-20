@@ -15,6 +15,25 @@ func _ready() -> void:
 	collision_layer = 1
 	collision_mask = 2
 	_update_model_appearance()
+	SignalBus.act_started.connect(_on_act_started)
+	_update_ritual_visibility(GameManager.get_current_act_number())
+
+func _on_act_started(act_number: int, _title: String) -> void:
+	_update_ritual_visibility(act_number)
+
+func _update_ritual_visibility(act_number: int) -> void:
+	if not is_ritual_item:
+		return
+	var unlocked: bool = act_number >= 2 and not is_picked_up
+	visible = unlocked
+	collision_layer = 1 if unlocked else 0
+	monitoring = unlocked
+	monitorable = unlocked
+	set_process(unlocked)
+	if item_light and SettingsManager.get_effective_graphics_quality() == "low":
+		item_light.visible = unlocked
+		if unlocked:
+			item_light.light_energy = 0.45
 
 func _update_model_appearance() -> void:
 	var target_name: String = "GenericVisual"
@@ -77,6 +96,8 @@ func get_interaction_prompt(player: Node) -> String:
 		return ""
 
 	if is_ritual_item:
+		if GameManager.current_act == GameManager.Act.BABAK_1:
+			return ""
 		var r_name: String = ritual_display_name if ritual_display_name != "" else item_name
 		return "[E] Ambil Benda Ritual: " + r_name
 
@@ -97,6 +118,8 @@ func interact(player: Node) -> void:
 		return
 
 	if is_ritual_item:
+		if GameManager.current_act == GameManager.Act.BABAK_1:
+			return
 		is_picked_up = true
 		var r_name: String = ritual_display_name if ritual_display_name != "" else item_name
 		GameManager.ritual_items[r_name] = true

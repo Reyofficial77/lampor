@@ -15,12 +15,12 @@ shader_parameter/pulse_speed = 2.0
 shader_parameter/pulse_intensity = 0.0
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_bar_bg"]
-bg_color = Color(0.045, 0.022, 0.028, 0.92)
+bg_color = Color(0.04, 0.015, 0.02, 0.85)
 border_width_left = 1
 border_width_top = 1
 border_width_right = 1
 border_width_bottom = 1
-border_color = Color(0.38, 0.11, 0.13, 0.9)
+border_color = Color(0.46, 0.13, 0.15, 0.85)
 corner_radius_top_left = 3
 corner_radius_top_right = 3
 corner_radius_bottom_right = 3
@@ -176,7 +176,7 @@ theme_override_colors/font_color = Color(1, 0.15, 0.15, 1)
 theme_override_colors/font_outline_color = Color(0.2, 0, 0, 1)
 theme_override_constants/outline_size = 6
 theme_override_font_sizes/font_size = 22
-text = "⚠️ JANGAN MENATAP LANGSUNG! ALIKAN PANDANGANMU! ⚠️"
+text = "JANGAN MENATAP LANGSUNG! ALIHKAN PANDANGANMU!"
 horizontal_alignment = 1
 
 [node name="ActBanner" type="Label" parent="CenterContainer"]
@@ -217,7 +217,7 @@ layout_mode = 2
 theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
 theme_override_constants/outline_size = 4
 theme_override_font_sizes/font_size = 24
-text = "🕒 01:00 WIB"
+text = "01:00 WIB"
 
 [node name="ActLabel" type="Label" parent="TopLeft/VBox"]
 layout_mode = 2
@@ -259,7 +259,7 @@ layout_mode = 2
 theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
 theme_override_constants/outline_size = 3
 theme_override_font_sizes/font_size = 14
-text = "🧠 Waras"
+text = "Waras"
 
 [node name="SanityBar" type="ProgressBar" parent="BottomLeft/VBox/SanityContainer"]
 custom_minimum_size = Vector2(140, 18)
@@ -286,7 +286,7 @@ layout_mode = 2
 theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
 theme_override_constants/outline_size = 3
 theme_override_font_sizes/font_size = 14
-text = "⚡ Stamina"
+text = "Stamina"
 
 [node name="StaminaBar" type="ProgressBar" parent="BottomLeft/VBox/StaminaContainer"]
 custom_minimum_size = Vector2(140, 18)
@@ -313,7 +313,7 @@ layout_mode = 2
 theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
 theme_override_constants/outline_size = 3
 theme_override_font_sizes/font_size = 14
-text = "🔦 Senter"
+text = "Senter"
 
 [node name="BatteryBar" type="ProgressBar" parent="BottomLeft/VBox/BatteryContainer"]
 custom_minimum_size = Vector2(140, 18)
@@ -353,7 +353,7 @@ layout_mode = 2
 theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
 theme_override_constants/outline_size = 3
 theme_override_font_sizes/font_size = 13
-text = "🔊 Kebisingan Suara"
+text = "Kebisingan Suara"
 
 [node name="NoiseBar" type="ProgressBar" parent="BottomRight/VBox"]
 custom_minimum_size = Vector2(170, 16)
@@ -382,7 +382,7 @@ theme_override_constants/separation = 10
 alignment = 1
 
 [node name="Slot1" type="PanelContainer" parent="BottomCenter/SlotsContainer"]
-custom_minimum_size = Vector2(95, 60)
+custom_minimum_size = Vector2(76, 76)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_slot")
 
@@ -409,7 +409,7 @@ text = "100%"
 horizontal_alignment = 1
 
 [node name="Slot2" type="PanelContainer" parent="BottomCenter/SlotsContainer"]
-custom_minimum_size = Vector2(95, 60)
+custom_minimum_size = Vector2(76, 76)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_slot")
 
@@ -436,7 +436,7 @@ text = "x1"
 horizontal_alignment = 1
 
 [node name="Slot3" type="PanelContainer" parent="BottomCenter/SlotsContainer"]
-custom_minimum_size = Vector2(95, 60)
+custom_minimum_size = Vector2(76, 76)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_slot")
 
@@ -462,7 +462,7 @@ theme_override_font_sizes/font_size = 10
 horizontal_alignment = 1
 
 [node name="Slot4" type="PanelContainer" parent="BottomCenter/SlotsContainer"]
-custom_minimum_size = Vector2(95, 60)
+custom_minimum_size = Vector2(76, 76)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_slot")
 
@@ -488,7 +488,7 @@ theme_override_font_sizes/font_size = 10
 horizontal_alignment = 1
 
 [node name="Slot5" type="PanelContainer" parent="BottomCenter/SlotsContainer"]
-custom_minimum_size = Vector2(95, 60)
+custom_minimum_size = Vector2(76, 76)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_slot")
 
@@ -553,7 +553,7 @@ theme_override_constants/separation = 14
 layout_mode = 2
 theme_override_colors/font_color = Color(1, 0.25, 0.2, 1)
 theme_override_font_sizes/font_size = 18
-text = "⚠️ PERINGATAN: KAMU DI DALAM RUMAH!"
+text = "PERINGATAN: KAMU DI DALAM RUMAH!"
 horizontal_alignment = 1
 
 [node name="Message" type="Label" parent="BarricadeConfirmDialog/Margin/VBox"]

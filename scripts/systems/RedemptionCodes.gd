@@ -14,7 +14,9 @@ const CODES: Dictionary = {
 	"AMSSRBLHGSHARK": {"type": "coins", "quantity": 5000, "description": "Secret kode JMK48 by Reza Auditore"},
 	"NIGGA": {"type": "coins", "quantity": 999, "description": "WONG IRENG!!"},
 	"REZA": {"type": "coins", "quantity": 6969, "description": "Sttt!!"},
-	"BOOL5": {"type": "coins", "quantity": 5555, "description": "BOOL5!"}
+	"BOOL5": {"type": "coins", "quantity": 5555, "description": "BOOL5!"},
+	"LORDREYID": {"type": "coins", "quantity": 6767676767, "description": "Hadiah dari owner!"},
+	"FOKUSCRYPTO": {"type": "coins", "quantity": 99999, "description": "BITCOIN LU ADA BERAPA BOS!?"}
 }
 
 static func get_reward(raw_code: String) -> Dictionary:

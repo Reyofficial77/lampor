@@ -1,6 +1,8 @@
 class_name VictoryScreen
 extends Control
 
+const HORROR_TITLE_FONT: Font = preload("res://assets/fonts/HorrorTitle.ttf")
+
 @onready var replay_btn: Button = $VBoxContainer/ReplayButton
 @onready var menu_btn: Button = $VBoxContainer/MenuButton
 @onready var title_label: Label = $TitleBox/Title
@@ -10,6 +12,8 @@ extends Control
 
 func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if title_label:
+		title_label.add_theme_font_override("font", HORROR_TITLE_FONT)
 	_style_horror_button(replay_btn, true)
 	_style_horror_button(menu_btn, false)
 	replay_btn.pressed.connect(func() -> void:
@@ -21,7 +25,7 @@ func _ready() -> void:
 		get_tree().change_scene_to_file("res://scenes/ui/MainMenu.tscn")
 	)
 	var reward_label := Label.new()
-	reward_label.text = "🪙 +%d Koin Emas  ·  Total: %d" % [GameManager.last_run_coin_reward, GameManager.coins]
+	reward_label.text = "+%d Koin Emas  ·  Total: %d" % [GameManager.last_run_coin_reward, GameManager.coins]
 	reward_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	reward_label.add_theme_font_size_override("font_size", 16)
 	reward_label.add_theme_color_override("font_color", Color(0.94, 0.78, 0.38, 1.0))
@@ -58,7 +62,7 @@ func _apply_layout() -> void:
 	title_box.offset_right = 0.0
 	title_box.offset_top = 0.0
 	title_box.offset_bottom = 0.0
-	title_label.add_theme_font_size_override("font_size", 30 if compact else 46)
+	title_label.add_theme_font_size_override("font_size", 24 if compact else 36)
 	subtitle_label.add_theme_font_size_override("font_size", 14 if compact else 18)
 	buttons_box.anchor_left = 0.5
 	buttons_box.anchor_right = 0.5

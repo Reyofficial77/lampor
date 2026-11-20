@@ -23,8 +23,10 @@ var hover_offset: float = 2.0
 var hover_time: float = 0.0
 var sky_time: float = 0.0
 
+const DESCENT_DURATION: float = 3.8
 var descend_target: Vector3 = Vector3.ZERO
 var is_descending: bool = false
+var descent_tween: Tween = null
 
 # Batas pengejaran supaya Lampor tidak mengikuti player selamanya
 const MAX_CHASE_TIME: float = 18.0
@@ -67,9 +69,9 @@ func _ready() -> void:
 		if GameManager.is_resuming_saved_run:
 			return
 		if new_state_str == "CHASE":
-			if current_state == State.DORMANT_SKY or current_state == State.DESCENDING:
+			if current_state == State.DORMANT_SKY:
 				trigger_descent(true)
-			else:
+			elif current_state != State.DESCENDING and current_state != State.CHASE:
 				_set_state(State.CHASE)
 	)
 	
@@ -271,41 +273,68 @@ func _on_act_started(act_number: int, _title: String) -> void:
 	if GameManager.is_resuming_saved_run:
 		return
 	if act_number >= 2 and current_state == State.DORMANT_SKY:
-		trigger_descent()
+		trigger_descent(true)
 
-func trigger_descent(immediate_chase: bool = false) -> void:
-	if current_state != State.DORMANT_SKY and current_state != State.DESCENDING:
+func trigger_descent(immediate_chase: bool = true) -> void:
+	if current_state != State.DORMANT_SKY:
 		return
-		
+
+	if not player:
+		player = GameManager.player_character as PlayerController
+
 	current_state = State.DESCENDING
 	is_descending = true
-	
+	velocity = Vector3.ZERO
+
 	if waypoints.size() > 0:
-		descend_target = waypoints[0]
+		var best_idx: int = 0
+		if player and is_instance_valid(player):
+			var p_xz: Vector2 = Vector2(player.global_position.x, player.global_position.z)
+			var best_dist: float = INF
+			for i: int in range(waypoints.size()):
+				var wp: Vector3 = waypoints[i]
+				var horiz_dist: float = Vector2(wp.x, wp.z).distance_to(p_xz)
+				if horiz_dist >= 11.0 and horiz_dist < best_dist:
+					best_dist = horiz_dist
+					best_idx = i
+		current_waypoint_idx = best_idx
+		var chosen_wp: Vector3 = waypoints[best_idx]
+		descend_target = Vector3(chosen_wp.x, maxf(chosen_wp.y, 2.2), chosen_wp.z)
 	else:
-		descend_target = Vector3(0, 2.5, -20)
-		
+		descend_target = Vector3(0.0, 2.2, -20.0)
+
+	global_position = descend_target + Vector3(0.0, 22.0, 0.0)
+	if player and is_instance_valid(player):
+		safe_look_at(player.global_position)
+
 	if audio_roar:
 		audio_roar.play()
 	if audio_bell:
 		audio_bell.play()
-		
-	if red_light:
-		red_light.light_energy = 4.0
-		red_light.light_color = Color(1.0, 0.2, 0.1)
 
-	var tween: Tween = create_tween()
-	tween.set_trans(Tween.TRANS_QUAD)
-	tween.set_ease(Tween.EASE_OUT)
-	tween.tween_property(self, "global_position", descend_target, 4.0)
-	tween.tween_callback(func() -> void:
+	if red_light:
+		red_light.light_energy = 5.0
+		red_light.light_color = Color(1.0, 0.15, 0.1)
+
+	if descent_tween and descent_tween.is_running():
+		descent_tween.kill()
+	descent_tween = create_tween()
+	descent_tween.set_trans(Tween.TRANS_CUBIC)
+	descent_tween.set_ease(Tween.EASE_OUT)
+	descent_tween.tween_property(self, "global_position", descend_target, DESCENT_DURATION)
+	descent_tween.tween_callback(func() -> void:
 		is_descending = false
 		if collision_shape:
 			collision_shape.disabled = false
 		if immediate_chase:
+			chase_cooldown = 0.0
+			chase_timer = 0.0
+			lost_sight_timer = -3.0
 			_set_state(State.CHASE)
+			SignalBus.lampor_state_changed.emit("CHASE")
 		else:
 			_set_state(State.PATROL)
+			SignalBus.lampor_state_changed.emit("PATROL")
 	)
 
 func safe_look_at(target_pos: Vector3) -> void:
@@ -368,7 +397,10 @@ func _physics_process(delta: float) -> void:
 		return
 
 	if current_state == State.DESCENDING:
-		safe_look_at(descend_target)
+		if player and is_instance_valid(player):
+			safe_look_at(player.global_position)
+		else:
+			safe_look_at(descend_target)
 		return
 
 	var dist_to_player: float = global_position.distance_to(player.global_position)

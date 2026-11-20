@@ -110,65 +110,144 @@ func _kcyl(radius: float, height: float) -> CylinderMesh:
 	c.height = height
 	return c
 
+func _ksph(radius: float, height: float = -1.0) -> SphereMesh:
+	var s: SphereMesh = SphereMesh.new()
+	s.radius = radius
+	s.height = height if height > 0.0 else radius * 2.0
+	return s
+
 func _build_keranda_model() -> void:
 	if not visual_mesh:
 		return
-	# Buang model lama (kotak kayu + kain polos)
-	for old_name: String in ["CoffinBody", "ShroudCloth"]:
+	for old_name: String in ["CoffinBody", "ShroudCloth", "BambooPoleLeft", "BambooPoleRight", "ProceduralKeranda"]:
 		var old: Node = visual_mesh.get_node_or_null(old_name)
 		if old:
 			old.queue_free()
 
-	var cloth: StandardMaterial3D = _kmat(Color(0.05, 0.40, 0.17), 0.9)
+	var tex_cloth: Texture2D = null
 	if ResourceLoader.exists("res://assets/textures/cloth_green.png"):
-		cloth.albedo_texture = load("res://assets/textures/cloth_green.png")
-	var gold: StandardMaterial3D = _kmat(Color(0.95, 0.75, 0.2), 0.35, 0.8, 0.35)
-	var wood: StandardMaterial3D = _kmat(Color(0.28, 0.16, 0.08), 0.8)
-	var metal: StandardMaterial3D = _kmat(Color(0.55, 0.55, 0.6), 0.4, 0.8)
-	var tire: StandardMaterial3D = _kmat(Color(0.05, 0.05, 0.05), 0.9)
+		tex_cloth = load("res://assets/textures/cloth_green.png") as Texture2D
 
-	# Rangka dasar kayu + empat roda kecil di sudut
-	_kpart(_kbox(1.12, 0.12, 2.5), wood, Vector3(0, -0.35, 0))
+	var cloth_main: StandardMaterial3D = _kmat(Color(0.035, 0.34, 0.14), 0.92, 0.02, 0.04)
+	var cloth_fold: StandardMaterial3D = _kmat(Color(0.018, 0.22, 0.085), 0.96, 0.0)
+	var cloth_ridge: StandardMaterial3D = _kmat(Color(0.055, 0.42, 0.18), 0.88, 0.04, 0.06)
+	if tex_cloth:
+		cloth_main.albedo_texture = tex_cloth
+		cloth_ridge.albedo_texture = tex_cloth
+
+	var gold_bright: StandardMaterial3D = _kmat(Color(0.96, 0.78, 0.22), 0.28, 0.85, 0.45)
+	var gold_fringe: StandardMaterial3D = _kmat(Color(0.88, 0.68, 0.16), 0.42, 0.72, 0.28)
+	var steel_frame: StandardMaterial3D = _kmat(Color(0.62, 0.65, 0.68), 0.32, 0.88)
+	var dark_iron: StandardMaterial3D = _kmat(Color(0.16, 0.17, 0.19), 0.65, 0.6)
+	var wood_dark: StandardMaterial3D = _kmat(Color(0.24, 0.14, 0.07), 0.85)
+	var rubber_foot: StandardMaterial3D = _kmat(Color(0.06, 0.06, 0.06), 0.95)
+	var void_black: StandardMaterial3D = _kmat(Color(0.01, 0.01, 0.012), 1.0)
+	var kafan_cloth: StandardMaterial3D = _kmat(Color(0.82, 0.80, 0.73), 0.92, 0.0, 0.05)
+
+	# 1. RANGKA TANDU & BATANG PIKULAN KERANDA
+	for sx: float in [-1.0, 1.0]:
+		var px: float = sx * 0.54
+		_kpart(_kcyl(0.034, 3.36), steel_frame, Vector3(px, -0.34, 0.0), Vector3(90, 0, 0))
+		for sz: float in [-1.0, 1.0]:
+			_kpart(_kcyl(0.040, 0.32), dark_iron, Vector3(px, -0.34, sz * 1.52), Vector3(90, 0, 0))
+			_kpart(_ksph(0.042), gold_bright, Vector3(px, -0.34, sz * 1.69))
+			_kpart(_kcyl(0.044, 0.05), dark_iron, Vector3(px, -0.34, sz * 1.20), Vector3(90, 0, 0))
+
+	for cz: float in [-1.12, -0.38, 0.38, 1.12]:
+		_kpart(_kbox(1.12, 0.048, 0.06), steel_frame, Vector3(0.0, -0.34, cz))
+	_kpart(_kbox(1.04, 0.055, 2.34), wood_dark, Vector3(0.0, -0.305, 0.0))
+
+	# 4 Kaki penopang keranda beserta sepatu karet & penyangga sudut
 	for sx: float in [-1.0, 1.0]:
 		for sz: float in [-1.0, 1.0]:
-			_kpart(_kcyl(0.09, 0.06), tire, Vector3(sx * 0.5, -0.5, sz * 1.0), Vector3(0, 0, 90))
-			_kpart(_kcyl(0.025, 0.1), metal, Vector3(sx * 0.5, -0.43, sz * 1.0))
+			var lx: float = sx * 0.50
+			var lz: float = sz * 1.06
+			_kpart(_kcyl(0.026, 0.24), steel_frame, Vector3(lx, -0.45, lz))
+			_kpart(_kcyl(0.018, 0.18), steel_frame, Vector3(lx, -0.42, lz - sz * 0.08), Vector3(sz * 32.0, 0, 0))
+			_kpart(_kcyl(0.042, 0.035), rubber_foot, Vector3(lx, -0.57, lz))
 
-	# Badan keranda tertutup kain hijau + penutup berbentuk kubah rendah
-	_kpart(_kbox(1.0, 0.55, 2.4), cloth, Vector3(0, -0.015, 0))
-	_kpart(_kcyl(0.5, 2.4), cloth, Vector3(0, 0.26, 0), Vector3(90, 0, 0), Vector3(1.0, 1.0, 0.6))
+	# 2. BADAN KURUNG BATANG & KAIN BELUDRU HIJAU PENUTUP KERANDA
+	_kpart(_kbox(1.06, 0.50, 2.40), cloth_main, Vector3(0.0, -0.03, 0.0))
+	_kpart(_kcyl(0.53, 2.40), cloth_main, Vector3(0.0, 0.22, 0.0), Vector3(90, 0, 0), Vector3(1.0, 1.0, 0.66))
 
-	# List emas lebar di tepi bawah kain (kiri, kanan, depan, belakang)
+	for rz: float in [-1.14, -0.57, 0.0, 0.57, 1.14]:
+		_kpart(_kbox(1.084, 0.48, 0.036), cloth_ridge, Vector3(0.0, -0.02, rz))
+		_kpart(_kcyl(0.542, 0.038), cloth_ridge, Vector3(0.0, 0.22, rz), Vector3(90, 0, 0), Vector3(1.0, 1.0, 0.66))
+
 	for side: float in [-1.0, 1.0]:
-		_kpart(_kbox(0.025, 0.1, 2.46), gold, Vector3(side * 0.508, -0.22, 0))
-		_kpart(_kbox(1.04, 0.1, 0.025), gold, Vector3(0, -0.22, side * 1.208))
+		for i: int in range(15):
+			var fz: float = -1.05 + float(i) * 0.15
+			var fold_mat: StandardMaterial3D = cloth_fold if (i % 2 == 0) else cloth_ridge
+			_kpart(_kbox(0.012, 0.52, 0.045), fold_mat, Vector3(side * 0.534, -0.04, fz))
 
-	# Garis emas memanjang di puncak kubah
-	_kpart(_kbox(0.07, 0.012, 2.3), gold, Vector3(0, 0.558, 0))
-
-	# Pita kaligrafi emas di kedua sisi (bentuk goresan huruf, bukan teks asli)
+	# 3. PITA BORDIR EMAS, BINGKAI KALIGRAFI, & MEDALI KERANDA
 	for side: float in [-1.0, 1.0]:
-		for i: int in range(10):
-			var cz: float = -0.99 + float(i) * 0.22
-			var h: float = 0.07 + 0.05 * absf(sin(float(i) * 1.7))
-			_kpart(_kbox(0.014, h, 0.1), gold, Vector3(side * 0.508, -0.04, cz))
-			_kpart(_kbox(0.014, 0.025, 0.06), gold, Vector3(side * 0.508, 0.05 + h * 0.4, cz + 0.04))
-		# Medali emas bulat di tengah sisi
-		_kpart(_kcyl(0.1, 0.014), gold, Vector3(side * 0.51, 0.17, 0), Vector3(0, 0, 90))
+		_kpart(_kbox(0.022, 0.055, 2.44), gold_bright, Vector3(side * 0.542, -0.21, 0.0))
+		_kpart(_kbox(0.022, 0.022, 2.44), gold_fringe, Vector3(side * 0.542, -0.265, 0.0))
+	_kpart(_kbox(1.09, 0.055, 0.022), gold_bright, Vector3(0.0, -0.21, -1.21))
+	_kpart(_kbox(1.09, 0.022, 0.022), gold_fringe, Vector3(0.0, -0.265, -1.21))
+	_kpart(_kbox(0.075, 0.016, 2.42), gold_bright, Vector3(0.0, 0.572, 0.0))
+	for sz: float in [-1.0, 1.0]:
+		_kpart(_kcyl(0.545, 0.028), gold_bright, Vector3(0.0, 0.22, sz * 1.202), Vector3(90, 0, 0), Vector3(1.0, 1.0, 0.66))
 
-	# Rumbai emas menggantung di ujung depan dan belakang
 	for side: float in [-1.0, 1.0]:
-		for i: int in range(9):
-			var tx: float = -0.44 + float(i) * 0.11
-			_kpart(_kbox(0.035, 0.09, 0.012), gold, Vector3(tx, -0.33, side * 1.215))
+		var sx_pos: float = side * 0.544
+		_kpart(_kbox(0.014, 0.024, 1.64), gold_bright, Vector3(sx_pos, 0.21, 0.0))
+		_kpart(_kbox(0.014, 0.024, 1.64), gold_bright, Vector3(sx_pos, -0.11, 0.0))
+		_kpart(_kbox(0.014, 0.34, 0.028), gold_bright, Vector3(sx_pos, 0.05, -0.82))
+		_kpart(_kbox(0.014, 0.34, 0.028), gold_bright, Vector3(sx_pos, 0.05, 0.82))
 
-	# Mata merah dipindah ke sisi depan (+Z), karena look_at(use_model_front) menghadapkan +Z ke player
+		for rz_end: float in [-0.99, 0.99]:
+			_kpart(_kcyl(0.085, 0.016), gold_bright, Vector3(sx_pos, 0.05, rz_end), Vector3(0, 0, 90))
+			_kpart(_kcyl(0.055, 0.020), cloth_main, Vector3(side * 0.546, 0.05, rz_end), Vector3(0, 0, 90))
+			_kpart(_ksph(0.026), gold_bright, Vector3(side * 0.548, 0.05, rz_end))
+
+		for i: int in range(13):
+			var cz: float = -0.68 + float(i) * 0.113
+			var wave: float = sin(float(i) * 1.45)
+			var stem_h: float = 0.08 + 0.09 * absf(cos(float(i) * 1.15))
+			_kpart(_kbox(0.016, 0.024, 0.088), gold_bright, Vector3(sx_pos, 0.01 + wave * 0.018, cz))
+			if i % 2 == 0:
+				_kpart(_kbox(0.016, stem_h, 0.022), gold_bright, Vector3(sx_pos, 0.03 + stem_h * 0.5, cz - 0.02))
+			if i % 3 == 1:
+				_kpart(_kbox(0.016, 0.042, 0.052), gold_bright, Vector3(sx_pos, -0.025, cz + 0.015), Vector3(22.0, 0, 0))
+			_kpart(_kbox(0.016, 0.018, 0.018), gold_bright, Vector3(sx_pos, 0.145 if (i % 2 == 0) else -0.06, cz + 0.01), Vector3(45, 0, 0))
+
+	for sz: float in [-1.0, 1.0]:
+		var mz: float = sz * 1.212
+		_kpart(_kcyl(0.14, 0.016), gold_bright, Vector3(0.0, 0.30, mz), Vector3(90, 0, 0))
+		_kpart(_kcyl(0.105, 0.018), cloth_fold, Vector3(0.0, 0.30, mz + sz * 0.002), Vector3(90, 0, 0))
+		_kpart(_kbox(0.12, 0.02, 0.02), gold_bright, Vector3(0.0, 0.29, mz + sz * 0.005))
+		_kpart(_kbox(0.02, 0.11, 0.02), gold_bright, Vector3(-0.03, 0.31, mz + sz * 0.005))
+		_kpart(_kbox(0.02, 0.09, 0.02), gold_bright, Vector3(0.035, 0.30, mz + sz * 0.005))
+
+	# 4. RUMBAI-RUMBAI BENANG EMAS MENGGANTUNG
+	for side: float in [-1.0, 1.0]:
+		for i: int in range(21):
+			var tz: float = -1.10 + float(i) * 0.11
+			_kpart(_ksph(0.014), gold_bright, Vector3(side * 0.542, -0.285, tz))
+			_kpart(_kcyl(0.011, 0.085), gold_fringe, Vector3(side * 0.542, -0.33, tz))
+	for sz: float in [-1.0, 1.0]:
+		for i: int in range(11):
+			var tx: float = -0.48 + float(i) * 0.096
+			_kpart(_ksph(0.014), gold_bright, Vector3(tx, -0.285, sz * 1.212))
+			_kpart(_kcyl(0.011, 0.085), gold_fringe, Vector3(tx, -0.33, sz * 1.212))
+
+	# 5. TIRAI DEPAN TERSINGKAP HOROR, RONGGA GELAP, & SILUET JENAZAH BERKAFAN
+	_kpart(_kbox(0.74, 0.42, 0.06), void_black, Vector3(0.0, -0.03, 1.185))
+	_kpart(_kbox(0.22, 0.46, 0.04), cloth_fold, Vector3(-0.39, -0.03, 1.20), Vector3(0, 0, -10))
+	_kpart(_kbox(0.22, 0.46, 0.04), cloth_fold, Vector3(0.39, -0.03, 1.20), Vector3(0, 0, 10))
+	_kpart(_kbox(0.025, 0.46, 0.045), gold_bright, Vector3(-0.28, -0.03, 1.208), Vector3(0, 0, -10))
+	_kpart(_kbox(0.025, 0.46, 0.045), gold_bright, Vector3(0.28, -0.03, 1.208), Vector3(0, 0, 10))
+	_kpart(_ksph(0.135), kafan_cloth, Vector3(0.0, -0.08, 1.13), Vector3.ZERO, Vector3(0.95, 1.1, 0.85))
+	_kpart(_kbox(0.24, 0.022, 0.08), wood_dark, Vector3(0.0, -0.20, 1.15))
+
 	var eye_l: Node3D = visual_mesh.get_node_or_null("EyeLeft") as Node3D
 	var eye_r: Node3D = visual_mesh.get_node_or_null("EyeRight") as Node3D
 	if eye_l:
-		eye_l.position = Vector3(-0.2, 0.1, 1.22)
+		eye_l.position = Vector3(-0.16, 0.05, 1.215)
 	if eye_r:
-		eye_r.position = Vector3(0.2, 0.1, 1.22)
+		eye_r.position = Vector3(0.16, 0.05, 1.215)
 
 func _setup_waypoints() -> void:
 	var path_nodes: Array[Node] = get_tree().get_nodes_in_group("lampor_waypoint")
@@ -186,6 +265,7 @@ func _setup_waypoints() -> void:
 		]
 	if waypoints.size() > 0:
 		target_position = waypoints[0]
+		descend_target = waypoints[0]
 
 func _on_act_started(act_number: int, _title: String) -> void:
 	if GameManager.is_resuming_saved_run:

@@ -332,6 +332,10 @@ func resume_saved_game() -> void:
 	get_tree().paused = false
 	var scene_error: Error = get_tree().change_scene_to_file("res://scenes/world/VillageMap.tscn")
 	if scene_error != OK:
+		var packed_map: PackedScene = load("res://scenes/world/VillageMap.tscn") as PackedScene
+		if packed_map != null:
+			scene_error = get_tree().change_scene_to_packed(packed_map)
+	if scene_error != OK:
 		is_resuming_saved_run = false
 		current_state = GameState.MENU
 		push_error("[GameManager] Gagal memuat map untuk melanjutkan permainan: %d" % scene_error)
@@ -489,20 +493,87 @@ func _restore_player_snapshot(world_root: Node, raw_player: Variant) -> void:
 	SignalBus.flashlight_battery_changed.emit(player.flashlight_battery, 100.0)
 	SignalBus.flashlight_toggled.emit(player.flashlight_on)
 
-func _broadcast_resumed_run_state() -> void:
-	SignalBus.time_tick.emit("%02d:%02d" % [current_hour, current_minute], current_hour, current_minute)
+func get_current_act_number() -> int:
+	match current_act:
+		Act.BABAK_1: return 1
+		Act.BABAK_2: return 2
+		Act.BABAK_3: return 3
+	return 1
+
+func get_current_act_title() -> String:
 	match current_act:
 		Act.BABAK_1:
-			SignalBus.act_started.emit(1, "Babak I: Pertahanan Awal (01.00 - 02.30)")
-			SignalBus.objective_updated.emit("torches", "Nyalakan 5 Obor Penolak Bala", torches_lit, REQUIRED_TORCHES, torches_lit >= REQUIRED_TORCHES)
-			SignalBus.objective_updated.emit("barricades", "Barikade 3 Pintu Rumah dengan Papan & Paku", doors_barricaded, REQUIRED_BARRICADES, doors_barricaded >= REQUIRED_BARRICADES)
+			return "Babak I: Pertahanan Awal (01.00 - 02.30)"
 		Act.BABAK_2:
-			SignalBus.act_started.emit(2, "Babak II: Ritual Pemutus Kutukan (02.30 - 04.00)")
-			SignalBus.objective_updated.emit("ritual_items", "Kumpulkan 4 Benda Ritual (Kemenyan, Bunga 7 Rupa, Keris, Tanah)", get_ritual_item_count(), TOTAL_RITUAL_ITEMS, get_ritual_item_count() >= TOTAL_RITUAL_ITEMS)
-			SignalBus.objective_updated.emit("beware_lampor", "Hati-hati: Lampor berpatroli! Dilarang menatap langsung!", 0, 1, false)
+			return "Babak II: Ritual Pemutus Kutukan (02.30 - 04.00)"
 		Act.BABAK_3:
-			SignalBus.act_started.emit(3, "Babak III: Klimaks Pembakaran (04.00 - 05.00)")
-			SignalBus.objective_updated.emit("burn_ritual", "Bakar semua benda ritual di Tungku Balai Desa!", 1 if furnace_burning else 0, 1, furnace_burning)
+			return "Babak III: Klimaks Pembakaran (04.00 - 05.00)"
+	return "Babak I: Pertahanan Awal (01.00 - 02.30)"
+
+func get_current_objectives_data() -> Array[Dictionary]:
+	var list: Array[Dictionary] = []
+	match current_act:
+		Act.BABAK_1:
+			list.append({
+				"id": "torches",
+				"text": "Nyalakan 5 Obor Penolak Bala",
+				"current": torches_lit,
+				"required": REQUIRED_TORCHES,
+				"completed": torches_lit >= REQUIRED_TORCHES
+			})
+			list.append({
+				"id": "barricades",
+				"text": "Barikade 3 Pintu Rumah dengan Papan & Paku",
+				"current": doors_barricaded,
+				"required": REQUIRED_BARRICADES,
+				"completed": doors_barricaded >= REQUIRED_BARRICADES
+			})
+		Act.BABAK_2:
+			var ritual_count: int = get_ritual_item_count()
+			list.append({
+				"id": "ritual_items",
+				"text": "Kumpulkan 4 Benda Ritual (Kemenyan, Bunga 7 Rupa, Keris, Tanah)",
+				"current": ritual_count,
+				"required": TOTAL_RITUAL_ITEMS,
+				"completed": ritual_count >= TOTAL_RITUAL_ITEMS
+			})
+			list.append({
+				"id": "beware_lampor",
+				"text": "Hati-hati: Lampor berpatroli! Dilarang menatap langsung!",
+				"current": 0,
+				"required": 1,
+				"completed": false
+			})
+		Act.BABAK_3:
+			if furnace_burning:
+				list.append({
+					"id": "survive_furnace",
+					"text": "Bertahan hidup dari amukan Lampor hingga fajar tiba!",
+					"current": int(FURNACE_TOTAL_TIME - furnace_time_left),
+					"required": int(FURNACE_TOTAL_TIME),
+					"completed": false
+				})
+			else:
+				list.append({
+					"id": "burn_ritual",
+					"text": "Bakar semua benda ritual di Tungku Balai Desa!",
+					"current": 0,
+					"required": 1,
+					"completed": false
+				})
+	return list
+
+func _broadcast_resumed_run_state() -> void:
+	SignalBus.time_tick.emit("%02d:%02d" % [current_hour, current_minute], current_hour, current_minute)
+	SignalBus.act_started.emit(get_current_act_number(), get_current_act_title())
+	for obj: Dictionary in get_current_objectives_data():
+		SignalBus.objective_updated.emit(
+			str(obj.get("id", "")),
+			str(obj.get("text", "")),
+			int(obj.get("current", 0)),
+			int(obj.get("required", 1)),
+			bool(obj.get("completed", false))
+		)
 	if current_act >= Act.BABAK_2:
 		SignalBus.lampor_state_changed.emit("CHASE" if furnace_burning else "PATROL")
 	if furnace_burning:
@@ -661,6 +732,7 @@ func get_difficulty_name(diff: Difficulty) -> String:
 
 func start_new_game(diff: Difficulty = Difficulty.NORMAL) -> void:
 	clear_run_save()
+	is_resuming_saved_run = false
 	selected_difficulty = diff
 	run_reward_awarded = false
 	last_run_coin_reward = 0
@@ -685,12 +757,49 @@ func start_new_game(diff: Difficulty = Difficulty.NORMAL) -> void:
 	get_tree().paused = false
 	var scene_error: Error = get_tree().change_scene_to_file("res://scenes/world/VillageMap.tscn")
 	if scene_error != OK:
+		var packed_map: PackedScene = load("res://scenes/world/VillageMap.tscn") as PackedScene
+		if packed_map != null:
+			scene_error = get_tree().change_scene_to_packed(packed_map)
+	if scene_error != OK:
 		current_state = GameState.MENU
 		push_error("[GameManager] Gagal memuat map permainan: %d" % scene_error)
 		return
-	await get_tree().scene_changed
+	await get_tree().process_frame
+	await get_tree().process_frame
 	_enter_act_1()
-	_broadcast_resumed_run_state()
+
+func _sync_babak_1_progress() -> void:
+	if current_act != Act.BABAK_1:
+		return
+	var world_root: Node = get_tree().current_scene
+	if world_root == null or world_root.scene_file_path != "res://scenes/world/VillageMap.tscn":
+		return
+	var actual_torches: int = 0
+	for node: Node in get_tree().get_nodes_in_group("torch"):
+		if node is SafeZoneTorch and (node as SafeZoneTorch).is_lit:
+			actual_torches += 1
+	var actual_barricades: int = 0
+	for node: Node in get_tree().get_nodes_in_group("interactable"):
+		if node is Door and (node as Door).is_barricaded:
+			actual_barricades += 1
+	if actual_torches > torches_lit:
+		torches_lit = actual_torches
+		SignalBus.objective_updated.emit(
+			"torches",
+			"Nyalakan 5 Obor Penolak Bala",
+			torches_lit,
+			REQUIRED_TORCHES,
+			torches_lit >= REQUIRED_TORCHES
+		)
+	if actual_barricades > doors_barricaded:
+		doors_barricaded = actual_barricades
+		SignalBus.objective_updated.emit(
+			"barricades",
+			"Barikade 3 Pintu Rumah dengan Papan & Paku",
+			doors_barricaded,
+			REQUIRED_BARRICADES,
+			doors_barricaded >= REQUIRED_BARRICADES
+		)
 
 func _process(delta: float) -> void:
 	if current_state == GameState.PLAYING:
@@ -705,8 +814,10 @@ func _process(delta: float) -> void:
 		autosave_elapsed = 0.0
 	if current_state != GameState.PLAYING or get_tree().paused:
 		return
-	if current_act == Act.BABAK_1 and torches_lit >= REQUIRED_TORCHES and doors_barricaded >= REQUIRED_BARRICADES:
-		_enter_act_2()
+	if current_act == Act.BABAK_1:
+		_sync_babak_1_progress()
+		if torches_lit >= REQUIRED_TORCHES and doors_barricaded >= REQUIRED_BARRICADES:
+			_enter_act_2()
 	if not dawn_reached:
 		time_accumulator += delta
 		while time_accumulator >= seconds_per_game_minute and not dawn_reached:
@@ -747,6 +858,7 @@ func _advance_time(minutes: int) -> void:
 
 func _enter_act_1() -> void:
 	current_act = Act.BABAK_1
+	SignalBus.time_tick.emit("%02d:%02d" % [current_hour, current_minute], current_hour, current_minute)
 	SignalBus.act_started.emit(1, "Babak I: Pertahanan Awal (01.00 - 02.30)")
 	SignalBus.objective_updated.emit(
 		"torches",
@@ -767,14 +879,19 @@ func _enter_act_2() -> void:
 	if current_act >= Act.BABAK_2:
 		return
 	current_act = Act.BABAK_2
-	SignalBus.dialog_requested.emit("Lampor telah turun ke desa. Jangan menatap kerandanya!", 3.5)
-	# Jika misi selesai terlalu awal, lompat ke 02.30. Jangan memundurkan waktu
-	# bila pemain baru menyelesaikannya setelah batas tersebut.
+	var fast_forwarded: bool = false
+	# Jika semua misi Babak I selesai sebelum pukul 02.30, langsung fast-forward ke 02.30
 	if current_hour < 2 or (current_hour == 2 and current_minute < 30):
 		current_hour = 2
 		current_minute = 30
+		time_accumulator = 0.0
+		fast_forwarded = true
 	SignalBus.time_tick.emit("%02d:%02d" % [current_hour, current_minute], current_hour, current_minute)
-	# Sinkronkan waktu dan misi ke scene HUD yang baru aktif.
+	if fast_forwarded:
+		SignalBus.dialog_requested.emit("Semua misi Babak I selesai! Waktu dipercepat ke 02.30 WIB — Babak II dimulai, Lampor turun ke desa!", 4.0)
+	else:
+		SignalBus.dialog_requested.emit("Lampor telah turun ke desa. Jangan menatap kerandanya!", 3.5)
+	# Sinkronkan waktu dan misi ke scene HUD yang aktif.
 	SignalBus.act_started.emit(2, "Babak II: Ritual Pemutus Kutukan (02.30 - 04.00)")
 	SignalBus.objective_updated.emit(
 		"ritual_items",
@@ -843,10 +960,6 @@ func start_furnace_burning() -> void:
 
 func _on_torch_lit(_torch_id: int, total_lit: int, _req: int) -> void:
 	torches_lit = total_lit
-	if total_lit == REQUIRED_TORCHES - 1:
-		SignalBus.dialog_requested.emit("Ayo semangat, sedikit lagi! Obor penolak bala sudah 4/5 menyala.", 3.2)
-	elif total_lit >= REQUIRED_TORCHES:
-		SignalBus.dialog_requested.emit("Kelima obor telah menyala. Sekarang amankan pintu rumah!", 3.2)
 	if current_act == Act.BABAK_1:
 		SignalBus.objective_updated.emit(
 			"torches",
@@ -857,13 +970,14 @@ func _on_torch_lit(_torch_id: int, total_lit: int, _req: int) -> void:
 		)
 	if current_act == Act.BABAK_1 and torches_lit >= REQUIRED_TORCHES and doors_barricaded >= REQUIRED_BARRICADES:
 		_enter_act_2()
+		return
+	if total_lit == REQUIRED_TORCHES - 1:
+		SignalBus.dialog_requested.emit("Ayo semangat, sedikit lagi! Obor penolak bala sudah 4/5 menyala.", 3.2)
+	elif total_lit >= REQUIRED_TORCHES:
+		SignalBus.dialog_requested.emit("Kelima obor telah menyala. Sekarang amankan pintu rumah!", 3.2)
 
 func record_door_barricaded() -> void:
 	doors_barricaded += 1
-	if doors_barricaded == REQUIRED_BARRICADES - 1:
-		SignalBus.dialog_requested.emit("Ayo semangat, sedikit lagi! Dua dari tiga pintu sudah diamankan.", 3.2)
-	elif doors_barricaded >= REQUIRED_BARRICADES:
-		SignalBus.dialog_requested.emit("Semua pintu penting sudah dibarikade. Persiapkan diri untuk ritual.", 3.2)
 	if current_act == Act.BABAK_1:
 		SignalBus.objective_updated.emit(
 			"barricades",
@@ -874,6 +988,11 @@ func record_door_barricaded() -> void:
 		)
 	if current_act == Act.BABAK_1 and torches_lit >= REQUIRED_TORCHES and doors_barricaded >= REQUIRED_BARRICADES:
 		_enter_act_2()
+		return
+	if doors_barricaded == REQUIRED_BARRICADES - 1:
+		SignalBus.dialog_requested.emit("Ayo semangat, sedikit lagi! Dua dari tiga pintu sudah diamankan.", 3.2)
+	elif doors_barricaded >= REQUIRED_BARRICADES:
+		SignalBus.dialog_requested.emit("Semua pintu penting sudah dibarikade. Nyalakan seluruh obor penolak bala!", 3.2)
 
 func record_door_unbarricaded() -> void:
 	doors_barricaded = maxi(0, doors_barricaded - 1)

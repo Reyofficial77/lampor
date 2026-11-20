@@ -1,13 +1,19 @@
 class_name MainMenu
 extends Control
 
-const GAME_VERSION: String = "v1.2.1"
-const ACCENT: Color = Color(0.72, 0.12, 0.14, 1.0)
-const TEXT_MAIN: Color = Color(0.93, 0.91, 0.88, 1.0)
-const TEXT_MUTED: Color = Color(0.63, 0.61, 0.60, 1.0)
+const GAME_VERSION: String = "v1.2.2"
+const ACCENT: Color = Color(0.76, 0.10, 0.12, 1.0)
+const ACCENT_GOLD: Color = Color(0.84, 0.68, 0.34, 1.0)
+const TEXT_MAIN: Color = Color(0.94, 0.90, 0.85, 1.0)
+const TEXT_MUTED: Color = Color(0.68, 0.60, 0.58, 1.0)
 
+var horror_backdrop: Control
+var menu_anim_time: float = 0.0
 var main_center: CenterContainer
+var main_card: PanelContainer
+var main_card_margin: MarginContainer
 var main_content: VBoxContainer
+var ritual_header_label: Label
 var title_label: Label
 var subtitle_label: Label
 var version_label: Label
@@ -16,6 +22,7 @@ var exit_button: Button
 var continue_button: Button
 var modal_overlays: Array[ColorRect] = []
 var modal_panels: Array[PanelContainer] = []
+var difficulty_buttons: Array[Button] = []
 var warning_overlay: ColorRect
 var difficulty_overlay: ColorRect
 var settings_overlay: ColorRect
@@ -34,6 +41,7 @@ var fix_notes_button: Button
 var fix_notes_overlay: ColorRect
 var fix_notes_scroll: ScrollContainer
 var fix_notes_view: RichTextLabel
+var fix_notes_hint_label: Label
 var update_restart_overlay: ColorRect
 var update_restart_status: Label
 var nightmare_button: Button
@@ -57,75 +65,131 @@ func _ready() -> void:
 	UpdateManager.update_installed.connect(_on_update_installed)
 	UpdateManager.update_failed.connect(_on_update_failed)
 	UpdateManager.up_to_date.connect(_on_update_up_to_date)
+	UpdateManager.fix_notes_updated.connect(_on_fix_notes_updated)
 	get_viewport().size_changed.connect(_apply_layout)
 	_apply_layout()
 	call_deferred("_check_for_game_updates")
 
+func _process(delta: float) -> void:
+	menu_anim_time += delta
+	if horror_backdrop:
+		horror_backdrop.queue_redraw()
+	if title_label:
+		var pulse: float = 0.5 + 0.5 * sin(menu_anim_time * 2.2)
+		var flicker: float = 0.92 if sin(menu_anim_time * 17.0) > -0.85 else 0.72
+		title_label.modulate = Color(1.0, lerpf(0.88, 1.0, pulse) * flicker, lerpf(0.88, 1.0, pulse) * flicker, 1.0)
+
 func _build_menu() -> void:
 	var background := ColorRect.new()
-	background.color = Color(0.018, 0.018, 0.025, 1.0)
+	background.color = Color(0.012, 0.008, 0.014, 1.0)
 	background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(background)
 
+	horror_backdrop = Control.new()
+	horror_backdrop.name = "HorrorBackdrop"
+	horror_backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	horror_backdrop.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	horror_backdrop.draw.connect(_draw_horror_backdrop)
+	add_child(horror_backdrop)
+
 	var top_glow := ColorRect.new()
-	top_glow.color = Color(0.16, 0.025, 0.035, 0.32)
+	top_glow.color = Color(0.45, 0.04, 0.06, 0.55)
 	top_glow.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
-	top_glow.offset_bottom = 2.0
+	top_glow.offset_bottom = 3.0
 	top_glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(top_glow)
+
+	var bottom_glow := ColorRect.new()
+	bottom_glow.color = Color(0.32, 0.03, 0.05, 0.45)
+	bottom_glow.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	bottom_glow.offset_top = -2.0
+	bottom_glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(bottom_glow)
 
 	main_center = CenterContainer.new()
 	main_center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	main_center.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(main_center)
 
+	main_card = PanelContainer.new()
+	main_card.name = "MainHorrorCard"
+	var card_style := _panel_style()
+	card_style.bg_color = Color(0.022, 0.012, 0.016, 0.86)
+	card_style.border_color = Color(0.52, 0.10, 0.12, 0.92)
+	card_style.border_width_left = 2
+	card_style.border_width_right = 2
+	card_style.border_width_top = 2
+	card_style.border_width_bottom = 3
+	card_style.shadow_color = Color(0.0, 0.0, 0.0, 0.78)
+	card_style.shadow_size = 16
+	main_card.add_theme_stylebox_override("panel", card_style)
+	main_center.add_child(main_card)
+
+	main_card_margin = MarginContainer.new()
+	main_card_margin.add_theme_constant_override("margin_left", 24)
+	main_card_margin.add_theme_constant_override("margin_right", 24)
+	main_card_margin.add_theme_constant_override("margin_top", 18)
+	main_card_margin.add_theme_constant_override("margin_bottom", 18)
+	main_card.add_child(main_card_margin)
+
 	main_content = VBoxContainer.new()
 	main_content.alignment = BoxContainer.ALIGNMENT_CENTER
-	main_content.add_theme_constant_override("separation", 12)
+	main_content.add_theme_constant_override("separation", 10)
 	main_content.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	main_center.add_child(main_content)
+	main_card_margin.add_child(main_content)
 
-	title_label = _make_label("LAMPOR", 58, Color(0.78, 0.16, 0.18, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
-	title_label.add_theme_constant_override("outline_size", 10)
-	title_label.add_theme_color_override("font_outline_color", Color(0.02, 0.0, 0.0, 1.0))
+	ritual_header_label = _make_label("☠  KUTUKAN DESA TERKUTUK  ☠", 11, Color(0.76, 0.24, 0.24, 0.95), HORIZONTAL_ALIGNMENT_CENTER)
+	main_content.add_child(ritual_header_label)
+
+	title_label = _make_label("LAMPOR", 58, Color(0.86, 0.12, 0.14, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
+	title_label.add_theme_constant_override("outline_size", 12)
+	title_label.add_theme_color_override("font_outline_color", Color(0.03, 0.0, 0.0, 1.0))
 	main_content.add_child(title_label)
 
-	subtitle_label = _make_label("MALAM JAHANAM\nJangan menatap keranda yang melintas.", 17, TEXT_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	subtitle_label = _make_label("MALAM JAHANAM\n\"Jangan menatap keranda hijau yang melintas di balik kabut.\"", 15, TEXT_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
 	main_content.add_child(subtitle_label)
 
-	var wins_label := _make_label("", 13, Color(0.78, 0.67, 0.42, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
+	var divider := HSeparator.new()
+	var div_style := StyleBoxFlat.new()
+	div_style.bg_color = Color(0.46, 0.10, 0.12, 0.75)
+	div_style.content_margin_top = 1
+	div_style.content_margin_bottom = 1
+	divider.add_theme_stylebox_override("separator", div_style)
+	main_content.add_child(divider)
+
+	var wins_label := _make_label("", 13, Color(0.84, 0.68, 0.36, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
 	wins_label.name = "WinsLabel"
-	wins_label.text = "Kemenangan tersimpan: %d" % GameManager.total_wins
+	wins_label.text = "🕯 Malam Terlewati: %d Kemenangan" % GameManager.total_wins
 	main_content.add_child(wins_label)
-	currency_label = _make_label("Koin Emas: %d  ·  Nyawa tambahan: %d" % [GameManager.coins, GameManager.extra_lives], 13, Color(0.9, 0.76, 0.42, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
+	currency_label = _make_label("🪙 Koin Emas: %d   ·   🩸 Nyawa Cadangan: %d" % [GameManager.coins, GameManager.extra_lives], 13, Color(0.92, 0.76, 0.42, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
 	currency_label.name = "CurrencyLabel"
 	main_content.add_child(currency_label)
 
 	var menu_buttons := VBoxContainer.new()
 	menu_buttons.name = "MenuButtons"
-	menu_buttons.add_theme_constant_override("separation", 10)
+	menu_buttons.add_theme_constant_override("separation", 8)
 	main_content.add_child(menu_buttons)
-	continue_button = _make_button("LANJUTKAN PERMAINAN", true)
+	continue_button = _make_button("🩸  LANJUTKAN MALAM TERSIMPAN", true)
 	continue_button.visible = GameManager.has_saved_run()
 	continue_button.pressed.connect(_on_continue_pressed)
 	menu_buttons.add_child(continue_button)
-	var start_button := _make_button("MULAI PERMAINAN")
+	var start_button := _make_button("⚰️  MULAI PERMAINAN", true)
 	start_button.pressed.connect(func() -> void: warning_overlay.visible = true)
 	menu_buttons.add_child(start_button)
-	var shop_button := _make_button("TOKO ITEM")
+	var shop_button := _make_button("🕯️  TOKO BEKAL RITUAL")
 	shop_button.pressed.connect(func() -> void:
 		_refresh_shop_display()
 		shop_overlay.visible = true
 	)
 	menu_buttons.add_child(shop_button)
-	var settings_button := _make_button("PENGATURAN")
+	var settings_button := _make_button("⚙️  PENGATURAN & PANDUAN")
 	settings_button.pressed.connect(func() -> void: settings_overlay.visible = true)
 	menu_buttons.add_child(settings_button)
-	fix_notes_button = _make_button("CATATAN PEMBARUAN")
+	fix_notes_button = _make_button("📜  CATATAN PEMBARUAN")
 	fix_notes_button.pressed.connect(_show_fix_notes)
 	menu_buttons.add_child(fix_notes_button)
-	var credits_button := _make_button("HAK CIPTA")
+	var credits_button := _make_button("☠️  HAK CIPTA")
 	credits_button.pressed.connect(func() -> void: credits_overlay.visible = true)
 	menu_buttons.add_child(credits_button)
 
@@ -197,30 +261,36 @@ func _build_warning_modal() -> void:
 	buttons.add_child(continue_button)
 
 func _build_difficulty_modal() -> void:
-	var modal: Dictionary = _create_modal("PILIH TINGKAT KESULITAN")
+	var modal: Dictionary = _create_modal("⚰️  PILIH TINGKAT KESULITAN")
 	difficulty_overlay = modal["overlay"] as ColorRect
 	var body: VBoxContainer = modal["body"] as VBoxContainer
-	var hint := _make_label("Semakin tinggi kesulitan, semakin cepat waktu dan agresif Lampor.", 13, TEXT_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	var hint := _make_label("Semakin tinggi tingkat kutukan, semakin cepat malam berlalu dan semakin beringas Lampor memburu.", 12, TEXT_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_child(hint)
-	var easy := _make_button("EASY  ·  1 menit = 4,5 detik")
+	difficulty_buttons.clear()
+	var easy := _make_button("🕯️  EASY  ·  Malam Sunyi (1 mnt = 4,5 dtk)")
 	easy.pressed.connect(func() -> void: _start_with_difficulty(GameManager.Difficulty.EASY))
 	body.add_child(easy)
-	var normal := _make_button("NORMAL  ·  1 menit = 3 detik")
+	difficulty_buttons.append(easy)
+	var normal := _make_button("🌑  NORMAL  ·  Malam Keramat (1 mnt = 3 dtk)")
 	normal.pressed.connect(func() -> void: _start_with_difficulty(GameManager.Difficulty.NORMAL))
 	body.add_child(normal)
-	var hard := _make_button("HARD  ·  1 menit = 1 detik")
+	difficulty_buttons.append(normal)
+	var hard := _make_button("🩸  HARD  ·  Malam Jahanam (1 mnt = 1 dtk)")
 	hard.pressed.connect(func() -> void: _start_with_difficulty(GameManager.Difficulty.HARD))
 	body.add_child(hard)
-	nightmare_button = _make_button("NIGHTMARE  ·  1 menit = 0,5 detik", true)
+	difficulty_buttons.append(hard)
+	nightmare_button = _make_button("☠️  NIGHTMARE  ·  Kutukan Keranda (1 mnt = 0,5 dtk)", true)
 	nightmare_button.pressed.connect(func() -> void: _start_with_difficulty(GameManager.Difficulty.NIGHTMARE))
 	body.add_child(nightmare_button)
+	difficulty_buttons.append(nightmare_button)
 	nightmare_lock_label = _make_label("", 12, TEXT_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
 	nightmare_lock_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_child(nightmare_lock_label)
 	var back := _make_button("KEMBALI")
 	back.pressed.connect(func() -> void: difficulty_overlay.visible = false)
 	body.add_child(back)
+	difficulty_buttons.append(back)
 
 func _build_settings_modal() -> void:
 	var modal: Dictionary = _create_modal("PENGATURAN & PANDUAN")
@@ -406,11 +476,11 @@ func _add_shop_offer(parent: VBoxContainer, title_text: String, description: Str
 
 func _refresh_currency_display() -> void:
 	if currency_label:
-		currency_label.text = "Koin Emas: %d  ·  Nyawa tambahan: %d" % [GameManager.coins, GameManager.extra_lives]
+		currency_label.text = "🪙 Koin Emas: %d   ·   🩸 Nyawa Cadangan: %d" % [GameManager.coins, GameManager.extra_lives]
 	if main_content and is_instance_valid(main_content):
 		var wins: Label = main_content.get_node_or_null("WinsLabel") as Label
 		if wins:
-			wins.text = "Kemenangan tersimpan: %d" % GameManager.total_wins
+			wins.text = "🕯 Malam Terlewati: %d Kemenangan" % GameManager.total_wins
 
 func _refresh_shop_display() -> void:
 	if shop_balance_label:
@@ -542,9 +612,9 @@ func _build_fix_notes_modal() -> void:
 	var modal: Dictionary = _create_modal("CATATAN PEMBARUAN")
 	fix_notes_overlay = modal["overlay"] as ColorRect
 	var body: VBoxContainer = modal["body"] as VBoxContainer
-	var hint := _make_label("Catatan perubahan dari FIX_NOTES.md pada versi game/repository.", 11, TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT)
-	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	body.add_child(hint)
+	fix_notes_hint_label = _make_label("Catatan perubahan dari FIX_NOTES.md pada versi game & commit terbaru repository.", 11, TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT)
+	fix_notes_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.add_child(fix_notes_hint_label)
 	fix_notes_scroll = ScrollContainer.new()
 	fix_notes_scroll.custom_minimum_size = Vector2(0, 320)
 	fix_notes_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -574,6 +644,17 @@ func _show_fix_notes() -> void:
 	fix_notes_view.parse_bbcode(_markdown_to_bbcode(markdown))
 	fix_notes_view.scroll_to_line(0)
 	fix_notes_overlay.visible = true
+	UpdateManager.fetch_latest_fix_notes(true)
+
+func _on_fix_notes_updated(markdown: String, commit_sha: String) -> void:
+	if fix_notes_hint_label and not commit_sha.is_empty():
+		var short_ref: String = commit_sha.substr(0, 10) if commit_sha.length() > 10 else commit_sha
+		fix_notes_hint_label.text = "Menampilkan FIX_NOTES.md terbaru dari repository (%s)." % short_ref
+	if fix_notes_view and fix_notes_overlay and fix_notes_overlay.visible:
+		var clean_md: String = UpdateManager.get_fix_notes_markdown()
+		if clean_md.strip_edges().is_empty():
+			clean_md = markdown
+		fix_notes_view.parse_bbcode(_markdown_to_bbcode(clean_md))
 
 func _markdown_to_bbcode(markdown: String) -> String:
 	var output := PackedStringArray()
@@ -723,59 +804,148 @@ func _make_label(text_value: String, font_size: int, color: Color, alignment: in
 	label.add_theme_font_size_override("font_size", font_size)
 	return label
 
+func _draw_horror_backdrop() -> void:
+	if not horror_backdrop:
+		return
+	var s: Vector2 = horror_backdrop.size
+	if s.x <= 0.0 or s.y <= 0.0:
+		return
+
+	var moon_pos := Vector2(s.x * 0.18, s.y * 0.22)
+	var moon_r: float = minf(s.x, s.y) * 0.11
+	horror_backdrop.draw_circle(moon_pos, moon_r * 2.4, Color(0.28, 0.02, 0.04, 0.12))
+	horror_backdrop.draw_circle(moon_pos, moon_r * 1.5, Color(0.42, 0.04, 0.06, 0.18))
+	horror_backdrop.draw_circle(moon_pos, moon_r, Color(0.58, 0.09, 0.09, 0.34))
+
+	var float_x: float = s.x * 0.80 + sin(menu_anim_time * 0.7) * 18.0
+	var float_y: float = s.y * 0.24 + cos(menu_anim_time * 1.4) * 9.0
+	var kw: float = minf(s.x, s.y) * 0.18
+	var kh: float = kw * 0.44
+	horror_backdrop.draw_circle(Vector2(float_x, float_y), kw * 0.9, Color(0.03, 0.28, 0.11, 0.16))
+	horror_backdrop.draw_rect(Rect2(float_x - kw * 0.72, float_y + kh * 0.36, kw * 1.44, 3.0), Color(0.35, 0.32, 0.28, 0.55))
+	var keranda_poly := PackedVector2Array([
+		Vector2(float_x - kw * 0.50, float_y + kh * 0.36),
+		Vector2(float_x - kw * 0.50, float_y - kh * 0.12),
+		Vector2(float_x - kw * 0.38, float_y - kh * 0.46),
+		Vector2(float_x + kw * 0.38, float_y - kh * 0.46),
+		Vector2(float_x + kw * 0.50, float_y - kh * 0.12),
+		Vector2(float_x + kw * 0.50, float_y + kh * 0.36)
+	])
+	horror_backdrop.draw_colored_polygon(keranda_poly, Color(0.03, 0.24, 0.10, 0.78))
+	horror_backdrop.draw_rect(Rect2(float_x - kw * 0.50, float_y + kh * 0.22, kw, 3.5), Color(0.85, 0.68, 0.20, 0.65))
+	var eye_alpha: float = 0.55 + 0.40 * sin(menu_anim_time * 3.8)
+	horror_backdrop.draw_circle(Vector2(float_x - kw * 0.36, float_y + kh * 0.04), 3.2, Color(1.0, 0.12, 0.10, eye_alpha))
+	horror_backdrop.draw_circle(Vector2(float_x - kw * 0.28, float_y + kh * 0.04), 3.2, Color(1.0, 0.12, 0.10, eye_alpha))
+
+	var horizon_y: float = s.y * 0.84
+	horror_backdrop.draw_rect(Rect2(0.0, horizon_y, s.x, s.y - horizon_y), Color(0.008, 0.005, 0.009, 0.96))
+	var roof_left := PackedVector2Array([
+		Vector2(s.x * 0.04, horizon_y),
+		Vector2(s.x * 0.09, horizon_y - 46.0),
+		Vector2(s.x * 0.18, horizon_y - 46.0),
+		Vector2(s.x * 0.23, horizon_y)
+	])
+	horror_backdrop.draw_colored_polygon(roof_left, Color(0.015, 0.01, 0.014, 0.92))
+	for i: int in range(5):
+		var tx: float = s.x * 0.74 + float(i) * 32.0
+		var th: float = 22.0 + float(i % 2) * 7.0
+		horror_backdrop.draw_rect(Rect2(tx, horizon_y - th, 11.0, th), Color(0.03, 0.02, 0.025, 0.9))
+
+	for i: int in range(5):
+		var mist_y: float = horizon_y - 24.0 + float(i) * 10.0
+		var mist_x: float = fmod(menu_anim_time * (12.0 + float(i) * 4.0) + float(i) * 180.0, s.x + 260.0) - 260.0
+		horror_backdrop.draw_rect(Rect2(mist_x, mist_y, 320.0, 14.0), Color(0.24, 0.03, 0.05, 0.08))
+
+	for i: int in range(18):
+		var seed_f: float = float(i) * 37.17
+		var px: float = fmod(seed_f * 29.0 + sin(menu_anim_time * 0.9 + seed_f) * 26.0, s.x)
+		var py: float = s.y - fmod(menu_anim_time * (16.0 + float(i % 5) * 5.0) + seed_f * 19.0, s.y)
+		var ember_col: Color = Color(0.85, 0.15, 0.12, 0.32) if (i % 3 != 0) else Color(0.20, 0.72, 0.35, 0.24)
+		horror_backdrop.draw_circle(Vector2(px, py), 1.8 + float(i % 2), ember_col)
+
+	horror_backdrop.draw_rect(Rect2(0.0, 0.0, s.x, 28.0), Color(0.0, 0.0, 0.0, 0.55))
+	horror_backdrop.draw_rect(Rect2(0.0, s.y - 28.0, s.x, 28.0), Color(0.0, 0.0, 0.0, 0.65))
+	horror_backdrop.draw_rect(Rect2(0.0, 0.0, 24.0, s.y), Color(0.0, 0.0, 0.0, 0.45))
+	horror_backdrop.draw_rect(Rect2(s.x - 24.0, 0.0, 24.0, s.y), Color(0.0, 0.0, 0.0, 0.45))
+
 func _make_button(text_value: String, primary: bool = false) -> Button:
 	var button := Button.new()
 	button.text = text_value
-	button.custom_minimum_size = Vector2(0, 48)
+	button.custom_minimum_size = Vector2(0, 46)
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	button.add_theme_font_size_override("font_size", 15)
-	button.add_theme_color_override("font_color", TEXT_MAIN)
-	button.add_theme_color_override("font_hover_color", Color.WHITE)
+	button.add_theme_color_override("font_color", TEXT_MAIN if not primary else Color(1.0, 0.94, 0.88, 1.0))
+	button.add_theme_color_override("font_hover_color", Color(1.0, 0.96, 0.86, 1.0))
 	button.add_theme_color_override("font_pressed_color", Color.WHITE)
+	button.add_theme_color_override("font_disabled_color", Color(0.45, 0.38, 0.38, 0.7))
 	var normal := StyleBoxFlat.new()
-	normal.bg_color = Color(0.12, 0.105, 0.11, 0.96) if not primary else Color(0.42, 0.065, 0.085, 1.0)
+	normal.bg_color = Color(0.075, 0.035, 0.045, 0.96) if not primary else Color(0.38, 0.045, 0.065, 0.98)
+	normal.border_width_left = 3
+	normal.border_width_right = 3
+	normal.border_width_top = 1
 	normal.border_width_bottom = 2
-	normal.border_color = Color(0.34, 0.09, 0.1, 1.0) if not primary else ACCENT
-	normal.corner_radius_top_left = 5
-	normal.corner_radius_top_right = 5
-	normal.corner_radius_bottom_left = 5
-	normal.corner_radius_bottom_right = 5
+	normal.border_color = Color(0.42, 0.10, 0.12, 0.95) if not primary else ACCENT
+	normal.corner_radius_top_left = 4
+	normal.corner_radius_top_right = 4
+	normal.corner_radius_bottom_left = 4
+	normal.corner_radius_bottom_right = 4
+	normal.shadow_color = Color(0.0, 0.0, 0.0, 0.55)
+	normal.shadow_size = 4
 	var hover := normal.duplicate() as StyleBoxFlat
-	hover.bg_color = Color(0.22, 0.07, 0.085, 1.0) if not primary else Color(0.62, 0.09, 0.12, 1.0)
+	hover.bg_color = Color(0.22, 0.05, 0.07, 1.0) if not primary else Color(0.58, 0.07, 0.10, 1.0)
+	hover.border_color = ACCENT_GOLD if primary else ACCENT
+	var disabled_style := normal.duplicate() as StyleBoxFlat
+	disabled_style.bg_color = Color(0.05, 0.04, 0.045, 0.75)
+	disabled_style.border_color = Color(0.22, 0.14, 0.15, 0.6)
 	button.add_theme_stylebox_override("normal", normal)
 	button.add_theme_stylebox_override("hover", hover)
 	button.add_theme_stylebox_override("pressed", hover)
 	button.add_theme_stylebox_override("focus", hover)
+	button.add_theme_stylebox_override("disabled", disabled_style)
 	return button
 
 func _panel_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.045, 0.04, 0.045, 0.98)
-	style.border_width_left = 1
-	style.border_width_top = 1
-	style.border_width_right = 1
-	style.border_width_bottom = 2
-	style.border_color = Color(0.35, 0.11, 0.12, 0.95)
-	style.corner_radius_top_left = 8
-	style.corner_radius_top_right = 8
-	style.corner_radius_bottom_left = 8
-	style.corner_radius_bottom_right = 8
+	style.bg_color = Color(0.028, 0.015, 0.020, 0.98)
+	style.border_width_left = 2
+	style.border_width_top = 2
+	style.border_width_right = 2
+	style.border_width_bottom = 3
+	style.border_color = Color(0.48, 0.10, 0.12, 0.95)
+	style.corner_radius_top_left = 6
+	style.corner_radius_top_right = 6
+	style.corner_radius_bottom_left = 6
+	style.corner_radius_bottom_right = 6
+	style.shadow_color = Color(0.0, 0.0, 0.0, 0.75)
+	style.shadow_size = 12
 	return style
 
 func _apply_layout() -> void:
 	var view_size: Vector2 = get_viewport_rect().size
 	var narrow: bool = view_size.x < 700.0
-	var short_screen: bool = view_size.y < 520.0
-	title_label.add_theme_font_size_override("font_size", 36 if short_screen else (43 if narrow else 58))
-	subtitle_label.add_theme_font_size_override("font_size", 12 if short_screen else (14 if narrow else 17))
-	main_content.add_theme_constant_override("separation", 7 if short_screen else 12)
+	var short_screen: bool = view_size.y < 560.0
+	title_label.add_theme_font_size_override("font_size", 34 if short_screen else (42 if narrow else 56))
+	subtitle_label.add_theme_font_size_override("font_size", 11 if short_screen else (13 if narrow else 15))
+	if ritual_header_label:
+		ritual_header_label.visible = not short_screen
+	main_content.add_theme_constant_override("separation", 6 if short_screen else 9)
+	if main_card_margin:
+		var h_pad: int = 16 if narrow else 26
+		var v_pad: int = 12 if short_screen else 18
+		main_card_margin.add_theme_constant_override("margin_left", h_pad)
+		main_card_margin.add_theme_constant_override("margin_right", h_pad)
+		main_card_margin.add_theme_constant_override("margin_top", v_pad)
+		main_card_margin.add_theme_constant_override("margin_bottom", v_pad)
 	var menu_buttons: VBoxContainer = main_content.get_node("MenuButtons") as VBoxContainer
-	menu_buttons.add_theme_constant_override("separation", 6 if short_screen else 10)
+	menu_buttons.add_theme_constant_override("separation", 5 if short_screen else 8)
 	for button: Node in menu_buttons.get_children():
-		(button as Button).custom_minimum_size.y = 40 if short_screen else 48
+		(button as Button).custom_minimum_size.y = 38 if short_screen else 45
+	for d_btn: Button in difficulty_buttons:
+		if is_instance_valid(d_btn):
+			d_btn.custom_minimum_size.y = 38 if short_screen else 45
 	var wins_label: Label = main_content.get_node("WinsLabel") as Label
 	wins_label.visible = not short_screen
-	main_content.custom_minimum_size = Vector2(minf(420.0, view_size.x - 42.0), main_content.custom_minimum_size.y)
+	main_content.custom_minimum_size = Vector2(minf(420.0, view_size.x - 56.0), main_content.custom_minimum_size.y)
 	copyright_label.offset_left = 16 if narrow else 24
 	copyright_label.offset_top = -38 if narrow else -42
 	copyright_label.offset_right = minf(view_size.x - 180.0, 360.0)
@@ -797,11 +967,13 @@ func _apply_layout() -> void:
 	version_label.offset_right = -14 if narrow else -24
 	version_label.offset_bottom = 38 if narrow else 46
 	for panel: PanelContainer in modal_panels:
-		panel.custom_minimum_size = Vector2(maxf(280.0, minf(540.0, view_size.x - 28.0)), panel.custom_minimum_size.y)
+		panel.custom_minimum_size = Vector2(maxf(280.0, minf(520.0, view_size.x - 28.0)), panel.custom_minimum_size.y)
 	if settings_scroll:
 		settings_scroll.custom_minimum_size.y = maxf(120.0, minf(290.0, view_size.y - 310.0))
 	if fix_notes_scroll:
 		fix_notes_scroll.custom_minimum_size.y = maxf(150.0, minf(380.0, view_size.y - 230.0))
+	if horror_backdrop:
+		horror_backdrop.queue_redraw()
 
 func _update_nightmare_status() -> void:
 	var unlocked: bool = GameManager.is_nightmare_unlocked()

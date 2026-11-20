@@ -1,6 +1,8 @@
 class_name HUD
 extends CanvasLayer
 
+const INVENTORY_SLOT_UI_SCRIPT = preload("res://scripts/ui/InventorySlotUI.gd")
+
 @onready var interaction_label: Label = $CenterContainer/InteractionLabel
 @onready var act_banner: Label = $CenterContainer/ActBanner
 @onready var clock_label: Label = $TopLeft/VBox/ClockLabel
@@ -71,12 +73,16 @@ var editor_drag_offset: Vector2 = Vector2.ZERO
 var editor_hint_label: Label
 var editor_done_button: Button
 var descent_camera_tween: Tween
+var top_left_panel: PanelContainer = null
+var bottom_left_panel: PanelContainer = null
+var objectives_header_label: Label = null
+var last_synced_battery_pct: int = -1
 
 # Inventory Overlay Nodes
 var inventory_overlay: ColorRect
 var inventory_modal_panel: PanelContainer
-var inventory_storage_slots: Array[InventorySlotUI] = []
-var inventory_hotbar_slots: Array[InventorySlotUI] = []
+var inventory_storage_slots: Array = []
+var inventory_hotbar_slots: Array = []
 var selected_swap_slot: int = -1
 var cached_inventory_slots: Array = []
 var hud_bag_button: Button = null
@@ -104,6 +110,7 @@ func _ready() -> void:
 	interaction_label.text = ""
 	stare_warning.visible = false
 	jumpscare_rect.visible = false
+	_style_horror_hud_containers()
 	_build_jumpscare_face()
 	_build_dialog_label()
 	_build_mission_card()
@@ -111,6 +118,7 @@ func _ready() -> void:
 	_build_desktop_hints()
 	_build_inventory_overlay()
 	_build_hud_bag_button()
+	_initialize_objectives_immediate()
 	SettingsManager.call_deferred("_apply_brightness_overlay")
 	if is_instance_valid(GameManager.player_character):
 		SignalBus.flashlight_battery_changed.emit(GameManager.player_character.flashlight_battery, 100.0)
@@ -137,6 +145,96 @@ func _ready() -> void:
 	call_deferred("_apply_mobile_hud_layout")
 	get_viewport().size_changed.connect(_apply_overlay_layouts)
 	call_deferred("_apply_overlay_layouts")
+
+func _style_horror_hud_containers() -> void:
+	var tl_vbox: VBoxContainer = top_left.get_node_or_null("VBox") as VBoxContainer
+	if tl_vbox and top_left_panel == null:
+		top_left.remove_child(tl_vbox)
+		top_left_panel = PanelContainer.new()
+		top_left_panel.name = "HorrorObjectivePanel"
+		top_left_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var tl_style := StyleBoxFlat.new()
+		tl_style.bg_color = Color(0.022, 0.010, 0.014, 0.84)
+		tl_style.border_color = Color(0.54, 0.10, 0.12, 0.90)
+		tl_style.border_width_left = 3
+		tl_style.border_width_top = 1
+		tl_style.border_width_right = 1
+		tl_style.border_width_bottom = 2
+		tl_style.set_corner_radius_all(5)
+		tl_style.content_margin_left = 12.0
+		tl_style.content_margin_right = 12.0
+		tl_style.content_margin_top = 8.0
+		tl_style.content_margin_bottom = 10.0
+		tl_style.shadow_color = Color(0.0, 0.0, 0.0, 0.65)
+		tl_style.shadow_size = 8
+		top_left_panel.add_theme_stylebox_override("panel", tl_style)
+		top_left.add_child(top_left_panel)
+		top_left_panel.add_child(tl_vbox)
+
+		objectives_header_label = Label.new()
+		objectives_header_label.name = "ObjectivesHeader"
+		objectives_header_label.text = "☠ OBJEKTIF MALAM INI"
+		objectives_header_label.add_theme_font_size_override("font_size", 11 if _is_touch_device() else 12)
+		objectives_header_label.add_theme_color_override("font_color", Color(0.86, 0.32, 0.30, 0.96))
+		objectives_header_label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 1.0))
+		objectives_header_label.add_theme_constant_override("outline_size", 3)
+		tl_vbox.add_child(objectives_header_label)
+		tl_vbox.move_child(objectives_header_label, objectives_container.get_index())
+
+	var bl_vbox: VBoxContainer = bottom_left.get_node_or_null("VBox") as VBoxContainer
+	if bl_vbox and bottom_left_panel == null:
+		bottom_left.remove_child(bl_vbox)
+		bottom_left_panel = PanelContainer.new()
+		bottom_left_panel.name = "HorrorStatsPanel"
+		bottom_left_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var bl_style := StyleBoxFlat.new()
+		bl_style.bg_color = Color(0.022, 0.010, 0.014, 0.82)
+		bl_style.border_color = Color(0.48, 0.10, 0.12, 0.86)
+		bl_style.border_width_left = 2
+		bl_style.border_width_top = 1
+		bl_style.border_width_right = 2
+		bl_style.border_width_bottom = 2
+		bl_style.set_corner_radius_all(5)
+		bl_style.content_margin_left = 10.0
+		bl_style.content_margin_right = 10.0
+		bl_style.content_margin_top = 7.0
+		bl_style.content_margin_bottom = 7.0
+		bottom_left_panel.add_theme_stylebox_override("panel", bl_style)
+		bottom_left.add_child(bottom_left_panel)
+		bottom_left_panel.add_child(bl_vbox)
+
+	for slot_node: Node in slots_container.get_children():
+		if slot_node is PanelContainer:
+			var panel: PanelContainer = slot_node as PanelContainer
+			panel.clip_contents = true
+			var item_lbl: Label = panel.get_node_or_null("VBox/ItemName") as Label
+			if item_lbl:
+				item_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+				item_lbl.clip_text = true
+				item_lbl.max_lines_visible = 2
+				item_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			var key_lbl: Label = panel.get_node_or_null("VBox/Key") as Label
+			if key_lbl:
+				key_lbl.add_theme_color_override("font_color", Color(0.84, 0.68, 0.38, 0.95))
+
+func _initialize_objectives_immediate() -> void:
+	var diff_name: String = GameManager.get_difficulty_name(GameManager.selected_difficulty)
+	var time_str: String = "%02d:%02d" % [GameManager.current_hour, GameManager.current_minute]
+	clock_label.text = "🕒 " + time_str + " WIB  [" + diff_name + "]"
+	clock_label.add_theme_color_override("font_color", Color(0.95, 0.88, 0.78, 1.0))
+	act_label.text = GameManager.get_current_act_title()
+	act_label.add_theme_color_override("font_color", Color(0.92, 0.70, 0.30, 1.0))
+	_populate_current_act_objectives()
+
+func _populate_current_act_objectives() -> void:
+	for obj: Dictionary in GameManager.get_current_objectives_data():
+		_on_objective_updated(
+			str(obj.get("id", "")),
+			str(obj.get("text", "")),
+			int(obj.get("current", 0)),
+			int(obj.get("required", 1)),
+			bool(obj.get("completed", false))
+		)
 
 func _connect_player() -> void:
 	var player: PlayerController = GameManager.player_character as PlayerController
@@ -395,10 +493,14 @@ func _on_barricade_warning(door_node: Node, player_node: Node) -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 func _on_confirm_barricade() -> void:
-	if pending_barricade_door and is_instance_valid(pending_barricade_door):
-		if pending_barricade_door.has_method("confirm_barricade"):
-			pending_barricade_door.confirm_barricade(pending_barricade_player)
+	var door_node: Node = pending_barricade_door
+	var player_node: Node = pending_barricade_player
+	# Tutup dialog & lepaskan pause terlebih dahulu agar jika pintu ini adalah
+	# barikade ke-3 yang memicu transisi Babak II & cutscene Lampor, SceneTree sudah tidak paused.
 	_close_barricade_dialog()
+	if door_node and is_instance_valid(door_node):
+		if door_node.has_method("confirm_barricade"):
+			door_node.confirm_barricade(player_node)
 
 func _on_cancel_barricade() -> void:
 	_close_barricade_dialog()
@@ -681,14 +783,19 @@ func _make_touch_button(text_value: String) -> Button:
 	button.text = text_value
 	button.focus_mode = Control.FOCUS_NONE
 	button.add_theme_font_size_override("font_size", 12)
-	button.add_theme_color_override("font_color", Color(1.0, 0.94, 0.9, 1.0))
+	button.add_theme_color_override("font_color", Color(0.96, 0.90, 0.82, 1.0))
+	button.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.95))
+	button.add_theme_constant_override("outline_size", 3)
 	var normal := StyleBoxFlat.new()
-	normal.bg_color = Color(0.08, 0.07, 0.08, 0.62)
-	normal.border_color = Color(0.76, 0.2, 0.22, 0.8)
+	normal.bg_color = Color(0.045, 0.018, 0.024, 0.76)
+	normal.border_color = Color(0.68, 0.14, 0.16, 0.88)
 	normal.set_border_width_all(2)
-	normal.set_corner_radius_all(34)
+	normal.set_corner_radius_all(36)
+	normal.shadow_color = Color(0.0, 0.0, 0.0, 0.55)
+	normal.shadow_size = 4
 	var pressed := normal.duplicate() as StyleBoxFlat
-	pressed.bg_color = Color(0.46, 0.07, 0.09, 0.88)
+	pressed.bg_color = Color(0.48, 0.06, 0.08, 0.92)
+	pressed.border_color = Color(0.92, 0.72, 0.30, 0.96)
 	button.add_theme_stylebox_override("normal", normal)
 	button.add_theme_stylebox_override("hover", pressed)
 	button.add_theme_stylebox_override("pressed", pressed)
@@ -700,96 +807,124 @@ func _layout_touch_controls() -> void:
 		return
 	var view_size: Vector2 = get_viewport().get_visible_rect().size
 	var compact: bool = view_size.x < 700.0
-	var joystick_size: float = (142.0 if compact else 168.0) * SettingsManager.mobile_joystick_scale
-	var button_size: float = (66.0 if compact else 86.0) * SettingsManager.mobile_button_scale
-	var default_joystick_position := Vector2(32.0, view_size.y - joystick_size - 100.0)
+	var joystick_size: float = (134.0 if compact else 154.0) * SettingsManager.mobile_joystick_scale
+	var button_size: float = (62.0 if compact else 72.0) * SettingsManager.mobile_button_scale
+	var util_size: float = (48.0 if compact else 52.0) * SettingsManager.mobile_button_scale
+	var default_joystick_position := Vector2(28.0, view_size.y - joystick_size - 78.0)
 	if SettingsManager.mobile_joystick_position.x >= 0.0:
 		joystick_base.position = SettingsManager.mobile_joystick_position * view_size
 	else:
 		joystick_base.position = default_joystick_position
 	joystick_base.size = Vector2(joystick_size, joystick_size)
-	var x_right: float = view_size.x - button_size - 18.0
-	var x_left: float = x_right - button_size - 30.0
-	var y_bottom: float = view_size.y - button_size - 100.0
-	var y_top: float = y_bottom - button_size - 30.0
+	joystick_base.position.x = clampf(joystick_base.position.x, 12.0, maxf(12.0, view_size.x * 0.35 - joystick_size))
+	joystick_base.position.y = clampf(joystick_base.position.y, 180.0, maxf(180.0, view_size.y - joystick_size - 16.0))
+
+	var btn_gap: float = 20.0
+	var x_right: float = view_size.x - button_size - 22.0
+	var x_left: float = x_right - button_size - btn_gap
+	var y_bottom: float = view_size.y - button_size - 82.0
+	var y_top: float = y_bottom - button_size - btn_gap
+
+	var stats_width: float = clampf(view_size.x * 0.21, 220.0, 254.0)
+	var bag_x: float = view_size.x - stats_width - 26.0 - util_size
+	var pause_x: float = bag_x - util_size - 14.0
 	var defaults: Array[Vector2] = [
 		Vector2(x_left, y_top),
 		Vector2(x_right, y_top),
 		Vector2(x_left, y_bottom),
 		Vector2(x_right, y_bottom),
-		Vector2(view_size.x - 150.0, 18.0),
-		Vector2(view_size.x - 78.0, 18.0)
+		Vector2(pause_x, 16.0),
+		Vector2(bag_x, 16.0)
 	]
+	var stats_forbidden := Rect2(view_size.x - stats_width - 18.0, 8.0, stats_width + 18.0, 112.0)
 	var saved_positions: Array = SettingsManager.mobile_button_positions
 	for i: int in range(touch_buttons.size()):
 		var button: Button = touch_buttons[i]
+		var target_size: Vector2 = Vector2(util_size, util_size) if i >= 4 else Vector2(button_size, button_size)
+		button.size = target_size
 		var button_position: Vector2 = defaults[i]
 		if saved_positions.size() == touch_buttons.size() and saved_positions[i] is Vector2:
-			button_position = saved_positions[i] * view_size
-		button.position = button_position
-		button.size = Vector2(button_size, button_size)
-		if i == 4:
-			button.position = Vector2(view_size.x - 150.0, 18.0) if saved_positions.size() != touch_buttons.size() else button_position
-			button.size = Vector2(56.0, 56.0) * SettingsManager.mobile_button_scale
-		elif i == 5:
-			button.position = Vector2(view_size.x - 78.0, 18.0) if saved_positions.size() != touch_buttons.size() else button_position
-			button.size = Vector2(56.0, 56.0) * SettingsManager.mobile_button_scale
-		button.position.x = clampf(button.position.x, 8.0, maxf(8.0, view_size.x - button.size.x - 8.0))
-		button.position.y = clampf(button.position.y, 8.0, maxf(8.0, view_size.y - button.size.y - 8.0))
+			var candidate: Vector2 = saved_positions[i] * view_size
+			var candidate_rect := Rect2(candidate, target_size)
+			if not stats_forbidden.intersects(candidate_rect):
+				button_position = candidate
+		button.position = Vector2(
+			clampf(button_position.x, 8.0, maxf(8.0, view_size.x - button.size.x - 8.0)),
+			clampf(button_position.y, 8.0, maxf(8.0, view_size.y - button.size.y - 8.0))
+		)
+
+	for i: int in range(touch_buttons.size()):
+		var rect_i := Rect2(touch_buttons[i].position - Vector2(4.0, 4.0), touch_buttons[i].size + Vector2(8.0, 8.0))
+		for j: int in range(i):
+			var rect_j := Rect2(touch_buttons[j].position - Vector2(4.0, 4.0), touch_buttons[j].size + Vector2(8.0, 8.0))
+			if rect_i.intersects(rect_j):
+				touch_buttons[i].position = defaults[i]
+				break
+
 	if editor_done_button:
-		editor_done_button.position = Vector2(view_size.x - 142.0, 86.0)
+		editor_done_button.position = Vector2(view_size.x - 142.0, 124.0)
 
 func _apply_mobile_hud_layout() -> void:
 	if not _is_touch_device():
 		return
 	var view_size: Vector2 = get_viewport().get_visible_rect().size
+	var tl_width: float = clampf(view_size.x * 0.30, 270.0, 350.0)
 	top_left.offset_left = 12.0
 	top_left.offset_top = 12.0
-	top_left.offset_right = minf(view_size.x * 0.34, 260.0)
-	top_left.offset_bottom = 208.0
-	clock_label.add_theme_font_size_override("font_size", 18)
+	top_left.offset_right = 12.0 + tl_width
+	top_left.offset_bottom = 200.0
+	clock_label.add_theme_font_size_override("font_size", 16)
 	act_label.add_theme_font_size_override("font_size", 12)
+	if objectives_header_label:
+		objectives_header_label.add_theme_font_size_override("font_size", 11)
 	for objective: Node in objectives_container.get_children():
 		if objective is Label:
-			(objective as Label).add_theme_font_size_override("font_size", 11)
+			var obj_lbl: Label = objective as Label
+			obj_lbl.add_theme_font_size_override("font_size", 12)
+			obj_lbl.custom_minimum_size.x = tl_width - 28.0
 	bottom_left.anchor_left = 1.0
 	bottom_left.anchor_right = 1.0
 	bottom_left.anchor_top = 0.0
 	bottom_left.anchor_bottom = 0.0
-	var stats_width: float = clampf(view_size.x * 0.54, 190.0, 300.0)
+	bottom_left.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	bottom_left.grow_vertical = Control.GROW_DIRECTION_END
+	var stats_width: float = clampf(view_size.x * 0.21, 220.0, 254.0)
 	bottom_left.offset_left = -stats_width - 12.0
-	bottom_left.offset_top = 78.0
+	bottom_left.offset_top = 12.0
 	bottom_left.offset_right = -12.0
-	bottom_left.offset_bottom = 190.0
+	bottom_left.offset_bottom = 112.0
 	bottom_left.scale = Vector2.ONE
-	var stats_vbox: VBoxContainer = bottom_left.get_node("VBox") as VBoxContainer
+	var stats_vbox: VBoxContainer = (bottom_left_panel.get_node("VBox") if bottom_left_panel else bottom_left.get_node("VBox")) as VBoxContainer
 	stats_vbox.add_theme_constant_override("separation", 5)
 	for container_name: String in ["SanityContainer", "StaminaContainer", "BatteryContainer"]:
-		var row: HBoxContainer = bottom_left.get_node("VBox/" + container_name) as HBoxContainer
-		row.add_theme_constant_override("separation", 4)
+		var row: HBoxContainer = stats_vbox.get_node(container_name) as HBoxContainer
+		row.add_theme_constant_override("separation", 5)
 		var row_label: Label = row.get_child(0) as Label
 		var row_bar: ProgressBar = row.get_child(1) as ProgressBar
 		var row_value: Label = row.get_child(2) as Label
-		row_label.custom_minimum_size.x = 54.0
+		row_label.custom_minimum_size.x = 66.0
 		row_label.add_theme_font_size_override("font_size", 11)
-		row_bar.custom_minimum_size = Vector2(maxf(72.0, stats_width - 96.0), 17.0)
+		row_bar.custom_minimum_size = Vector2(maxf(72.0, stats_width - 130.0), 14.0)
 		row_value.custom_minimum_size.x = 34.0
 		row_value.add_theme_font_size_override("font_size", 10)
 	bottom_right.visible = false
-	slots_container.add_theme_constant_override("separation", 4)
-	var slot_size: Vector2 = Vector2(76.0, 58.0) if view_size.x < 700.0 else Vector2(86.0, 64.0)
+	var slot_gap: float = 8.0
+	slots_container.add_theme_constant_override("separation", int(slot_gap))
+	var slot_size: Vector2 = Vector2(70.0, 52.0) if view_size.x < 700.0 else Vector2(78.0, 56.0)
 	for slot: Node in slots_container.get_children():
 		var panel: PanelContainer = slot as PanelContainer
 		panel.custom_minimum_size = slot_size
+		panel.clip_contents = true
 		for label: Node in panel.find_children("*", "Label", true, false):
 			(label as Label).add_theme_font_size_override("font_size", 9)
-	var inventory_width: float = slot_size.x * slots_container.get_child_count() + 12.0 + 24.0
+	var slot_count: int = slots_container.get_child_count()
+	var inventory_width: float = slot_size.x * float(slot_count) + slot_gap * float(maxi(0, slot_count - 1)) + 16.0
 	bottom_center.offset_left = -inventory_width * 0.5
-	bottom_center.offset_top = -82.0
+	bottom_center.offset_top = -(slot_size.y + 16.0)
 	bottom_center.offset_right = inventory_width * 0.5
-	bottom_center.offset_bottom = -10.0
+	bottom_center.offset_bottom = -12.0
 	if dialog_label:
-		dialog_label.add_theme_font_size_override("font_size", 17)
+		dialog_label.add_theme_font_size_override("font_size", 16)
 
 func _build_desktop_hints() -> void:
 	if _is_touch_device():
@@ -835,11 +970,16 @@ func _draw_virtual_joystick() -> void:
 		return
 	var center: Vector2 = joystick_base.size * 0.5
 	var radius: float = joystick_base.size.x * 0.43
-	joystick_base.draw_circle(center, radius, Color(0.02, 0.02, 0.025, 0.42))
-	joystick_base.draw_arc(center, radius, 0.0, TAU, 48, Color(0.82, 0.72, 0.68, 0.6), 2.0, true)
+	joystick_base.draw_circle(center, radius, Color(0.025, 0.010, 0.014, 0.58))
+	joystick_base.draw_arc(center, radius, 0.0, TAU, 48, Color(0.66, 0.14, 0.16, 0.78), 2.2, true)
+	joystick_base.draw_arc(center, radius * 0.74, 0.0, TAU, 36, Color(0.84, 0.66, 0.30, 0.26), 1.2, true)
+	for i: int in range(4):
+		var a: float = float(i) * PI * 0.5
+		var dir := Vector2(cos(a), sin(a))
+		joystick_base.draw_line(center + dir * (radius * 0.78), center + dir * (radius * 0.96), Color(0.84, 0.66, 0.30, 0.45), 2.0)
 	var knob_center: Vector2 = center + joystick_vector * radius * 0.68
-	joystick_base.draw_circle(knob_center, radius * 0.38, Color(0.55, 0.12, 0.15, 0.76))
-	joystick_base.draw_arc(knob_center, radius * 0.38, 0.0, TAU, 36, Color(0.95, 0.72, 0.68, 0.72), 2.0, true)
+	joystick_base.draw_circle(knob_center, radius * 0.36, Color(0.48, 0.06, 0.08, 0.86))
+	joystick_base.draw_arc(knob_center, radius * 0.36, 0.0, TAU, 36, Color(0.92, 0.72, 0.38, 0.85), 2.0, true)
 
 func _input(event: InputEvent) -> void:
 	if mobile_editor_active:
@@ -1047,13 +1187,16 @@ func _on_stamina_changed(current: float, max_val: float) -> void:
 func _on_battery_changed(current: float, max_val: float) -> void:
 	battery_bar.max_value = max_val
 	battery_bar.value = current
-	battery_val.text = "%d%%" % int((current / max_val) * 100.0)
+	var pct: int = int(round((current / max_val) * 100.0))
+	battery_val.text = "%d%%" % pct
 	var player: PlayerController = GameManager.player_character as PlayerController
 	if player and player.inventory_system:
 		for item: Dictionary in player.inventory_system.slots:
 			if item.get("id", "") == "flashlight":
 				item["battery"] = current
-		SignalBus.inventory_updated.emit(player.inventory_system.slots)
+		if pct != last_synced_battery_pct:
+			last_synced_battery_pct = pct
+			SignalBus.inventory_updated.emit(player.inventory_system.slots)
 
 func _on_noise_made(level: float, _pos: Vector3) -> void:
 	noise_bar.value = max(noise_bar.value, level * 100.0)
@@ -1068,9 +1211,7 @@ func _on_act_started(num: int, title: String) -> void:
 		child.queue_free()
 	objective_labels.clear()
 	objective_texts.clear()
-	# Bersihkan isi kartu sebelum objective_updated mengirim daftar babak baru.
-	if mission_body:
-		mission_body.text = "Memuat misi..."
+	_populate_current_act_objectives()
 	_show_act_banner(num, title)
 	if num == 2 and not GameManager.is_resuming_saved_run:
 		_play_lampor_descent_cutscene()
@@ -1133,20 +1274,25 @@ func _show_act_banner(num: int, _title: String) -> void:
 
 func _on_objective_updated(id: String, text: String, current: int, required: int, is_completed: bool) -> void:
 	var label: Label = null
-	if objective_labels.has(id):
+	var touch: bool = _is_touch_device()
+	if objective_labels.has(id) and is_instance_valid(objective_labels[id]):
 		label = objective_labels[id]
 	else:
 		label = Label.new()
-		label.add_theme_font_size_override("font_size", 16)
+		label.add_theme_font_size_override("font_size", 12 if touch else 15)
+		label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.95))
+		label.add_theme_constant_override("outline_size", 3)
 		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		label.custom_minimum_size.x = 240.0
+		var view_w: float = get_viewport().get_visible_rect().size.x
+		var tl_w: float = clampf(view_w * 0.30, 270.0, 350.0) if touch else 340.0
+		label.custom_minimum_size.x = tl_w - 28.0
 		objectives_container.add_child(label)
 		objective_labels[id] = label
 		
-	var status_icon: String = "✅" if is_completed else "◻️"
+	var status_icon: String = "✔" if is_completed else ("🩸" if id == "beware_lampor" else "🕯️")
 	var progress_str: String = " (%d/%d)" % [current, required] if required > 1 else ""
 	label.text = "%s %s%s" % [status_icon, text, progress_str]
-	label.modulate = Color(0.6, 1.0, 0.6) if is_completed else Color(1, 1, 1)
+	label.modulate = Color(0.55, 0.95, 0.62) if is_completed else (Color(0.98, 0.52, 0.50) if id == "beware_lampor" else Color(0.95, 0.91, 0.84))
 	objective_texts[id] = label.text
 	_refresh_mission_card()
 
@@ -1360,7 +1506,7 @@ func _build_inventory_overlay() -> void:
 	inventory_storage_slots.clear()
 	for i in range(15):
 		var slot_idx: int = InventorySystem.HOTBAR_SLOTS + i
-		var slot_ui := InventorySlotUI.new()
+		var slot_ui: PanelContainer = INVENTORY_SLOT_UI_SCRIPT.new()
 		slot_ui.setup(slot_idx, false, "")
 		slot_ui.slot_dropped.connect(_on_inventory_slot_dropped)
 		slot_ui.slot_clicked.connect(_on_inventory_slot_clicked)
@@ -1384,7 +1530,7 @@ func _build_inventory_overlay() -> void:
 
 	inventory_hotbar_slots.clear()
 	for i in range(InventorySystem.HOTBAR_SLOTS):
-		var slot_ui := InventorySlotUI.new()
+		var slot_ui: PanelContainer = INVENTORY_SLOT_UI_SCRIPT.new()
 		slot_ui.setup(i, true, "[%d]" % (i + 1))
 		slot_ui.slot_dropped.connect(_on_inventory_slot_dropped)
 		slot_ui.slot_clicked.connect(_on_inventory_slot_clicked)

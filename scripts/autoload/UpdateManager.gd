@@ -4,20 +4,87 @@ signal update_available(commit_sha: String, commit_message: String)
 signal update_installed(destination_path: String, commit_sha: String, applied_to_project: bool)
 signal update_failed(message: String)
 signal up_to_date(commit_sha: String)
+signal fix_notes_updated(markdown: String, commit_sha: String)
 
 const FULL_TREE_SYNC_VERSION: int = 1
-const BUILD_COMMIT: String = "a71d2525629a13768bc27ceeaf6414162438e32c"
+const BUILD_COMMIT: String = "f3c66618e258b94072464dafee9d088c0afaf814"
 const API_URL: String = "https://api.github.com/repos/Reyofficial77/lampor/commits/main"
 const ATOM_URL: String = "https://github.com/Reyofficial77/lampor/commits/main.atom"
 const ARCHIVE_URL: String = "https://codeload.github.com/Reyofficial77/lampor/zip/"
+const RAW_FIX_NOTES_BASE_URL: String = "https://raw.githubusercontent.com/Reyofficial77/lampor/"
 const UPDATE_CONFIG_PATH: String = "user://lampor_update.cfg"
 const UPDATE_ROOT: String = "user://updates"
 const FIX_NOTES_CACHE_PATH: String = "user://lampor_fix_notes.md"
 const REQUIRED_UPDATE_FILES: PackedStringArray = ["project.godot", "scripts/autoload/UpdateManager.gd", "FIX_NOTES.md"]
 
+const BUNDLED_FIX_NOTES: String = """# LAMPOR v1.2.2
+
+## v1.2.2
+
+- **Perbaikan Tampilan `FIX_NOTES.md` pada Export APK & EXE (Sinkron Commit Terbaru)**:
+  - Menambahkan pengunduh langsung `FIX_NOTES.md` dari commit terbaru repository GitHub (`raw.githubusercontent.com`) yang otomatis menyimpan cache ke `user://lampor_fix_notes.md` sehingga APK Android maupun EXE Windows hasil export selalu menampilkan `FIX_NOTES.md` dari commit terbaru tanpa perlu menimpa paket APK/PCK.
+  - Menyematkan salinan cadangan `FIX_NOTES.md` langsung di dalam bytecode skrip serta menambahkan preset export Android (`include_filter="FIX_NOTES.md,*.md"` & permission `INTERNET`) agar catatan pembaruan tetap tampil meski perangkat sedang offline.
+  - Mencegah `auto_update` menimpa working tree `.git` lokal secara otomatis saat diuji di dalam Godot Editor sebelum commit di-push.
+- **Fast-Forward Otomatis ke 02.30 WIB & Transisi Langsung Babak II**:
+  - Ketika seluruh misi Babak I (5 Obor Penolak Bala & 3 Barikade Pintu Rumah) selesai sebelum waktu menunjukkan pukul 02.30 WIB, jam permainan langsung dipercepat (fast-forward) ke **02.30 WIB** dan Babak II langsung dimulai beserta turunnya Lampor ke desa.
+  - Memperbaiki urutan penutupan dialog konfirmasi barikade dari dalam rumah agar transisi Babak II dan cutscene turunnya Lampor tidak terhambat status pause.
+- **Perbaikan Bug Gagal Masuk In-Game di Mobile**:
+  - Memperbaiki kegagalan pemuatan `VillageMap.tscn` di perangkat mobile setelah memilih tingkat kesulitan akibat tekstur 3D (`wood_albedo.png`, `bamboo_albedo.png`, `cloth_green.png`) yang terimpor eksklusif ke format desktop `s3tc_bptc`.
+  - Mengubah seluruh `.import` tekstur ke mode lossless `.ctex` lintas-platform (`compress/mode=0`, `detect_3d/compress_to=0`) serta mengaktifkan `textures/vram_compression/import_etc2_astc=true`.
+- **Tampilan Objektif Langsung Muncul di Kiri Atas**:
+  - Daftar objektif malam kini langsung diinisialisasi dan ditampilkan di panel kiri atas sejak frame pertama memasuki in-game serta diperbarui lebih dulu sebelum banner/kartu babak ditampilkan.
+- **Tata Letak UI Mobile Lebih Rapi & Anti-Berdempetan**:
+  - Menata ulang posisi panel status (`Waras`, `Stamina`, `Senter`) di sudut kanan atas dan memindahkan tombol `Ⅱ` (Jeda) serta `TAS` ke sisi kiri panel status agar tidak saling bertabrakan.
+  - Membatasi ukuran slot hotbar (`clip_contents`) dan pemotongan teks nama item panjang agar hotbar tidak melebar menabrak joystick maupun tombol aksi kanan.
+- **Visual UI Nuansa Horor & Model Lampor Keranda Hijau Realistis**:
+  - Menambahkan latar belakang horor beranimasi di Menu Utama serta memperbarui palet visual seluruh layar menu dan HUD.
+  - Merombak model 3D Lampor menjadi keranda jenazah hijau sungguhan lengkap dengan batang pikulan tandu panjang, 4 kaki keranda, lengkungan kurung batang, lipatan kain beludru hijau, bordir kaligrafi Arab emas, rumbai-rumbai emas di keempat sisi, dan celah tirai depan dengan siluet kain kafan serta mata merah menyala.
+
+## v1.2.1
+
+- Memperbaiki pengiriman misi setelah map dimuat dan transisi Babak II setelah objektif Babak I selesai.
+- Menambahkan cutscene kamera saat Lampor turun, sinkronisasi baterai hotbar, dan jarak tombol mobile yang lebih lega.
+- Mengurangi beban preset grafis rendah dan menyertakan FIX_NOTES.md dalam export.
+- Memulihkan status updater setelah kegagalan agar pengguna dapat mencoba pemeriksaan lagi.
+
+## Fitur Baru (Update)
+
+- **Sistem Inventori Tas (15 Slot)**:
+  - Ditambahkan ruang penyimpanan tas berisi 15 slot dengan tata letak 5 kolom ke kanan dan 3 baris ke bawah (5x3).
+  - Dapat dibuka dan ditutup kapan saja selama permainan menggunakan tombol **Tab**, **B**, atau **I** di desktop, tombol `🎒 TAS [TAB]` di atas hotbar, atau tombol sentuh `TAS` di layar kontrol mobile.
+- **Peningkatan Kapasitas Hotbar Menjadi 5 Slot**:
+  - Hotbar ditingkatkan dari 4 slot menjadi **5 slot**.
+  - Mendukung tombol angka **[1] - [5]** untuk memilih barang secara langsung, serta dukungan penuh input sentuh mobile.
+- **Sistem Drag & Drop serta Tukar Tempat**:
+  - Pemain dapat memindahkan barang dari inventori ke hotbar atau antar slot dengan cara drag & drop.
+  - Jika slot hotbar tujuan sudah memiliki item, posisi item akan otomatis saling bertukar tempat (swap), persis seperti mekanisme inventori Minecraft.
+  - Tersedia pula fitur tap/klik dua slot untuk memindahkan/menukar posisi item secara mudah di mouse maupun layar sentuh HP.
+
+## Perbaikan & Penyesuaian (Fix)
+
+- **Perbaikan Stacking Item Hotbar (Maks. 10 Stack)**:
+  - Memperbaiki masalah Jamu Tolak Bala yang dibeli dalam jumlah banyak dari toko sehingga memenuhi slot-slot hotbar.
+  - Kapasitas tumpukan (stack) untuk Jamu Tolak Bala dan item habis pakai di hotbar kini ditingkatkan hingga **maksimal 10** per slot. Seluruh jamu yang dibawa dari toko kini menumpuk rapi di slot yang sama.
+- **Batas Kuantitas Item Toko & Nyawa (Maks. 5/Item)**:
+  - Item yang dibeli di toko (seperti Jamu Tolak Bala dan Baterai Senter) memiliki batas persediaan dan penggunaan saat permainan maksimal **5 kuantitas per item**.
+  - Batas maksimal untuk **nyawa tambahan** juga ditetapkan maksimal **5 nyawa**.
+  - Antarmuka toko di menu utama kini menampilkan informasi kapasitas kuota dan mencegah pembelian yang melebihi batas.
+- **Perbaikan Drop Item Bertumpuk**:
+  - Menjatuhkan barang yang memiliki kuantitas lebih dari 1 kini hanya membuang 1 buah ke tanah dan mempertahankan sisa tumpukan di inventori/hotbar pemain.
+
+## Catatan Pembaruan Sistem Sebelumnya
+
+- Updater menyinkronkan seluruh isi proyek dari commit branch `main`.
+- Data save pemain tetap aman di `user://` dan tidak terhapus oleh sinkronisasi proyek.
+- Setelah pembaruan selesai diterapkan, permainan meminta konfirmasi untuk memulai ulang sesi."""
+
 var latest_commit: String = ""
 var latest_message: String = ""
 var installed_commit: String = BUILD_COMMIT
+var remote_fix_notes_markdown: String = ""
+var remote_fix_notes_commit: String = ""
+var is_fetching_fix_notes: bool = false
+var fix_notes_using_main_fallback: bool = false
 var has_update: bool = false
 var is_checking: bool = false
 var is_downloading: bool = false
@@ -27,6 +94,7 @@ var last_error: String = ""
 var api_request: HTTPRequest
 var fallback_request: HTTPRequest
 var download_request: HTTPRequest
+var fix_notes_request: HTTPRequest
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -48,16 +116,29 @@ func _ready() -> void:
 	download_request.use_threads = true
 	add_child(download_request)
 	download_request.request_completed.connect(_on_download_request_completed)
+	fix_notes_request = HTTPRequest.new()
+	fix_notes_request.timeout = 35.0
+	fix_notes_request.max_redirects = 12
+	fix_notes_request.use_threads = true
+	add_child(fix_notes_request)
+	fix_notes_request.request_completed.connect(_on_fix_notes_request_completed)
 	_load_update_state()
+	call_deferred("fetch_latest_fix_notes")
 
 func _load_update_state() -> void:
 	var config := ConfigFile.new()
 	if config.load(UPDATE_CONFIG_PATH) == OK:
 		installed_commit = str(config.get_value("update", "installed_commit", config.get_value("update", "processed_commit", BUILD_COMMIT)))
+		remote_fix_notes_commit = str(config.get_value("update", "fix_notes_commit", ""))
+	if FileAccess.file_exists(FIX_NOTES_CACHE_PATH):
+		var cached_md: String = FileAccess.get_file_as_string(FIX_NOTES_CACHE_PATH)
+		if not cached_md.strip_edges().is_empty():
+			remote_fix_notes_markdown = cached_md
 
 func _save_update_state() -> void:
 	var config := ConfigFile.new()
 	config.set_value("update", "installed_commit", installed_commit)
+	config.set_value("update", "fix_notes_commit", remote_fix_notes_commit)
 	config.save(UPDATE_CONFIG_PATH)
 
 func check_for_updates(force: bool = false) -> void:
@@ -159,13 +240,55 @@ func _handle_latest_commit(commit_sha: String, commit_message: String) -> void:
 	if latest_commit.is_empty():
 		_fail("GitHub tidak mengembalikan identitas commit.")
 		return
+	# Selalu ambil FIX_NOTES.md dari commit terbaru agar APK/EXE juga menampilkan catatan commit terbaru.
+	fetch_latest_fix_notes(true)
 	has_update = latest_commit != installed_commit
 	if has_update:
 		update_available.emit(latest_commit, latest_message)
-		if SettingsManager.auto_update:
+		if SettingsManager.auto_update and not _is_git_working_copy():
 			download_update()
 	else:
 		up_to_date.emit(latest_commit)
+
+func _is_git_working_copy() -> bool:
+	if OS.has_feature("editor"):
+		return true
+	var root: String = ProjectSettings.globalize_path("res://")
+	return DirAccess.dir_exists_absolute(root.path_join(".git"))
+
+func fetch_latest_fix_notes(force: bool = false) -> void:
+	if is_fetching_fix_notes or fix_notes_request == null:
+		return
+	var target_ref: String = latest_commit if not latest_commit.is_empty() else "main"
+	if not force and not remote_fix_notes_markdown.is_empty() and remote_fix_notes_commit == target_ref:
+		return
+	is_fetching_fix_notes = true
+	fix_notes_using_main_fallback = (target_ref == "main")
+	var url: String = "%s%s/FIX_NOTES.md?t=%d" % [RAW_FIX_NOTES_BASE_URL, target_ref, int(Time.get_unix_time_from_system())]
+	var headers: PackedStringArray = ["User-Agent: Lampor-Game", "Cache-Control: no-cache"]
+	var err: Error = fix_notes_request.request(url, headers)
+	if err != OK:
+		is_fetching_fix_notes = false
+
+func _on_fix_notes_request_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	is_fetching_fix_notes = false
+	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
+		if not fix_notes_using_main_fallback:
+			fix_notes_using_main_fallback = true
+			is_fetching_fix_notes = true
+			var fallback_url: String = "%smain/FIX_NOTES.md?t=%d" % [RAW_FIX_NOTES_BASE_URL, int(Time.get_unix_time_from_system())]
+			var headers: PackedStringArray = ["User-Agent: Lampor-Game", "Cache-Control: no-cache"]
+			if fix_notes_request.request(fallback_url, headers) != OK:
+				is_fetching_fix_notes = false
+		return
+	var text: String = body.get_string_from_utf8()
+	if text.strip_edges().is_empty():
+		return
+	remote_fix_notes_markdown = text
+	remote_fix_notes_commit = latest_commit if not latest_commit.is_empty() else "main"
+	_write_absolute_file(ProjectSettings.globalize_path(FIX_NOTES_CACHE_PATH), text.to_utf8_buffer())
+	_save_update_state()
+	fix_notes_updated.emit(remote_fix_notes_markdown, remote_fix_notes_commit)
 
 func _on_download_request_completed(result: int, response_code: int, _headers: PackedStringArray, _body: PackedByteArray) -> void:
 	is_downloading = false
@@ -399,11 +522,35 @@ func _remove_directory_recursive(path: String) -> void:
 	DirAccess.remove_absolute(path)
 
 func get_fix_notes_markdown() -> String:
+	# 1. Jika sedang di Editor / folder proyek lokal dan belum ada commit remote yang lebih baru,
+	#    atau file lokal res://FIX_NOTES.md baru saja diedit lebih panjang dari cache remote:
+	var local_notes: String = ""
 	if FileAccess.file_exists("res://FIX_NOTES.md"):
-		return FileAccess.get_file_as_string("res://FIX_NOTES.md")
+		local_notes = FileAccess.get_file_as_string("res://FIX_NOTES.md")
+	var cached_notes: String = ""
 	if FileAccess.file_exists(FIX_NOTES_CACHE_PATH):
-		return FileAccess.get_file_as_string(FIX_NOTES_CACHE_PATH)
-	return "# Catatan Pembaruan\n\nBelum ada `FIX_NOTES.md` pada paket game ini. Repository wajib menyertakan file tersebut pada setiap commit update."
+		cached_notes = FileAccess.get_file_as_string(FIX_NOTES_CACHE_PATH)
+
+	# Pada APK/EXE hasil export, utamakan FIX_NOTES.md yang berhasil diunduh dari commit terbaru GitHub
+	if not _can_write_project_source():
+		if not remote_fix_notes_markdown.strip_edges().is_empty():
+			return remote_fix_notes_markdown
+		if not cached_notes.strip_edges().is_empty():
+			return cached_notes
+		if not local_notes.strip_edges().is_empty():
+			return local_notes
+		return BUNDLED_FIX_NOTES
+
+	# Pada Editor / proyek lokal yang dapat ditulis:
+	if not local_notes.strip_edges().is_empty():
+		if not remote_fix_notes_markdown.strip_edges().is_empty() and has_update:
+			return remote_fix_notes_markdown
+		return local_notes
+	if not remote_fix_notes_markdown.strip_edges().is_empty():
+		return remote_fix_notes_markdown
+	if not cached_notes.strip_edges().is_empty():
+		return cached_notes
+	return BUNDLED_FIX_NOTES
 
 func _format_network_error(result: int, response_code: int, service: String) -> String:
 	var detail: String = ""

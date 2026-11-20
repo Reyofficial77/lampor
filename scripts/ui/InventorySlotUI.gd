@@ -88,8 +88,8 @@ func set_selected(selected: bool) -> void:
 
 func _apply_normal_style() -> void:
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.12, 0.12, 0.15, 0.88)
-	style.border_color = Color(0.45, 0.45, 0.5, 0.8)
+	style.bg_color = Color(0.045, 0.022, 0.028, 0.90)
+	style.border_color = Color(0.44, 0.12, 0.14, 0.85)
 	style.set_border_width_all(2)
 	style.set_corner_radius_all(4)
 	style.content_margin_left = 4
@@ -105,20 +105,20 @@ func _refresh_visual_state() -> void:
 	style = style.duplicate() as StyleBoxFlat
 
 	if is_selected_for_swap:
-		style.bg_color = Color(0.35, 0.28, 0.08, 0.95)
-		style.border_color = Color(1.0, 0.85, 0.2, 1.0)
+		style.bg_color = Color(0.32, 0.08, 0.10, 0.96)
+		style.border_color = Color(0.96, 0.78, 0.26, 1.0)
 		style.set_border_width_all(2)
 	elif is_hotbar and is_equipped:
-		style.bg_color = Color(0.22, 0.22, 0.12, 0.92)
-		style.border_color = Color(1.0, 0.88, 0.35, 1.0)
+		style.bg_color = Color(0.24, 0.06, 0.08, 0.94)
+		style.border_color = Color(0.92, 0.72, 0.28, 1.0)
 		style.set_border_width_all(2)
 	elif item_data.is_empty():
-		style.bg_color = Color(0.08, 0.08, 0.10, 0.75)
-		style.border_color = Color(0.3, 0.3, 0.35, 0.6)
+		style.bg_color = Color(0.03, 0.016, 0.022, 0.78)
+		style.border_color = Color(0.26, 0.10, 0.12, 0.62)
 		style.set_border_width_all(1)
 	else:
-		style.bg_color = Color(0.14, 0.13, 0.16, 0.9)
-		style.border_color = Color(0.55, 0.45, 0.45, 0.9)
+		style.bg_color = Color(0.09, 0.035, 0.045, 0.92)
+		style.border_color = Color(0.56, 0.16, 0.18, 0.92)
 		style.set_border_width_all(2)
 
 	add_theme_stylebox_override("panel", style)

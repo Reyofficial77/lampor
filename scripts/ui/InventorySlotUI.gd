@@ -19,7 +19,9 @@ func setup(p_index: int, p_is_hotbar: bool = false, p_key_text: String = "") -> 
 	slot_index = p_index
 	is_hotbar = p_is_hotbar
 	mouse_filter = Control.MOUSE_FILTER_STOP
-	custom_minimum_size = Vector2(86, 58)
+	custom_minimum_size = Vector2(72, 72)
+	size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	size_flags_vertical = Control.SIZE_SHRINK_CENTER
 
 	# Buat StyleBox tersendiri agar dapat diwarnai per slot
 	_apply_normal_style()
@@ -27,7 +29,7 @@ func setup(p_index: int, p_is_hotbar: bool = false, p_key_text: String = "") -> 
 	var vbox := VBoxContainer.new()
 	vbox.name = "VBox"
 	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	vbox.add_theme_constant_override("separation", 2)
+	vbox.add_theme_constant_override("separation", 1)
 	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(vbox)
 
@@ -36,7 +38,7 @@ func setup(p_index: int, p_is_hotbar: bool = false, p_key_text: String = "") -> 
 		key_label.name = "Key"
 		key_label.text = p_key_text
 		key_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		key_label.add_theme_font_size_override("font_size", 10)
+		key_label.add_theme_font_size_override("font_size", 9)
 		key_label.add_theme_color_override("font_color", Color(0.85, 0.75, 0.5, 1.0))
 		key_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		vbox.add_child(key_label)
@@ -46,7 +48,11 @@ func setup(p_index: int, p_is_hotbar: bool = false, p_key_text: String = "") -> 
 	name_label.text = "[Kosong]"
 	name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	name_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	name_label.add_theme_font_size_override("font_size", 11)
+	name_label.clip_text = true
+	name_label.max_lines_visible = 2
+	name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	name_label.custom_minimum_size = Vector2(62, 24)
+	name_label.add_theme_font_size_override("font_size", 10)
 	name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vbox.add_child(name_label)
 
@@ -54,7 +60,7 @@ func setup(p_index: int, p_is_hotbar: bool = false, p_key_text: String = "") -> 
 	qty_label.name = "Qty"
 	qty_label.text = ""
 	qty_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	qty_label.add_theme_font_size_override("font_size", 10)
+	qty_label.add_theme_font_size_override("font_size", 9)
 	qty_label.add_theme_color_override("font_color", Color(0.9, 0.9, 0.7, 1.0))
 	qty_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vbox.add_child(qty_label)
@@ -91,11 +97,11 @@ func _apply_normal_style() -> void:
 	style.bg_color = Color(0.045, 0.022, 0.028, 0.90)
 	style.border_color = Color(0.44, 0.12, 0.14, 0.85)
 	style.set_border_width_all(2)
-	style.set_corner_radius_all(4)
-	style.content_margin_left = 4
-	style.content_margin_right = 4
-	style.content_margin_top = 4
-	style.content_margin_bottom = 4
+	style.set_corner_radius_all(2)
+	style.content_margin_left = 3
+	style.content_margin_right = 3
+	style.content_margin_top = 3
+	style.content_margin_bottom = 3
 	add_theme_stylebox_override("panel", style)
 
 func _refresh_visual_state() -> void:

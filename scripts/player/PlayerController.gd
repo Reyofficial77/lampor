@@ -29,7 +29,7 @@ var is_caught: bool = false
 
 # Head Bobbing
 var bob_freq: float = 2.4
-var bob_amp: float = 0.06
+var bob_amp: float = 0.032
 var bob_time: float = 0.0
 var initial_camera_pos: Vector3
 
@@ -73,8 +73,11 @@ var flashlight_preferred_on: bool = true
 var in_cutscene: bool = false
 var current_anim_name: String = ""
 var action_anim_timer: float = 0.0
+var action_anim_duration: float = 0.45
 var idle_arm_time: float = 0.0
-const PLAYER_MODEL_FPP_POS: Vector3 = Vector3(0.0, 0.0, 0.22)
+var move_blend: float = 0.0
+var sprint_blend: float = 0.0
+const PLAYER_MODEL_FPP_POS: Vector3 = Vector3(0.0, 0.0, 0.19)
 
 var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 
@@ -105,6 +108,10 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	if is_caught:
 		_play_player_anim("die", 0.08, 1.0)
+		if player_skeleton:
+			var hand_idx: int = player_skeleton.find_bone("Hand.R")
+			if hand_idx >= 0:
+				player_skeleton.set_bone_pose_scale(hand_idx, Vector3.ONE)
 		if model_head_mesh:
 			model_head_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
 		if player_model:
@@ -113,6 +120,7 @@ func _process(_delta: float) -> void:
 		if flashlight:
 			flashlight.visible = false
 		camera.position = initial_camera_pos
+		camera.rotation.z = 0.0
 
 func _unhandled_input(event: InputEvent) -> void:
 	if GameManager.current_state != GameManager.GameState.PLAYING:
@@ -420,6 +428,9 @@ func _setup_player_model() -> void:
 
 	# Keep model hands, cuffs, and suit faintly legible even in dark unlit rooms
 	_apply_dark_visibility_floor(player_model)
+	var body_mesh: GeometryInstance3D = player_model.find_child("Suit_Body", true, false) as GeometryInstance3D
+	if body_mesh:
+		body_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 	var head_node: Node = player_model.find_child("Suit_Head", true, false)
 	if not (head_node is GeometryInstance3D):
@@ -442,7 +453,10 @@ func _setup_player_model() -> void:
 	if player_skeleton:
 		_build_hand_item_holder(player_skeleton)
 	_play_player_anim("idle", 0.0, 1.0)
+	if model_anim_player:
+		model_anim_player.advance(0.0)
 	_update_fpp_camera_and_arm(0.0, false)
+	_apply_fpp_hand_override()
 
 func _apply_dark_visibility_floor(root_node: Node) -> void:
 	for mi: MeshInstance3D in root_node.find_children("*", "MeshInstance3D", true, false):
@@ -475,6 +489,7 @@ func _attach_suit_box(parent_node: Node3D, box_name: String, size_vec: Vector3, 
 	mesh.size = size_vec
 	mi.mesh = mesh
 	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	mi.position = pos_vec
 	mi.rotation_degrees = rot_deg
 	parent_node.add_child(mi)
@@ -544,9 +559,9 @@ func _build_suit_animations(skel: Skeleton3D) -> void:
 	})
 
 	_add_suit_anim(lib, skel_path, skel, "walk", 0.8, Animation.LOOP_LINEAR, {
-		"Hips": [[0.0, Vector3(-2.0, 0.0, 3.0)], [0.4, Vector3(-2.0, 0.0, -3.0)], [0.8, Vector3(-2.0, 0.0, 3.0)]],
-		"Torso": [[0.0, Vector3(-4.0, 0.0, -4.0)], [0.4, Vector3(-4.0, 0.0, 4.0)], [0.8, Vector3(-4.0, 0.0, -4.0)]],
-		"Chest": [[0.0, Vector3(-2.0, 0.0, 0.0)], [0.4, Vector3(-2.0, 0.0, 0.0)], [0.8, Vector3(-2.0, 0.0, 0.0)]],
+		"Hips": [[0.0, Vector3(2.0, 0.0, 3.0)], [0.4, Vector3(2.0, 0.0, -3.0)], [0.8, Vector3(2.0, 0.0, 3.0)]],
+		"Torso": [[0.0, Vector3(3.0, 0.0, -4.0)], [0.4, Vector3(3.0, 0.0, 4.0)], [0.8, Vector3(3.0, 0.0, -4.0)]],
+		"Chest": [[0.0, Vector3(2.0, 0.0, 0.0)], [0.4, Vector3(2.0, 0.0, 0.0)], [0.8, Vector3(2.0, 0.0, 0.0)]],
 		"UpperArm.L": [[0.0, Vector3(18.0, 76.0, 0.0)], [0.4, Vector3(-22.0, 76.0, 0.0)], [0.8, Vector3(18.0, 76.0, 0.0)]],
 		"LowerArm.L": [[0.0, Vector3(-24.0, 0.0, 0.0)], [0.4, Vector3(-36.0, 0.0, 0.0)], [0.8, Vector3(-24.0, 0.0, 0.0)]],
 		"UpperArm.R": [[0.0, Vector3(-16.0, -76.0, 0.0)], [0.4, Vector3(20.0, -76.0, 0.0)], [0.8, Vector3(-16.0, -76.0, 0.0)]],
@@ -560,9 +575,9 @@ func _build_suit_animations(skel: Skeleton3D) -> void:
 	})
 
 	_add_suit_anim(lib, skel_path, skel, "sprint", 0.52, Animation.LOOP_LINEAR, {
-		"Hips": [[0.0, Vector3(-6.0, 0.0, 5.0)], [0.26, Vector3(-6.0, 0.0, -5.0)], [0.52, Vector3(-6.0, 0.0, 5.0)]],
-		"Torso": [[0.0, Vector3(-10.0, 0.0, -6.0)], [0.26, Vector3(-10.0, 0.0, 6.0)], [0.52, Vector3(-10.0, 0.0, -6.0)]],
-		"Chest": [[0.0, Vector3(-6.0, 0.0, 0.0)], [0.26, Vector3(-6.0, 0.0, 0.0)], [0.52, Vector3(-6.0, 0.0, 0.0)]],
+		"Hips": [[0.0, Vector3(4.0, 0.0, 5.0)], [0.26, Vector3(4.0, 0.0, -5.0)], [0.52, Vector3(4.0, 0.0, 5.0)]],
+		"Torso": [[0.0, Vector3(6.0, 0.0, -6.0)], [0.26, Vector3(6.0, 0.0, 6.0)], [0.52, Vector3(6.0, 0.0, -6.0)]],
+		"Chest": [[0.0, Vector3(4.0, 0.0, 0.0)], [0.26, Vector3(4.0, 0.0, 0.0)], [0.52, Vector3(4.0, 0.0, 0.0)]],
 		"UpperArm.L": [[0.0, Vector3(34.0, 74.0, 0.0)], [0.26, Vector3(-38.0, 74.0, 0.0)], [0.52, Vector3(34.0, 74.0, 0.0)]],
 		"LowerArm.L": [[0.0, Vector3(-56.0, 0.0, 0.0)], [0.26, Vector3(-68.0, 0.0, 0.0)], [0.52, Vector3(-56.0, 0.0, 0.0)]],
 		"UpperArm.R": [[0.0, Vector3(-34.0, -74.0, 0.0)], [0.26, Vector3(34.0, -74.0, 0.0)], [0.52, Vector3(-34.0, -74.0, 0.0)]],
@@ -669,30 +684,32 @@ func _build_hand_item_holder(skel: Skeleton3D) -> void:
 	var torch_body := MeshInstance3D.new()
 	torch_body.name = "HandheldFlashlightBody"
 	var cyl := CylinderMesh.new()
-	cyl.top_radius = 0.018
-	cyl.bottom_radius = 0.014
-	cyl.height = 0.135
+	cyl.top_radius = 0.019
+	cyl.bottom_radius = 0.015
+	cyl.height = 0.150
 	torch_body.mesh = cyl
 	torch_body.material_override = body_metal_mat
-	torch_body.position = Vector3(0.0, 0.055, -0.018)
+	torch_body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	torch_body.position = Vector3(0.0, 0.125, -0.028)
 	torch_root.add_child(torch_body)
 
 	handheld_flashlight_lens = MeshInstance3D.new()
 	handheld_flashlight_lens.name = "HandheldFlashlightLens"
 	var lens_cyl := CylinderMesh.new()
-	lens_cyl.top_radius = 0.019
-	lens_cyl.bottom_radius = 0.019
-	lens_cyl.height = 0.010
+	lens_cyl.top_radius = 0.021
+	lens_cyl.bottom_radius = 0.020
+	lens_cyl.height = 0.012
 	handheld_flashlight_lens.mesh = lens_cyl
 	handheld_flashlight_lens.material_override = lens_mat
-	handheld_flashlight_lens.position = Vector3(0.0, 0.125, -0.018)
+	handheld_flashlight_lens.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	handheld_flashlight_lens.position = Vector3(0.0, 0.204, -0.028)
 	torch_root.add_child(handheld_flashlight_lens)
 
 	# 2. Jamu Tolak Bala (green glass bottle + wooden cork)
 	var jamu_root := Node3D.new()
 	jamu_root.name = "Prop_jamu"
-	jamu_root.rotation_degrees = Vector3(-42.0, 0.0, -18.0)
-	jamu_root.position = Vector3(0.004, 0.042, -0.018)
+	jamu_root.rotation_degrees = Vector3(-28.0, 0.0, -14.0)
+	jamu_root.position = Vector3(0.004, 0.115, -0.030)
 	hand_prop_pivot.add_child(jamu_root)
 	hand_item_props["jamu"] = jamu_root
 
@@ -718,8 +735,8 @@ func _build_hand_item_holder(skel: Skeleton3D) -> void:
 	# 3. Minyak Tanah & Korek (canister + red matchbox)
 	var minyak_root := Node3D.new()
 	minyak_root.name = "Prop_minyak_tanah"
-	minyak_root.rotation_degrees = Vector3(-38.0, 0.0, -15.0)
-	minyak_root.position = Vector3(0.005, 0.046, -0.020)
+	minyak_root.rotation_degrees = Vector3(-26.0, 0.0, -12.0)
+	minyak_root.position = Vector3(0.005, 0.118, -0.032)
 	hand_prop_pivot.add_child(minyak_root)
 	hand_item_props["minyak_tanah"] = minyak_root
 
@@ -730,7 +747,7 @@ func _build_hand_item_holder(skel: Skeleton3D) -> void:
 	# 4. Papan & Paku (wooden plank + metal nails)
 	var papan_root := Node3D.new()
 	papan_root.name = "Prop_papan_paku"
-	papan_root.position = Vector3(0.0, 0.060, -0.018)
+	papan_root.position = Vector3(0.0, 0.125, -0.028)
 	hand_prop_pivot.add_child(papan_root)
 	hand_item_props["papan_paku"] = papan_root
 
@@ -743,8 +760,8 @@ func _build_hand_item_holder(skel: Skeleton3D) -> void:
 	# 5. Baterai (battery cylinder + brass cathode)
 	var bat_root := Node3D.new()
 	bat_root.name = "Prop_baterai"
-	bat_root.rotation_degrees = Vector3(-40.0, 0.0, -15.0)
-	bat_root.position = Vector3(0.0, 0.045, -0.016)
+	bat_root.rotation_degrees = Vector3(-28.0, 0.0, -12.0)
+	bat_root.position = Vector3(0.0, 0.115, -0.028)
 	hand_prop_pivot.add_child(bat_root)
 	hand_item_props["baterai"] = bat_root
 
@@ -770,25 +787,48 @@ func _build_hand_item_holder(skel: Skeleton3D) -> void:
 	_sync_hand_prop_visibility()
 
 func _apply_fpp_hand_override() -> void:
-	if not player_skeleton or in_cutscene or is_caught or is_hiding or action_anim_timer > 0.0:
+	if not player_skeleton or in_cutscene or is_caught or is_hiding:
 		return
+
+	# Keep upper torso upright & untwisted in FPP so walking/sprinting never shoves the shoulder/hand toward the camera
+	for spine_bone: String in ["Hips", "Torso", "Chest", "Neck", "Head"]:
+		var spine_idx: int = player_skeleton.find_bone(spine_bone)
+		if spine_idx >= 0:
+			player_skeleton.set_bone_pose_rotation(spine_idx, player_skeleton.get_bone_rest(spine_idx).basis.get_rotation_quaternion())
+
+	var hand_idx: int = player_skeleton.find_bone("Hand.R")
 	if equipped_item_id == "":
+		if hand_idx >= 0:
+			player_skeleton.set_bone_pose_scale(hand_idx, Vector3.ONE)
 		return
 
-	var pitch_deg: float = clampf(rad_to_deg(head.rotation.x) * 0.55, -26.0, 26.0) if head else 0.0
-	var sway_x: float = 0.0
-	var sway_y: float = 0.0
-	if velocity.length() > 0.4 and is_on_floor():
-		var sway_mult: float = 1.4 if is_sprinting else 1.0
-		sway_x = sin(bob_time * bob_freq) * 2.5 * sway_mult
-		sway_y = cos(bob_time * bob_freq * 0.5) * 2.0 * sway_mult
-	else:
-		sway_x = sin(idle_arm_time * 1.8) * 1.1
+	var pitch_deg: float = clampf(rad_to_deg(head.rotation.x) * 0.98, -78.0, 20.0) if head else 0.0
+	var walk_phase: float = bob_time * bob_freq * 0.5
+	var idle_breath: float = sin(idle_arm_time * 1.7) * 1.1
+	var sway_yaw: float = sin(walk_phase) * lerpf(2.2, 3.8, sprint_blend) * move_blend
+	var sway_lift: float = absf(cos(walk_phase)) * lerpf(1.2, 2.4, sprint_blend) * move_blend
+	var wrist_lag: float = cos(walk_phase) * lerpf(1.5, 2.8, sprint_blend) * move_blend
+	var action_nudge: float = 0.0
+	if action_anim_timer > 0.0:
+		var progress: float = clampf(1.0 - (action_anim_timer / maxf(0.01, action_anim_duration)), 0.0, 1.0)
+		action_nudge = sin(progress * PI) * 12.0
 
-	_set_skeleton_bone_rot("Shoulder.R", -18.0, -10.0, 5.0)
-	_set_skeleton_bone_rot("UpperArm.R", -95.0 - pitch_deg + sway_x, -50.0, 35.0 + sway_y)
-	_set_skeleton_bone_rot("LowerArm.R", -25.0 + sway_x * 0.4, -15.0, 0.0)
-	_set_skeleton_bone_rot("Hand.R", -8.0, 0.0, 0.0)
+	_set_skeleton_bone_rot("Shoulder.R", -18.0, -8.0, 6.0)
+	_set_skeleton_bone_rot("UpperArm.R", -95.0 - pitch_deg - idle_breath - sway_lift * 0.5 + action_nudge * 0.5, -54.0 - sprint_blend * 4.0, 28.0 + sway_yaw + sprint_blend * 6.0)
+	_set_skeleton_bone_rot("LowerArm.R", -20.0 - sway_lift * 0.5 - sprint_blend * 8.0 + action_nudge * 0.6, -10.0, wrist_lag + idle_breath * 0.5)
+	_set_skeleton_bone_rot("Hand.R", -4.0 - action_nudge * 0.8, 0.0, -10.0 + wrist_lag * 0.7)
+
+	# Keep Kenney's oversized stylized hand proportional in FPP without changing dynamically
+	if hand_idx >= 0:
+		player_skeleton.set_bone_pose_scale(hand_idx, Vector3(0.76, 0.76, 0.76))
+
+	# Natural relaxed finger grip around the held item
+	for finger_name: String in ["Index", "Middle", "Ring", "Pinky"]:
+		_set_skeleton_bone_rot(finger_name + "2.R", 0.0, -42.0, 0.0)
+		_set_skeleton_bone_rot(finger_name + "3.R", 0.0, -52.0, 0.0)
+		_set_skeleton_bone_rot(finger_name + "4.R", 0.0, -30.0, 0.0)
+	_set_skeleton_bone_rot("Thumb2.R", 14.0, -34.0, -18.0)
+	_set_skeleton_bone_rot("Thumb3.R", 8.0, -24.0, 0.0)
 
 func _set_skeleton_bone_rot(bone_name: String, rot_x_deg: float, rot_z_deg: float, rot_y_deg: float) -> void:
 	var idx: int = player_skeleton.find_bone(bone_name)
@@ -798,10 +838,16 @@ func _set_skeleton_bone_rot(bone_name: String, rot_x_deg: float, rot_z_deg: floa
 func prepare_for_cutscene() -> void:
 	in_cutscene = true
 	action_anim_timer = 0.0
+	if player_skeleton:
+		var hand_idx: int = player_skeleton.find_bone("Hand.R")
+		if hand_idx >= 0:
+			player_skeleton.set_bone_pose_scale(hand_idx, Vector3.ONE)
 	if model_head_mesh:
 		model_head_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	if player_model:
 		player_model.position = Vector3.ZERO
+	if camera:
+		camera.rotation.z = 0.0
 	_hide_all_hand_props()
 	if flashlight:
 		flashlight.visible = false
@@ -810,7 +856,8 @@ func prepare_for_cutscene() -> void:
 func trigger_action_animation(anim_name: String, duration: float = 0.45) -> void:
 	if not model_anim_player or not model_anim_player.has_animation(anim_name):
 		return
-	action_anim_timer = maxf(0.1, duration)
+	action_anim_duration = maxf(0.1, duration)
+	action_anim_timer = action_anim_duration
 	current_anim_name = anim_name
 	model_anim_player.play(anim_name, 0.08, 1.25)
 
@@ -854,10 +901,17 @@ func _update_fpp_camera_and_arm(delta: float, is_moving: bool) -> void:
 		return
 	if model_head_mesh:
 		model_head_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
-	if player_model:
-		player_model.position = PLAYER_MODEL_FPP_POS
 
 	idle_arm_time += maxf(0.0, delta)
+	var target_move: float = 1.0 if (is_on_floor() and is_moving and not is_hiding and not is_caught) else 0.0
+	var target_sprint: float = 1.0 if (target_move > 0.5 and is_sprinting) else 0.0
+	if delta > 0.0:
+		move_blend = lerpf(move_blend, target_move, minf(1.0, delta * 8.0))
+		sprint_blend = lerpf(sprint_blend, target_sprint, minf(1.0, delta * 8.0))
+	else:
+		move_blend = target_move
+		sprint_blend = target_sprint
+
 	if is_on_floor() and is_moving and not is_hiding and not is_caught:
 		camera.position = Vector3(
 			initial_camera_pos.x + cos(bob_time * bob_freq * 0.5) * bob_amp * 0.6,
@@ -869,10 +923,25 @@ func _update_fpp_camera_and_arm(delta: float, is_moving: bool) -> void:
 	else:
 		camera.position = initial_camera_pos
 
+	# Low-sanity camera dizzy tilt (works across all graphics presets including Low)
+	var dizzy_factor: float = 0.0
+	if sanity_system and not is_caught and not in_cutscene:
+		var sanity_ratio: float = clampf(sanity_system.current_sanity / maxf(1.0, sanity_system.max_sanity), 0.0, 1.0)
+		dizzy_factor = clampf((0.55 - sanity_ratio) / 0.55, 0.0, 1.0)
+	camera.rotation.z = sin(idle_arm_time * 1.9) * deg_to_rad(3.2) * dizzy_factor
+	camera.rotation.x = cos(idle_arm_time * 2.4) * deg_to_rad(1.1) * dizzy_factor
+
+	if player_model:
+		# Keep the FPP model locked to camera head-bobbing so the hand never pulses closer/farther while moving
+		var cam_bob_offset: Vector3 = head.transform.basis * (camera.position - initial_camera_pos)
+		player_model.position = PLAYER_MODEL_FPP_POS + cam_bob_offset
+	if model_anim_player and not model_anim_player.is_playing():
+		_apply_fpp_hand_override()
+
 	if interaction_ray:
 		interaction_ray.position = Vector3.ZERO
 	if flashlight:
-		flashlight.position = Vector3(0.2, -0.2, -0.1)
+		flashlight.position = Vector3(0.14, -0.09, -0.38)
 	_sync_hand_prop_visibility()
 
 func revive_from_extra_life() -> void:
@@ -884,10 +953,14 @@ func revive_from_extra_life() -> void:
 	current_house = null
 	virtual_move_input = Vector2.ZERO
 	virtual_sprint_pressed = false
+	move_blend = 0.0
+	sprint_blend = 0.0
 	velocity = Vector3.ZERO
 	global_position = initial_spawn_position + Vector3(0.0, 0.08, 0.0)
 	rotation.y = initial_spawn_rotation
 	head.rotation = Vector3.ZERO
+	if camera:
+		camera.rotation = Vector3.ZERO
 	$CollisionShape3D.set_deferred("disabled", false)
 	set_physics_process(true)
 	set_process_unhandled_input(true)

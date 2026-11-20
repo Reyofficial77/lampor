@@ -216,45 +216,47 @@ func _style_horror_hud_containers() -> void:
 
 	if not touch:
 		slots_container.add_theme_constant_override("separation", 8)
-		bottom_center.offset_left = -220.0
-		bottom_center.offset_right = 220.0
-		bottom_center.offset_top = -90.0
+		bottom_center.offset_left = -228.0
+		bottom_center.offset_right = 228.0
+		bottom_center.offset_top = -94.0
 		bottom_center.offset_bottom = -14.0
 
 	for i: int in range(slots_container.get_child_count()):
 		var slot_node: Node = slots_container.get_child(i)
 		if slot_node is PanelContainer:
 			var panel: PanelContainer = slot_node as PanelContainer
-			var slot_dim: Vector2 = Vector2(58.0, 58.0) if touch else Vector2(76.0, 76.0)
+			var slot_dim: Vector2 = Vector2(62.0, 62.0) if touch else Vector2(80.0, 80.0)
 			panel.custom_minimum_size = slot_dim
 			panel.size = slot_dim
+			panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+			panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			_apply_slot_horror_style(panel, i == 0)
 			var vbox: VBoxContainer = panel.get_node_or_null("VBox") as VBoxContainer
 			if vbox:
-				vbox.add_theme_constant_override("separation", 1)
+				vbox.add_theme_constant_override("separation", 0)
 			var item_lbl: Label = panel.get_node_or_null("VBox/ItemName") as Label
 			if item_lbl:
-				item_lbl.clip_text = false
+				item_lbl.clip_text = true
 				item_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 				item_lbl.max_lines_visible = 2
 				item_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 				item_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-				item_lbl.custom_minimum_size = Vector2(50.0, 20.0) if touch else Vector2(68.0, 26.0)
-				item_lbl.add_theme_font_size_override("font_size", 8 if touch else 10)
+				item_lbl.custom_minimum_size = Vector2(54.0, 22.0) if touch else Vector2(72.0, 26.0)
+				item_lbl.add_theme_font_size_override("font_size", 8 if touch else 9)
 			var key_lbl: Label = panel.get_node_or_null("VBox/Key") as Label
 			if key_lbl:
 				key_lbl.add_theme_color_override("font_color", Color(0.84, 0.68, 0.38, 0.95))
-				key_lbl.add_theme_font_size_override("font_size", 9 if touch else 10)
+				key_lbl.add_theme_font_size_override("font_size", 8 if touch else 9)
 			var qty_lbl: Label = panel.get_node_or_null("VBox/Qty") as Label
 			if qty_lbl:
-				qty_lbl.add_theme_font_size_override("font_size", 8 if touch else 10)
+				qty_lbl.add_theme_font_size_override("font_size", 8 if touch else 9)
 
 func _apply_slot_horror_style(panel: PanelContainer, is_active: bool) -> void:
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(0.14, 0.035, 0.045, 0.94) if is_active else Color(0.045, 0.020, 0.026, 0.90)
 	style.border_color = Color(0.95, 0.72, 0.28, 1.0) if is_active else Color(0.45, 0.12, 0.14, 0.88)
 	style.set_border_width_all(2)
-	style.set_corner_radius_all(4)
+	style.set_corner_radius_all(2)
 	style.content_margin_left = 2.0
 	style.content_margin_right = 2.0
 	style.content_margin_top = 2.0
@@ -961,19 +963,22 @@ func _apply_mobile_hud_layout() -> void:
 	bottom_right.visible = false
 	var slot_gap: float = 6.0
 	slots_container.add_theme_constant_override("separation", int(slot_gap))
-	var slot_size: Vector2 = Vector2(58.0, 58.0)
+	var slot_size: Vector2 = Vector2(62.0, 62.0)
 	for slot: Node in slots_container.get_children():
 		var panel: PanelContainer = slot as PanelContainer
 		panel.custom_minimum_size = slot_size
 		panel.size = slot_size
+		panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		var item_lbl: Label = panel.get_node_or_null("VBox/ItemName") as Label
 		if item_lbl:
-			item_lbl.custom_minimum_size = Vector2(50.0, 20.0)
+			item_lbl.clip_text = true
+			item_lbl.custom_minimum_size = Vector2(54.0, 22.0)
 			item_lbl.max_lines_visible = 2
 			item_lbl.add_theme_font_size_override("font_size", 8)
 		var key_lbl: Label = panel.get_node_or_null("VBox/Key") as Label
 		if key_lbl:
-			key_lbl.add_theme_font_size_override("font_size", 9)
+			key_lbl.add_theme_font_size_override("font_size", 8)
 		var qty_lbl: Label = panel.get_node_or_null("VBox/Qty") as Label
 		if qty_lbl:
 			qty_lbl.add_theme_font_size_override("font_size", 8)
@@ -1197,11 +1202,16 @@ func _on_sanity_changed(current: float, max_val: float) -> void:
 	sanity_bar.value = current
 	sanity_val.text = "%d%%" % int((current / max_val) * 100.0)
 	
-	var fear: float = 1.0 - (current / max_val)
+	var fear: float = 1.0 - clampf(current / maxf(1.0, max_val), 0.0, 1.0)
+	var dizzy: float = clampf((fear - 0.30) / 0.70, 0.0, 1.0)
+	if post_process_rect:
+		var is_low: bool = bool(post_process_rect.get_meta("low_quality_mode", SettingsManager.get_effective_graphics_quality() == "low"))
+		post_process_rect.visible = (not is_low) or (fear > 0.12)
 	if post_process_material:
-		post_process_material.set_shader_parameter("vignette_intensity", lerp(0.35, 1.2, fear))
-		post_process_material.set_shader_parameter("aberration_amount", lerp(0.001, 0.015, fear))
+		post_process_material.set_shader_parameter("vignette_intensity", lerp(0.35, 1.25, fear))
+		post_process_material.set_shader_parameter("aberration_amount", lerp(0.001, 0.016, fear))
 		post_process_material.set_shader_parameter("pulse_intensity", fear)
+		post_process_material.set_shader_parameter("dizzy_intensity", dizzy)
 
 func _on_stamina_changed(current: float, max_val: float) -> void:
 	stamina_bar.max_value = max_val

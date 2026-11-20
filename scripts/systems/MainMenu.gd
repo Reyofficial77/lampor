@@ -1,7 +1,7 @@
 class_name MainMenu
 extends Control
 
-const GAME_VERSION: String = "v1.2.2"
+const GAME_VERSION: String = "v1.2.3"
 const HORROR_TITLE_FONT: Font = preload("res://assets/fonts/HorrorTitle.ttf")
 const ACCENT: Color = Color(0.76, 0.10, 0.12, 1.0)
 const ACCENT_GOLD: Color = Color(0.84, 0.68, 0.34, 1.0)

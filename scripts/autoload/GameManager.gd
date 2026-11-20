@@ -718,13 +718,23 @@ func get_sanity_settings_for_difficulty(diff: Difficulty) -> Dictionary:
 	match diff:
 		Difficulty.EASY:
 			return {
-				"dark_light": 0.12, "dark_dark": 0.5, "prox": 3.5, "stare": 12.0,
-				"regen": 16.0, "house_dark": 0.0, "flash_drain": 0.18
+				"dark_light": 0.02, "dark_dark": 0.12, "prox": 2.0, "stare": 8.0,
+				"regen": 18.0, "house_dark": 0.0, "flash_drain": 0.14
 			}
-	# NORMAL, HARD, NIGHTMARE: nilai standar
+		Difficulty.HARD:
+			return {
+				"dark_light": 0.12, "dark_dark": 0.60, "prox": 4.5, "stare": 18.0,
+				"regen": 12.0, "house_dark": 0.20, "flash_drain": 0.24
+			}
+		Difficulty.NIGHTMARE:
+			return {
+				"dark_light": 0.18, "dark_dark": 0.85, "prox": 6.0, "stare": 22.0,
+				"regen": 10.0, "house_dark": 0.35, "flash_drain": 0.28
+			}
+	# NORMAL: seimbang untuk durasi permainan multi-babak
 	return {
-		"dark_light": 1.0, "dark_dark": 2.5, "prox": 8.0, "stare": 28.0,
-		"regen": 12.0, "house_dark": 1.0, "flash_drain": 0.25
+		"dark_light": 0.06, "dark_dark": 0.35, "prox": 3.2, "stare": 14.0,
+		"regen": 15.0, "house_dark": 0.05, "flash_drain": 0.20
 	}
 
 func get_difficulty_name(diff: Difficulty) -> String:

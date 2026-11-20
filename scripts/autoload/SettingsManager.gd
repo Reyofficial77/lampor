@@ -186,7 +186,17 @@ func _apply_scene_graphics_optimizations(quality: String) -> void:
 
 	var horror_overlay: CanvasItem = root_node.find_child("HorrorOverlay", true, false) as CanvasItem
 	if horror_overlay:
-		horror_overlay.visible = (quality != "low")
+		var is_low: bool = (quality == "low")
+		horror_overlay.set_meta("low_quality_mode", is_low)
+		if horror_overlay.material is ShaderMaterial:
+			(horror_overlay.material as ShaderMaterial).set_shader_parameter("grain_multiplier", 0.0 if is_low else 1.0)
+		var sanity_fear: float = 0.0
+		if is_instance_valid(GameManager.player_character) and GameManager.player_character.get("sanity_system") != null:
+			var san_sys: Object = GameManager.player_character.get("sanity_system")
+			var max_san: float = maxf(1.0, float(san_sys.get("max_sanity")))
+			var cur_san: float = float(san_sys.get("current_sanity"))
+			sanity_fear = 1.0 - clampf(cur_san / max_san, 0.0, 1.0)
+		horror_overlay.visible = (not is_low) or (sanity_fear > 0.12)
 
 	var cam_far: float = 70.0 if quality == "low" else (105.0 if quality == "medium" else 150.0)
 	for cam_node: Node in root_node.find_children("*", "Camera3D", true, false):
@@ -198,7 +208,7 @@ func _apply_scene_graphics_optimizations(quality: String) -> void:
 		var dlight: DirectionalLight3D = dir_node as DirectionalLight3D
 		if dlight:
 			dlight.shadow_enabled = (quality != "low")
-			dlight.light_energy = 0.90 if quality == "low" else 0.60
+			dlight.light_energy = 0.65 if quality == "low" else 0.55
 
 	for spot_node: Node in root_node.find_children("*", "SpotLight3D", true, false):
 		var slight: SpotLight3D = spot_node as SpotLight3D
@@ -227,11 +237,11 @@ func _apply_scene_graphics_optimizations(quality: String) -> void:
 		if we and we.environment:
 			we.environment.fog_enabled = (quality != "low")
 			if quality == "low":
-				we.environment.ambient_light_color = Color(0.18, 0.21, 0.28, 1.0)
-				we.environment.ambient_light_energy = 1.25
+				we.environment.ambient_light_color = Color(0.14, 0.17, 0.23, 1.0)
+				we.environment.ambient_light_energy = 0.90
 			else:
 				we.environment.ambient_light_color = Color(0.11, 0.13, 0.19, 1.0)
-				we.environment.ambient_light_energy = 0.85
+				we.environment.ambient_light_energy = 0.80
 			we.environment.glow_enabled = false
 			we.environment.ssao_enabled = false
 			we.environment.ssil_enabled = false

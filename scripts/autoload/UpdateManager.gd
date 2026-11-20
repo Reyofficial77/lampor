@@ -17,7 +17,21 @@ const UPDATE_ROOT: String = "user://updates"
 const FIX_NOTES_CACHE_PATH: String = "user://lampor_fix_notes.md"
 const REQUIRED_UPDATE_FILES: PackedStringArray = ["project.godot", "scripts/autoload/UpdateManager.gd", "FIX_NOTES.md"]
 
-const BUNDLED_FIX_NOTES: String = """# LAMPOR v1.2.2
+const BUNDLED_FIX_NOTES: String = """# LAMPOR v1.2.3
+
+## v1.2.3
+
+- **Stabilitas Ukuran & Animasi Tangan FPP serta Genggaman Barang (`Hand.R`)**:
+  - Mengunci orientasi torso (`Hips`, `Torso`, `Chest`, `Neck`, `Head`) pada sudut pandang First-Person (FPP) dan menyelaraskan `PlayerModel` dengan head-bobbing kamera agar tangan kanan tidak lagi membesar atau berubah ukuran saat berjalan, sprint, menoleh, maupun berinteraksi.
+  - Memperbaiki animasi ayunan lengan agar tetap luwes saat diam, berjalan, sprint, dan berinteraksi dengan skala konstan proporsional pada `Hand.R`, tekukan jari yang rapi menggenggam barang (`Senter`, `Jamu Tolak Bala`, `Minyak Tanah & Korek`, `Papan & Paku`, dan `Baterai`), serta menjaga dada/jas tidak menutupi bagian bawah layar saat menunduk.
+- **Perbaikan Sorotan Senter di Semua Preset Grafis**:
+  - Memindahkan posisi `SpotLight3D` senter ke depan ujung senter genggam (`z = -0.38`) dan menonaktifkan `cast_shadow` pada `Suit_Body` serta prop genggam agar sorotan senter tidak terblokir bayangan tangan di preset `High`.
+  - Menaikkan daya dan jangkauan sorot senter serta menyeimbangkan cahaya bulan dan ambient di preset grafis `Low` agar cahaya senter terlihat jelas menerangi jalan desa.
+- **Penyeimbangan Kewarasan (Sanity) & Efek Pusing Tetap Aktif di Grafik Low**:
+  - Memperlambat laju pengurasan kewarasan di kegelapan dan dalam rumah pada seluruh tingkat kesulitan (`Easy`, `Normal`, `Hard`, `Nightmare`) agar eksplorasi multi-babak lebih seimbang.
+  - Menjaga `HorrorOverlay` tetap aktif ketika kewarasan menurun di preset grafis `Low` (tanpa film grain agar tetap ringan) lengkap dengan distorsi gelombang UV pusing (`dizzy_intensity`), chromatic aberration, vignette berdenyut, dan goyangan kamera halus saat kewarasan rendah.
+- **Slot Hotbar & Tas Kotak Presisi 1:1**:
+  - Memperbaiki tata letak dan pemotongan teks slot hotbar (`80x80` desktop / `62x62` mobile) serta slot modal tas (`72x72`) dengan sudut lebih tegas agar tetap berbentuk kotak persegi 1:1 meskipun berisi nama item yang panjang.
 
 ## v1.2.2
 

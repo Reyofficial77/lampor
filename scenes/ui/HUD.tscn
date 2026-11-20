@@ -13,6 +13,8 @@ shader_parameter/aberration_amount = 0.0025
 shader_parameter/grain_amount = 0.038
 shader_parameter/pulse_speed = 2.0
 shader_parameter/pulse_intensity = 0.0
+shader_parameter/dizzy_intensity = 0.0
+shader_parameter/grain_multiplier = 1.0
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_bar_bg"]
 bg_color = Color(0.04, 0.015, 0.02, 0.85)
@@ -61,10 +63,10 @@ border_width_top = 2
 border_width_right = 2
 border_width_bottom = 2
 border_color = Color(0.45, 0.12, 0.14, 0.88)
-corner_radius_top_left = 4
-corner_radius_top_right = 4
-corner_radius_bottom_right = 4
-corner_radius_bottom_left = 4
+corner_radius_top_left = 2
+corner_radius_top_right = 2
+corner_radius_bottom_right = 2
+corner_radius_bottom_left = 2
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_pause_panel"]
 bg_color = Color(0.03, 0.015, 0.02, 0.97)

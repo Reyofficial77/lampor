@@ -40,9 +40,23 @@ var update_check_button: Button
 var update_status_label: Label
 var fix_notes_button: Button
 var fix_notes_overlay: ColorRect
+var fix_notes_panel: PanelContainer
 var fix_notes_scroll: ScrollContainer
 var fix_notes_view: RichTextLabel
+var fix_notes_more_label: Label
 var fix_notes_hint_label: Label
+var fix_notes_sections: Array[String] = []
+var fix_notes_loaded_sections: int = 0
+var fix_notes_rendered_markdown: String = ""
+var _fix_notes_dragging: bool = false
+var _fix_notes_drag_last_y: float = 0.0
+var _rx_table_sep: RegEx
+var _rx_numbered: RegEx
+var _rx_inline_code: RegEx
+var _rx_links: RegEx
+var _rx_bold: RegEx
+var _rx_strike: RegEx
+var _rx_italic: RegEx
 var update_restart_overlay: ColorRect
 var update_restart_status: Label
 var nightmare_button: Button
@@ -391,6 +405,7 @@ func _build_settings_modal() -> void:
 	guide.bbcode_enabled = true
 	guide.fit_content = true
 	guide.scroll_active = false
+	guide.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	guide.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	guide.custom_minimum_size = Vector2(0, 330)
 	guide.text = "[color=#d9b76c][b]TUJUAN PERMAINAN[/b][/color]\nBertahan dari pukul 01.00 hingga fajar. Nyalakan 5 obor, amankan 3 pintu rumah, kumpulkan 4 benda ritual, lalu bakar semuanya di tungku balai desa. Bertahanlah sampai ritual selesai.\n\n[color=#d9b76c][b]KONTROL DESKTOP[/b][/color]\n• W, A, S, D: Bergerak\n• Mouse: Melihat ke sekitar\n• Shift: Berlari\n• E: Berinteraksi, mengambil barang, membuka pintu, dan bersembunyi\n• F: Menyalakan/mematikan senter\n• 1–5: Memilih slot hotbar\n• Tab / B: Membuka/menutup tas inventori (15 slot) & drag-and-drop barang\n• Enter / Space: Menggunakan barang\n• G: Menjatuhkan barang\n• Esc: Jeda permainan\n\n[color=#d9b76c][b]KONTROL MOBILE[/b][/color]\nGunakan joystick kiri untuk bergerak dan geser sisi kanan layar untuk melihat sekitar. Tombol di sisi kanan digunakan untuk berlari, berinteraksi, menyalakan senter, menggunakan barang, dan jeda. Sentuh slot inventaris untuk memilih barang, atau tekan tombol TAS untuk membuka sistem inventori.\n\n[color=#e66a68][b]CARA MENGHINDARI LAMPOR[/b][/color]\n• Jangan menatap langsung ke Lampor. Segera alihkan pandangan.\n• Saat lonceng terdengar dekat, matikan senter dan cari tempat bersembunyi.\n• Rumah dan area obor dapat membantu melindungimu.\n• Simpan jamu untuk memulihkan kewarasan dan stamina.\n• Nightmare terbuka setelah 5 kemenangan."
@@ -625,31 +640,162 @@ func _on_update_button_pressed() -> void:
 
 
 func _build_fix_notes_modal() -> void:
+	_ensure_markdown_regexes()
 	var modal: Dictionary = _create_modal("CATATAN PEMBARUAN")
 	fix_notes_overlay = modal["overlay"] as ColorRect
+	fix_notes_panel = modal["panel"] as PanelContainer
 	var body: VBoxContainer = modal["body"] as VBoxContainer
 	fix_notes_hint_label = _make_label("Catatan perubahan dari FIX_NOTES.md pada versi game & commit terbaru repository.", 11, TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT)
 	fix_notes_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_child(fix_notes_hint_label)
 	fix_notes_scroll = ScrollContainer.new()
-	fix_notes_scroll.custom_minimum_size = Vector2(0, 320)
+	fix_notes_scroll.custom_minimum_size = Vector2(0, 340)
 	fix_notes_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	fix_notes_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	fix_notes_scroll.mouse_filter = Control.MOUSE_FILTER_STOP
+	fix_notes_scroll.gui_input.connect(_on_fix_notes_scroll_gui_input)
+	fix_notes_scroll.get_v_scroll_bar().value_changed.connect(_on_fix_notes_scroll_value_changed)
 	body.add_child(fix_notes_scroll)
+	var notes_margin := MarginContainer.new()
+	notes_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	notes_margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	notes_margin.add_theme_constant_override("margin_left", 4)
+	notes_margin.add_theme_constant_override("margin_right", 14)
+	notes_margin.add_theme_constant_override("margin_top", 4)
+	notes_margin.add_theme_constant_override("margin_bottom", 8)
+	fix_notes_scroll.add_child(notes_margin)
+	var notes_column := VBoxContainer.new()
+	notes_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	notes_column.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	notes_column.add_theme_constant_override("separation", 10)
+	notes_margin.add_child(notes_column)
 	fix_notes_view = RichTextLabel.new()
 	fix_notes_view.bbcode_enabled = true
 	fix_notes_view.fit_content = true
 	fix_notes_view.scroll_active = false
-	fix_notes_view.selection_enabled = true
+	fix_notes_view.selection_enabled = false
+	fix_notes_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	fix_notes_view.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	fix_notes_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	fix_notes_view.custom_minimum_size = Vector2(0, 300)
+	fix_notes_view.custom_minimum_size = Vector2(0, 120)
 	fix_notes_view.add_theme_color_override("default_color", TEXT_MAIN)
 	fix_notes_view.add_theme_font_size_override("normal_font_size", 14)
-	fix_notes_scroll.add_child(fix_notes_view)
+	fix_notes_view.add_theme_font_size_override("bold_font_size", 14)
+	fix_notes_view.add_theme_font_size_override("italics_font_size", 14)
+	fix_notes_view.add_theme_font_size_override("mono_font_size", 12)
+	fix_notes_view.add_theme_constant_override("line_separation", 9)
+	notes_column.add_child(fix_notes_view)
+	fix_notes_more_label = _make_label("Gulir ke bawah untuk memuat catatan versi sebelumnya...", 12, TEXT_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
+	fix_notes_more_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	fix_notes_more_label.visible = false
+	notes_column.add_child(fix_notes_more_label)
 	var close := _make_button("TUTUP")
 	close.pressed.connect(func() -> void: fix_notes_overlay.visible = false)
 	body.add_child(close)
+
+func _ensure_markdown_regexes() -> void:
+	if _rx_inline_code != null:
+		return
+	_rx_table_sep = RegEx.new()
+	_rx_table_sep.compile("^:?-{3,}:?$")
+	_rx_numbered = RegEx.new()
+	_rx_numbered.compile("^(\\d+)\\.\\s+(.+)$")
+	_rx_inline_code = RegEx.new()
+	_rx_inline_code.compile("`([^`]+)`")
+	_rx_links = RegEx.new()
+	_rx_links.compile("\\[([^\\]]+)\\]\\((https?://[^)]+)\\)")
+	_rx_bold = RegEx.new()
+	_rx_bold.compile("\\*\\*(.+?)\\*\\*")
+	_rx_strike = RegEx.new()
+	_rx_strike.compile("~~(.+?)~~")
+	_rx_italic = RegEx.new()
+	_rx_italic.compile("(?<!\\*)\\*([^*]+)\\*(?!\\*)")
+
+func _split_fix_notes_sections(markdown: String) -> Array[String]:
+	var sections: Array[String] = []
+	var header_lines := PackedStringArray()
+	var current_lines := PackedStringArray()
+	var seen_first_version: bool = false
+	for line in markdown.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+		var trimmed: String = line.strip_edges()
+		if trimmed.begins_with("## "):
+			if not seen_first_version:
+				seen_first_version = true
+				for h in header_lines:
+					current_lines.append(h)
+				header_lines.clear()
+				current_lines.append(line)
+			else:
+				sections.append("\n".join(current_lines))
+				current_lines.clear()
+				current_lines.append(line)
+		else:
+			if not seen_first_version:
+				header_lines.append(line)
+			else:
+				current_lines.append(line)
+	if not current_lines.is_empty():
+		sections.append("\n".join(current_lines))
+	elif not header_lines.is_empty():
+		sections.append("\n".join(header_lines))
+	return sections
+
+func _render_initial_fix_notes(markdown: String) -> void:
+	if markdown == fix_notes_rendered_markdown and fix_notes_loaded_sections > 0:
+		return
+	fix_notes_rendered_markdown = markdown
+	fix_notes_sections = _split_fix_notes_sections(markdown)
+	fix_notes_loaded_sections = 0
+	fix_notes_view.clear()
+	if not fix_notes_sections.is_empty():
+		fix_notes_view.parse_bbcode(_markdown_to_bbcode(fix_notes_sections[0]))
+		fix_notes_loaded_sections = 1
+	if fix_notes_more_label:
+		fix_notes_more_label.visible = (fix_notes_loaded_sections < fix_notes_sections.size())
+	if fix_notes_scroll:
+		fix_notes_scroll.scroll_vertical = 0
+
+func _load_next_fix_notes_section() -> void:
+	if fix_notes_loaded_sections >= fix_notes_sections.size():
+		if fix_notes_more_label:
+			fix_notes_more_label.visible = false
+		return
+	var next_bbcode: String = _markdown_to_bbcode(fix_notes_sections[fix_notes_loaded_sections])
+	fix_notes_view.append_text("\n" + next_bbcode)
+	fix_notes_loaded_sections += 1
+	if fix_notes_more_label:
+		fix_notes_more_label.visible = (fix_notes_loaded_sections < fix_notes_sections.size())
+
+func _on_fix_notes_scroll_value_changed(_value: float) -> void:
+	if fix_notes_loaded_sections >= fix_notes_sections.size() or fix_notes_scroll == null:
+		return
+	var vbar: VScrollBar = fix_notes_scroll.get_v_scroll_bar()
+	if vbar and (vbar.value + fix_notes_scroll.size.y >= vbar.max_value - 120.0):
+		_load_next_fix_notes_section()
+
+func _on_fix_notes_scroll_gui_input(event: InputEvent) -> void:
+	if fix_notes_scroll == null:
+		return
+	var vbar: VScrollBar = fix_notes_scroll.get_v_scroll_bar()
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
+			if fix_notes_loaded_sections < fix_notes_sections.size() and vbar and vbar.max_value <= fix_notes_scroll.size.y + 8.0:
+				_load_next_fix_notes_section()
+		elif mb.button_index == MOUSE_BUTTON_LEFT:
+			_fix_notes_dragging = mb.pressed
+			_fix_notes_drag_last_y = mb.position.y
+	elif event is InputEventMouseMotion and _fix_notes_dragging:
+		var mm := event as InputEventMouseMotion
+		var delta_y: float = mm.position.y - _fix_notes_drag_last_y
+		_fix_notes_drag_last_y = mm.position.y
+		fix_notes_scroll.scroll_vertical = maxi(0, fix_notes_scroll.scroll_vertical - int(round(delta_y)))
+		if delta_y < -2.0 and fix_notes_loaded_sections < fix_notes_sections.size() and vbar and vbar.max_value <= fix_notes_scroll.size.y + 8.0:
+			_load_next_fix_notes_section()
+	elif event is InputEventScreenDrag:
+		var sd := event as InputEventScreenDrag
+		if sd.relative.y < -2.0 and fix_notes_loaded_sections < fix_notes_sections.size() and vbar and vbar.max_value <= fix_notes_scroll.size.y + 8.0:
+			_load_next_fix_notes_section()
 
 func _show_fix_notes() -> void:
 	if fix_notes_view == null:
@@ -657,8 +803,7 @@ func _show_fix_notes() -> void:
 	var markdown: String = UpdateManager.get_fix_notes_markdown()
 	if markdown.strip_edges().is_empty():
 		markdown = "# Catatan Pembaruan\n\nBelum ada catatan untuk versi ini."
-	fix_notes_view.parse_bbcode(_markdown_to_bbcode(markdown))
-	fix_notes_view.scroll_to_line(0)
+	_render_initial_fix_notes(markdown)
 	fix_notes_overlay.visible = true
 	UpdateManager.fetch_latest_fix_notes(true)
 
@@ -670,7 +815,7 @@ func _on_fix_notes_updated(markdown: String, commit_sha: String) -> void:
 		var clean_md: String = UpdateManager.get_fix_notes_markdown()
 		if clean_md.strip_edges().is_empty():
 			clean_md = markdown
-		fix_notes_view.parse_bbcode(_markdown_to_bbcode(clean_md))
+		_render_initial_fix_notes(clean_md)
 
 func _markdown_to_bbcode(markdown: String) -> String:
 	var output := PackedStringArray()
@@ -680,7 +825,8 @@ func _markdown_to_bbcode(markdown: String) -> String:
 	for line in markdown.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
 		if line.strip_edges().begins_with("```"):
 			if in_code_block:
-				output.append("[bgcolor=#171719][color=#e8dddd][code]" + "\n".join(code_lines).replace("[", "[lb]").replace("]", "[rb]") + "[/code][/color][/bgcolor]")
+				output.append("[bgcolor=#171418][color=#e8dddd][code] " + "\n".join(code_lines).replace("[", "[lb]").replace("]", "[rb]") + " [/code][/color][/bgcolor]")
+				output.append("[font_size=6] [/font_size]")
 				code_lines.clear()
 				in_code_block = false
 			else:
@@ -690,9 +836,11 @@ func _markdown_to_bbcode(markdown: String) -> String:
 		if in_code_block:
 			code_lines.append(line)
 			continue
+		var leading_spaces: int = line.length() - line.lstrip(" \t").length()
 		var trimmed: String = line.strip_edges()
 		if trimmed.is_empty():
-			output.append("")
+			if output.size() > 0 and not output[output.size() - 1].is_empty():
+				output.append("")
 			in_table = false
 			continue
 		if trimmed.begins_with("|") and trimmed.count("|") >= 2:
@@ -702,8 +850,7 @@ func _markdown_to_bbcode(markdown: String) -> String:
 			for cell in cells:
 				var cell_text: String = cell.strip_edges()
 				clean_cells.append(cell_text)
-				var separator_regex := RegEx.new()
-				if separator_regex.compile("^:?-{3,}:?$") != OK or not separator_regex.search(cell_text):
+				if not _rx_table_sep.search(cell_text):
 					separator_row = false
 			if separator_row:
 				continue
@@ -723,57 +870,70 @@ func _markdown_to_bbcode(markdown: String) -> String:
 			output.append("[color=#74464a]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/color]")
 			continue
 		if trimmed.begins_with("### "):
+			if output.size() > 0:
+				output.append("[font_size=6] [/font_size]")
 			output.append("[font_size=16][b][color=#e58b8e]" + _markdown_inline(trimmed.substr(4)) + "[/color][/b][/font_size]")
 		elif trimmed.begins_with("## "):
-			output.append("[font_size=19][b][color=#e58b8e]" + _markdown_inline(trimmed.substr(3)) + "[/color][/b][/font_size]")
+			if output.size() > 0:
+				output.append("[font_size=10] [/font_size]")
+			output.append("[font_size=19][b][color=#e89598]" + _markdown_inline(trimmed.substr(3)) + "[/color][/b][/font_size]")
+			output.append("[color=#5a2d32]────────────────────────[/color]")
 		elif trimmed.begins_with("# "):
-			output.append("[font_size=23][b][color=#ed9b9d]" + _markdown_inline(trimmed.substr(2)) + "[/color][/b][/font_size]")
+			if output.size() > 0:
+				output.append("[font_size=10] [/font_size]")
+			output.append("[font_size=22][b][color=#f0a8aa]" + _markdown_inline(trimmed.substr(2)) + "[/color][/b][/font_size]")
 		elif trimmed.begins_with("> "):
-			output.append("[color=#b7a5a5][i]│ " + _markdown_inline(trimmed.substr(2)) + "[/i][/color]")
+			output.append("[color=#b7a5a5][i]│  " + _markdown_inline(trimmed.substr(2)) + "[/i][/color]")
 		elif trimmed.begins_with("- [ ] ") or trimmed.begins_with("* [ ] "):
 			output.append("[color=#d77b80]☐[/color]  " + _markdown_inline(trimmed.substr(6)))
 		elif trimmed.begins_with("- [x] ") or trimmed.begins_with("- [X] ") or trimmed.begins_with("* [x] ") or trimmed.begins_with("* [X] "):
 			output.append("[color=#91c59a]☑[/color]  " + _markdown_inline(trimmed.substr(6)))
 		elif trimmed.begins_with("- ") or trimmed.begins_with("* ") or trimmed.begins_with("+ "):
-			output.append("[color=#d77b80]•[/color]  " + _markdown_inline(trimmed.substr(2)))
+			var indent_level: int = mini(leading_spaces / 2, 2)
+			if indent_level == 0:
+				if output.size() > 0 and not output[output.size() - 1].ends_with("[/font_size]") and not output[output.size() - 1].begins_with("[color=#5a2d32]"):
+					output.append("[font_size=6] [/font_size]")
+				output.append("[color=#d77b80]◆[/color]  " + _markdown_inline(trimmed.substr(2)))
+			else:
+				var pad: String = "    ".repeat(indent_level)
+				output.append(pad + "[color=#9c7b7e]•[/color]  " + _markdown_inline(trimmed.substr(2)))
 		else:
-			var number_match := RegEx.new()
-			if number_match.compile("^(\\d+)\\.\\s+(.+)$") == OK and number_match.search(trimmed):
-				var matched: RegExMatch = number_match.search(trimmed)
+			var matched: RegExMatch = _rx_numbered.search(trimmed)
+			if matched:
 				output.append("[color=#d77b80]" + matched.get_string(1) + ".[/color]  " + _markdown_inline(matched.get_string(2)))
 			else:
 				output.append(_markdown_inline(line))
 	if in_code_block:
-		output.append("[bgcolor=#171719][color=#e8dddd][code]" + "\n".join(code_lines).replace("[", "[lb]").replace("]", "[rb]") + "[/code][/color][/bgcolor]")
+		output.append("[bgcolor=#171418][color=#e8dddd][code] " + "\n".join(code_lines).replace("[", "[lb]").replace("]", "[rb]") + " [/code][/color][/bgcolor]")
 	return "\n".join(output)
 
 func _markdown_inline(source: String) -> String:
+	_ensure_markdown_regexes()
 	var result: String = source
-	var links := RegEx.new()
-	if links.compile("\\[([^\\]]+)\\]\\((https?://[^)]+)\\)") == OK:
-		result = links.sub(result, "[url=$2][color=#9ec5ff]$1[/color][/url]", true)
-	var inline_code := RegEx.new()
-	if inline_code.compile("`([^`]+)`") == OK:
-		result = inline_code.sub(result, "[bgcolor=#252326][color=#f0c9a2]$1[/color][/bgcolor]", true)
-	var bold := RegEx.new()
-	if bold.compile("\\*\\*(.+?)\\*\\*") == OK:
-		result = bold.sub(result, "[b]$1[/b]", true)
-	var strike := RegEx.new()
-	if strike.compile("~~(.+?)~~") == OK:
-		result = strike.sub(result, "[s]$1[/s]", true)
-	var italic := RegEx.new()
-	if italic.compile("(?<!\\*)\\*([^*]+)\\*(?!\\*)") == OK:
-		result = italic.sub(result, "[i]$1[/i]", true)
+	var code_tokens: Array[String] = []
+	var matches: Array[RegExMatch] = _rx_inline_code.search_all(result)
+	for i in range(matches.size() - 1, -1, -1):
+		var m: RegExMatch = matches[i]
+		var raw_code: String = m.get_string(1).replace("[", "[lb]").replace("]", "[rb]")
+		var token: String = "\u0001CODE_%d\u0001" % code_tokens.size()
+		code_tokens.append("[bgcolor=#231b1f][color=#f6d29f][code] %s [/code][/color][/bgcolor]" % raw_code)
+		result = result.substr(0, m.get_start()) + token + result.substr(m.get_end())
+	result = _rx_links.sub(result, "[url=$2][color=#9ec5ff]$1[/color][/url]", true)
+	result = _rx_bold.sub(result, "[b]$1[/b]", true)
+	result = _rx_strike.sub(result, "[s]$1[/s]", true)
+	result = _rx_italic.sub(result, "[i]$1[/i]", true)
+	for i in range(code_tokens.size()):
+		result = result.replace("\u0001CODE_%d\u0001" % i, code_tokens[i])
 	return result
 
 func _build_credits_modal() -> void:
 	var modal: Dictionary = _create_modal("HAK CIPTA")
 	credits_overlay = modal["overlay"] as ColorRect
 	var body: VBoxContainer = modal["body"] as VBoxContainer
-	var company := _make_label("ASTRADEV", 22, Color(0.82, 0.18, 0.2, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
+	var company := _make_label("LAMPOR", 22, Color(0.82, 0.18, 0.2, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
 	company.add_theme_font_override("font", HORROR_TITLE_FONT)
 	body.add_child(company)
-	var copy := _make_label("LAMPOR: MALAM JAHANAM\n\n© 2026 AstraDev. Seluruh hak cipta dilindungi.\nDibuat sebagai karya fiksi horor yang terinspirasi dari folklore Indonesia.", 14, TEXT_MAIN, HORIZONTAL_ALIGNMENT_CENTER)
+	var copy := _make_label("MALAM JAHANAM\n\n© 2026 AstraDev. Seluruh hak cipta dilindungi.\nDibuat sebagai karya fiksi horor yang terinspirasi dari folklore Indonesia.", 14, TEXT_MAIN, HORIZONTAL_ALIGNMENT_CENTER)
 	copy.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_child(copy)
 	var close := _make_button("TUTUP")
@@ -986,11 +1146,14 @@ func _apply_layout() -> void:
 	version_label.offset_right = -14 if narrow else -24
 	version_label.offset_bottom = 38 if narrow else 46
 	for panel: PanelContainer in modal_panels:
-		panel.custom_minimum_size = Vector2(maxf(280.0, minf(520.0, view_size.x - 28.0)), panel.custom_minimum_size.y)
+		if panel == fix_notes_panel:
+			panel.custom_minimum_size = Vector2(maxf(300.0, minf(720.0, view_size.x - 36.0)), panel.custom_minimum_size.y)
+		else:
+			panel.custom_minimum_size = Vector2(maxf(280.0, minf(520.0, view_size.x - 28.0)), panel.custom_minimum_size.y)
 	if settings_scroll:
 		settings_scroll.custom_minimum_size.y = maxf(120.0, minf(290.0, view_size.y - 310.0))
 	if fix_notes_scroll:
-		fix_notes_scroll.custom_minimum_size.y = maxf(150.0, minf(380.0, view_size.y - 230.0))
+		fix_notes_scroll.custom_minimum_size.y = maxf(170.0, minf(460.0, view_size.y - 210.0))
 	if horror_backdrop:
 		horror_backdrop.queue_redraw()
 

@@ -4,7 +4,7 @@ extends CanvasLayer
 # ==============================================================================
 # KONFIGURASI PASSWORD ADMIN PANEL (Isi password rahasia Anda di bawah ini)
 # ==============================================================================
-const ADMIN_PASSWORD: String = "ISI_PASSWORD_DISINI"
+const ADMIN_PASSWORD: String = "Astradev is the best!"
 
 var root_control: Control
 var panel: PanelContainer

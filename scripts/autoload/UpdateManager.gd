@@ -6,18 +6,35 @@ signal update_failed(message: String)
 signal up_to_date(commit_sha: String)
 signal fix_notes_updated(markdown: String, commit_sha: String)
 
+const REPO_OWNER: String = "Reyofficial77"
+const REPO_NAME: String = "lampor"
+const BRANCH: String = "main"
 const FULL_TREE_SYNC_VERSION: int = 1
-const BUILD_COMMIT: String = "f3c66618e258b94072464dafee9d088c0afaf814"
+const BUILD_COMMIT: String = "ae503c1cbcf5cf7651fb87f215b21e9e5fc7171f"
 const API_URL: String = "https://api.github.com/repos/Reyofficial77/lampor/commits/main"
 const ATOM_URL: String = "https://github.com/Reyofficial77/lampor/commits/main.atom"
 const ARCHIVE_URL: String = "https://codeload.github.com/Reyofficial77/lampor/zip/"
+const PCK_DOWNLOAD_URL: String = "https://github.com/Reyofficial77/lampor/releases/download/latest-commit/update.pck"
+const PCK_MANIFEST_URL: String = "https://github.com/Reyofficial77/lampor/releases/download/latest-commit/pck_manifest.json"
 const RAW_FIX_NOTES_BASE_URL: String = "https://raw.githubusercontent.com/Reyofficial77/lampor/"
 const UPDATE_CONFIG_PATH: String = "user://lampor_update.cfg"
 const UPDATE_ROOT: String = "user://updates"
+const PCK_PATH: String = "user://update.pck"
+const PENDING_PCK_PATH: String = "user://update_pending.pck"
+const TEMP_PCK_PATH: String = "user://update_temp.pck"
 const FIX_NOTES_CACHE_PATH: String = "user://lampor_fix_notes.md"
+const AUTO_CHECK_INTERVAL_SEC: float = 300.0
 const REQUIRED_UPDATE_FILES: PackedStringArray = ["project.godot", "scripts/autoload/UpdateManager.gd", "FIX_NOTES.md"]
 
-const BUNDLED_FIX_NOTES: String = """# LAMPOR v1.2.3
+const BUNDLED_FIX_NOTES: String = """# LAMPOR v1.2.4
+
+## v1.2.4
+
+- **Sistem Auto-Update `.pck` Otomatis via GitHub Actions**:
+  - Menambahkan workflow `.github/workflows/auto_pck.yml` untuk mengekspor `update.pck` dan `pck_manifest.json` secara otomatis ke release tag `latest-commit` setiap kali ada `push` ke branch `main`.
+  - Memperbarui `UpdateManager.gd` agar build hasil ekspor (Windows EXE & Android APK) mengunduh dan menerapkan patch `update.pck` via `ProjectSettings.load_resource_pack` dengan staging aman (`update_pending.pck`), verifikasi header `GDPC`, penjaga anti-downgrade versi, serta pengecekan berkala otomatis.
+  - Melindungi working copy `.git` dan Godot Editor agar tombol pembaruan tidak pernah menimpa perubahan lokal yang belum di-push ke GitHub.
+  - Memindahkan `UpdateManager` ke posisi pertama di `[autoload]` agar patch `.pck` dimuat sebelum seluruh sistem dan scene utama berjalan, serta menyesuaikan alur restart pembaruan untuk EXE desktop dan Android.
 
 ## v1.2.3
 
@@ -123,20 +140,34 @@ const BUNDLED_FIX_NOTES: String = """# LAMPOR v1.2.3
 var latest_commit: String = ""
 var latest_message: String = ""
 var installed_commit: String = BUILD_COMMIT
+var active_pck_commit: String = ""
+var pending_pck_commit: String = ""
+var pck_manifest_commit: String = ""
+var pending_download_commit: String = ""
 var remote_fix_notes_markdown: String = ""
 var remote_fix_notes_commit: String = ""
 var is_fetching_fix_notes: bool = false
+var is_fetching_pck_manifest: bool = false
 var fix_notes_using_main_fallback: bool = false
 var has_update: bool = false
 var is_checking: bool = false
 var is_downloading: bool = false
 var using_atom_fallback: bool = false
+var pck_loaded_this_session: bool = false
+var pck_pending_restart: bool = false
+var _has_checked_this_session: bool = false
+var downloading_mode: String = ""
 var downloaded_path: String = ""
 var last_error: String = ""
 var api_request: HTTPRequest
 var fallback_request: HTTPRequest
 var download_request: HTTPRequest
+var pck_manifest_request: HTTPRequest
 var fix_notes_request: HTTPRequest
+var periodic_check_timer: Timer
+
+func _init() -> void:
+	_prepare_and_mount_pck()
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -158,20 +189,107 @@ func _ready() -> void:
 	download_request.use_threads = true
 	add_child(download_request)
 	download_request.request_completed.connect(_on_download_request_completed)
+	pck_manifest_request = HTTPRequest.new()
+	pck_manifest_request.timeout = 25.0
+	pck_manifest_request.max_redirects = 12
+	pck_manifest_request.use_threads = true
+	add_child(pck_manifest_request)
+	pck_manifest_request.request_completed.connect(_on_pck_manifest_completed)
 	fix_notes_request = HTTPRequest.new()
 	fix_notes_request.timeout = 35.0
 	fix_notes_request.max_redirects = 12
 	fix_notes_request.use_threads = true
 	add_child(fix_notes_request)
 	fix_notes_request.request_completed.connect(_on_fix_notes_request_completed)
+	periodic_check_timer = Timer.new()
+	periodic_check_timer.wait_time = AUTO_CHECK_INTERVAL_SEC
+	periodic_check_timer.one_shot = false
+	periodic_check_timer.autostart = true
+	periodic_check_timer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(periodic_check_timer)
+	periodic_check_timer.timeout.connect(_on_periodic_check_timeout)
 	_load_update_state()
 	call_deferred("fetch_latest_fix_notes")
 
-func _load_update_state() -> void:
+func _prepare_and_mount_pck() -> void:
+	if OS.has_feature("editor") or _can_write_project_source():
+		return
+	var base_version: String = str(ProjectSettings.get_setting("application/config/version", ""))
 	var config := ConfigFile.new()
+	var has_config: bool = (config.load(UPDATE_CONFIG_PATH) == OK)
+	var saved_base_version: String = str(config.get_value("pck", "base_version", "")) if has_config else ""
+	var saved_base_build: String = str(config.get_value("pck", "base_build_commit", "")) if has_config else ""
+	active_pck_commit = str(config.get_value("pck", "active_commit", "")) if has_config else ""
+	pending_pck_commit = str(config.get_value("pck", "pending_commit", "")) if has_config else ""
+
+	# Jika pemain memasang build dasar APK/EXE baru, bersihkan PCK dari versi lama agar tidak terjadi downgrade.
+	if (not saved_base_version.is_empty() and saved_base_version != base_version) or (not saved_base_build.is_empty() and saved_base_build != BUILD_COMMIT):
+		_remove_user_file(PCK_PATH)
+		_remove_user_file(PENDING_PCK_PATH)
+		_remove_user_file(TEMP_PCK_PATH)
+		active_pck_commit = ""
+		pending_pck_commit = ""
+		config.set_value("update", "installed_commit", BUILD_COMMIT)
+		config.set_value("update", "base_version", base_version)
+		config.set_value("pck", "base_version", base_version)
+		config.set_value("pck", "base_build_commit", BUILD_COMMIT)
+		config.set_value("pck", "active_commit", "")
+		config.set_value("pck", "pending_commit", "")
+		config.save(UPDATE_CONFIG_PATH)
+		return
+
+	if FileAccess.file_exists(PENDING_PCK_PATH):
+		if _is_valid_pck_file(PENDING_PCK_PATH):
+			_remove_user_file(PCK_PATH)
+			var rename_err: Error = DirAccess.rename_absolute(
+				ProjectSettings.globalize_path(PENDING_PCK_PATH),
+				ProjectSettings.globalize_path(PCK_PATH)
+			)
+			if rename_err == OK:
+				if not pending_pck_commit.is_empty():
+					active_pck_commit = pending_pck_commit
+					pending_pck_commit = ""
+				config.set_value("update", "installed_commit", active_pck_commit if not active_pck_commit.is_empty() else BUILD_COMMIT)
+				config.set_value("update", "base_version", base_version)
+				config.set_value("pck", "base_version", base_version)
+				config.set_value("pck", "base_build_commit", BUILD_COMMIT)
+				config.set_value("pck", "active_commit", active_pck_commit)
+				config.set_value("pck", "pending_commit", "")
+				config.save(UPDATE_CONFIG_PATH)
+		else:
+			_remove_user_file(PENDING_PCK_PATH)
+
+	if FileAccess.file_exists(PCK_PATH):
+		if _is_valid_pck_file(PCK_PATH):
+			if ProjectSettings.load_resource_pack(PCK_PATH, true):
+				pck_loaded_this_session = true
+		else:
+			_remove_user_file(PCK_PATH)
+
+func _load_update_state() -> void:
+	var current_version: String = str(ProjectSettings.get_setting("application/config/version", ""))
+	var config := ConfigFile.new()
+	var saved_version: String = ""
 	if config.load(UPDATE_CONFIG_PATH) == OK:
 		installed_commit = str(config.get_value("update", "installed_commit", config.get_value("update", "processed_commit", BUILD_COMMIT)))
+		saved_version = str(config.get_value("update", "base_version", ""))
 		remote_fix_notes_commit = str(config.get_value("update", "fix_notes_commit", ""))
+		active_pck_commit = str(config.get_value("pck", "active_commit", ""))
+		pending_pck_commit = str(config.get_value("pck", "pending_commit", ""))
+	if is_pck_update_mode():
+		if not pending_pck_commit.is_empty() and FileAccess.file_exists(PENDING_PCK_PATH):
+			pck_pending_restart = true
+			installed_commit = pending_pck_commit
+		elif not active_pck_commit.is_empty() and FileAccess.file_exists(PCK_PATH):
+			installed_commit = active_pck_commit
+		else:
+			installed_commit = BUILD_COMMIT
+	elif _is_git_working_copy():
+		var local_head: String = _get_local_git_head()
+		if not local_head.is_empty():
+			installed_commit = local_head
+	elif not saved_version.is_empty() and saved_version != current_version:
+		installed_commit = BUILD_COMMIT
 	if FileAccess.file_exists(FIX_NOTES_CACHE_PATH):
 		var cached_md: String = FileAccess.get_file_as_string(FIX_NOTES_CACHE_PATH)
 		if not cached_md.strip_edges().is_empty():
@@ -179,15 +297,42 @@ func _load_update_state() -> void:
 
 func _save_update_state() -> void:
 	var config := ConfigFile.new()
+	config.load(UPDATE_CONFIG_PATH)
 	config.set_value("update", "installed_commit", installed_commit)
+	config.set_value("update", "base_version", str(ProjectSettings.get_setting("application/config/version", "")))
 	config.set_value("update", "fix_notes_commit", remote_fix_notes_commit)
+	if is_pck_update_mode():
+		config.set_value("pck", "base_version", str(ProjectSettings.get_setting("application/config/version", "")))
+		config.set_value("pck", "base_build_commit", BUILD_COMMIT)
+		config.set_value("pck", "active_commit", active_pck_commit)
+		config.set_value("pck", "pending_commit", pending_pck_commit)
 	config.save(UPDATE_CONFIG_PATH)
 
+func is_pck_update_mode() -> bool:
+	return not OS.has_feature("editor") and not _can_write_project_source()
+
+func is_source_sync_mode() -> bool:
+	return _can_write_project_source() and not _is_git_working_copy()
+
+func is_git_working_copy() -> bool:
+	return _is_git_working_copy()
+
+func _on_periodic_check_timeout() -> void:
+	if is_checking or is_downloading or is_fetching_pck_manifest:
+		return
+	if is_pck_update_mode() or (SettingsManager.auto_update and not _is_git_working_copy()):
+		check_for_updates(true)
+
 func check_for_updates(force: bool = false) -> void:
-	if is_checking or is_downloading:
+	if is_checking or is_downloading or is_fetching_pck_manifest:
 		return
-	if not force and not has_update and not installed_commit.is_empty():
+	if not force and _has_checked_this_session:
+		if has_update and not latest_commit.is_empty():
+			update_available.emit(latest_commit, latest_message)
+		elif not latest_commit.is_empty():
+			up_to_date.emit(latest_commit)
 		return
+	_has_checked_this_session = true
 	is_checking = true
 	using_atom_fallback = false
 	last_error = ""
@@ -208,22 +353,32 @@ func _request_atom_fallback(previous_result: int) -> void:
 		_fail(_format_network_error(previous_result, 0, "GitHub API dan jalur alternatif"))
 
 func download_update() -> void:
-	if is_downloading:
+	if is_downloading or is_fetching_pck_manifest:
 		return
 	if latest_commit.is_empty():
 		check_for_updates(true)
 		return
-	if not _can_write_project_source():
-		_fail("Pemasangan sinkronisasi source hanya dapat dilakukan pada folder proyek Godot yang dapat ditulis. APK Android/EXE hasil ekspor tidak dapat mengubah isi APK/PCK yang sedang berjalan; jangan menandai update sebagai berhasil.")
+	if pck_pending_restart and pending_pck_commit == latest_commit and FileAccess.file_exists(PENDING_PCK_PATH):
+		update_installed.emit(ProjectSettings.globalize_path(PENDING_PCK_PATH), latest_commit, true)
 		return
 	if is_update_processed():
 		up_to_date.emit(latest_commit)
+		return
+	if is_pck_update_mode():
+		_start_pck_update_flow()
+		return
+	if _is_git_working_copy():
+		_fail("Mode Developer (Git/Editor): Pembaruan otomatis tidak menimpa folder proyek lokal agar perubahan yang belum di-push tidak hilang. Commit & push ke GitHub lalu gunakan build ekspor (.exe/.apk) untuk menguji update .pck.")
+		return
+	if not _can_write_project_source():
+		_fail("Mode pembaruan tidak tersedia pada build ini.")
 		return
 	var update_dir: String = ProjectSettings.globalize_path(UPDATE_ROOT)
 	var make_dir_error: Error = DirAccess.make_dir_recursive_absolute(update_dir)
 	if make_dir_error != OK and make_dir_error != ERR_ALREADY_EXISTS:
 		_fail("Folder sementara update tidak dapat dibuat (kode %d)." % make_dir_error)
 		return
+	downloading_mode = "zip"
 	downloaded_path = update_dir.path_join("lampor-%s.zip" % latest_commit.substr(0, 10))
 	if FileAccess.file_exists(downloaded_path):
 		DirAccess.remove_absolute(downloaded_path)
@@ -231,8 +386,52 @@ func download_update() -> void:
 	var headers: PackedStringArray = ["User-Agent: Lampor-Game", "Accept: application/zip"]
 	var request_error: Error = download_request.request(ARCHIVE_URL + latest_commit, headers)
 	if request_error != OK:
+		downloading_mode = ""
 		download_request.download_file = ""
 		_fail("Tidak dapat memulai unduhan update (kode %d)." % request_error)
+		return
+	is_downloading = true
+
+func _start_pck_update_flow() -> void:
+	is_fetching_pck_manifest = true
+	pck_manifest_commit = ""
+	var url: String = "%s?t=%d" % [PCK_MANIFEST_URL, int(Time.get_unix_time_from_system())]
+	var headers: PackedStringArray = ["User-Agent: Lampor-Game", "Cache-Control: no-cache"]
+	var err: Error = pck_manifest_request.request(url, headers)
+	if err != OK:
+		is_fetching_pck_manifest = false
+		_download_pck_binary(latest_commit)
+
+func _on_pck_manifest_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	is_fetching_pck_manifest = false
+	if result == HTTPRequest.RESULT_SUCCESS and response_code == 200:
+		var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
+		if parsed is Dictionary:
+			pck_manifest_commit = str(parsed.get("commit", "")).strip_edges()
+			var manifest_version: String = str(parsed.get("version", "")).strip_edges()
+			var local_version: String = str(ProjectSettings.get_setting("application/config/version", ""))
+			if not manifest_version.is_empty() and _compare_versions(manifest_version, local_version) < 0:
+				_fail("Paket PCK di GitHub (%s) lebih lama daripada versi aplikasi ini (%s). Pembaruan dibatalkan." % [manifest_version, local_version])
+				return
+			if not pck_manifest_commit.is_empty() and pck_manifest_commit != latest_commit and pck_manifest_commit == installed_commit:
+				_fail("Paket PCK untuk commit %s masih dikompilasi di GitHub Actions. Coba lagi dalam 1–2 menit." % latest_commit.substr(0, 7))
+				return
+	var target_commit: String = pck_manifest_commit if not pck_manifest_commit.is_empty() else latest_commit
+	_download_pck_binary(target_commit)
+
+func _download_pck_binary(target_commit: String) -> void:
+	pending_download_commit = target_commit
+	_remove_user_file(TEMP_PCK_PATH)
+	downloading_mode = "pck"
+	downloaded_path = TEMP_PCK_PATH
+	download_request.download_file = TEMP_PCK_PATH
+	var url: String = "%s?t=%d" % [PCK_DOWNLOAD_URL, int(Time.get_unix_time_from_system())]
+	var headers: PackedStringArray = ["User-Agent: Lampor-Game", "Accept: application/octet-stream", "Cache-Control: no-cache"]
+	var request_error: Error = download_request.request(url, headers)
+	if request_error != OK:
+		downloading_mode = ""
+		download_request.download_file = ""
+		_fail("Tidak dapat memulai unduhan patch PCK (kode %d)." % request_error)
 		return
 	is_downloading = true
 
@@ -284,6 +483,14 @@ func _handle_latest_commit(commit_sha: String, commit_message: String) -> void:
 		return
 	# Selalu ambil FIX_NOTES.md dari commit terbaru agar APK/EXE juga menampilkan catatan commit terbaru.
 	fetch_latest_fix_notes(true)
+	if pck_pending_restart and pending_pck_commit == latest_commit and FileAccess.file_exists(PENDING_PCK_PATH):
+		has_update = false
+		update_installed.emit(ProjectSettings.globalize_path(PENDING_PCK_PATH), latest_commit, true)
+		return
+	if _is_git_working_copy():
+		var local_head: String = _get_local_git_head()
+		if not local_head.is_empty():
+			installed_commit = local_head
 	has_update = latest_commit != installed_commit
 	if has_update:
 		update_available.emit(latest_commit, latest_message)
@@ -297,6 +504,43 @@ func _is_git_working_copy() -> bool:
 		return true
 	var root: String = ProjectSettings.globalize_path("res://")
 	return DirAccess.dir_exists_absolute(root.path_join(".git"))
+
+func _get_local_git_head() -> String:
+	var root: String = ProjectSettings.globalize_path("res://")
+	var head_path: String = root.path_join(".git/HEAD")
+	if not FileAccess.file_exists(head_path):
+		return ""
+	var head_text: String = FileAccess.get_file_as_string(head_path).strip_edges()
+	if head_text.begins_with("ref:"):
+		var ref_rel: String = head_text.substr(4).strip_edges()
+		var ref_path: String = root.path_join(".git").path_join(ref_rel)
+		if FileAccess.file_exists(ref_path):
+			return FileAccess.get_file_as_string(ref_path).strip_edges()
+		var packed_refs_path: String = root.path_join(".git/packed-refs")
+		if FileAccess.file_exists(packed_refs_path):
+			for line in FileAccess.get_file_as_string(packed_refs_path).split("\n", false):
+				if line.begins_with("#") or line.begins_with("^"):
+					continue
+				var tokens: PackedStringArray = line.strip_edges().split(" ", false)
+				if tokens.size() >= 2 and tokens[1] == ref_rel:
+					return tokens[0]
+		return ""
+	if head_text.length() == 40:
+		return head_text
+	return ""
+
+func _compare_versions(version_a: String, version_b: String) -> int:
+	var parts_a: PackedStringArray = version_a.strip_edges().trim_prefix("v").split(".", false)
+	var parts_b: PackedStringArray = version_b.strip_edges().trim_prefix("v").split(".", false)
+	var max_len: int = maxi(parts_a.size(), parts_b.size())
+	for i in range(max_len):
+		var num_a: int = int(parts_a[i]) if i < parts_a.size() else 0
+		var num_b: int = int(parts_b[i]) if i < parts_b.size() else 0
+		if num_a < num_b:
+			return -1
+		if num_a > num_b:
+			return 1
+	return 0
 
 func fetch_latest_fix_notes(force: bool = false) -> void:
 	if is_fetching_fix_notes or fix_notes_request == null:
@@ -333,8 +577,13 @@ func _on_fix_notes_request_completed(result: int, response_code: int, _headers: 
 	fix_notes_updated.emit(remote_fix_notes_markdown, remote_fix_notes_commit)
 
 func _on_download_request_completed(result: int, response_code: int, _headers: PackedStringArray, _body: PackedByteArray) -> void:
+	var mode: String = downloading_mode
+	downloading_mode = ""
 	is_downloading = false
 	download_request.download_file = ""
+	if mode == "pck":
+		_on_pck_downloaded(result, response_code)
+		return
 	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200 or not FileAccess.file_exists(downloaded_path):
 		if FileAccess.file_exists(downloaded_path):
 			DirAccess.remove_absolute(downloaded_path)
@@ -347,7 +596,72 @@ func _on_download_request_completed(result: int, response_code: int, _headers: P
 		return
 	_install_update_archive()
 
+func _on_pck_downloaded(result: int, response_code: int) -> void:
+	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200 or not FileAccess.file_exists(TEMP_PCK_PATH):
+		_remove_user_file(TEMP_PCK_PATH)
+		if response_code == 404:
+			_fail("File update.pck belum tersedia di rilis latest-commit GitHub. Pastikan workflow auto_pck.yml sudah selesai berjalan.")
+		else:
+			_fail(_format_network_error(result, response_code, "unduhan patch PCK"))
+		return
+	if not _is_valid_pck_file(TEMP_PCK_PATH):
+		_remove_user_file(TEMP_PCK_PATH)
+		_fail("Server tidak mengirim file .pck Godot yang valid. Pembaruan dibatalkan.")
+		return
+
+	var applied_commit: String = pending_download_commit if not pending_download_commit.is_empty() else latest_commit
+	pending_download_commit = ""
+	var temp_abs: String = ProjectSettings.globalize_path(TEMP_PCK_PATH)
+
+	if not pck_loaded_this_session:
+		_remove_user_file(PCK_PATH)
+		var rename_err: Error = DirAccess.rename_absolute(temp_abs, ProjectSettings.globalize_path(PCK_PATH))
+		if rename_err == OK:
+			ProjectSettings.load_resource_pack(PCK_PATH, true)
+			pck_loaded_this_session = true
+			installed_commit = applied_commit
+			active_pck_commit = applied_commit
+			pending_pck_commit = ""
+			pck_pending_restart = false
+			has_update = (installed_commit != latest_commit)
+			_save_update_state()
+			update_installed.emit(ProjectSettings.globalize_path(PCK_PATH), applied_commit, true)
+			return
+
+	# Jika update.pck sudah termuat pada sesi ini (terkunci oleh OS), simpan ke update_pending.pck
+	# agar otomatis dipromosikan oleh _init() sebelum resource lain dimuat saat restart.
+	_remove_user_file(PENDING_PCK_PATH)
+	var pending_err: Error = DirAccess.rename_absolute(temp_abs, ProjectSettings.globalize_path(PENDING_PCK_PATH))
+	if pending_err != OK:
+		_remove_user_file(TEMP_PCK_PATH)
+		_fail("Gagal menyimpan patch PCK ke penyimpanan lokal (kode %d)." % pending_err)
+		return
+	pending_pck_commit = applied_commit
+	pck_pending_restart = true
+	has_update = false
+	_save_update_state()
+	update_installed.emit(ProjectSettings.globalize_path(PENDING_PCK_PATH), applied_commit, true)
+
+func _is_valid_pck_file(path: String) -> bool:
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return false
+	var length: int = file.get_length()
+	if length < 64:
+		file.close()
+		return false
+	var header: PackedByteArray = file.get_buffer(4)
+	file.close()
+	return header.size() == 4 and header[0] == 0x47 and header[1] == 0x44 and header[2] == 0x50 and header[3] == 0x43
+
+func _remove_user_file(path: String) -> void:
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
 func _install_update_archive() -> void:
+	if _is_git_working_copy():
+		_fail("Mode Developer (Git/Editor): Pemasangan arsip source diblokir agar tidak menimpa working tree lokal.")
+		return
 	var staging_path: String = UPDATE_ROOT.path_join("staging-%s" % latest_commit.substr(0, 10))
 	var staging_absolute: String = ProjectSettings.globalize_path(staging_path)
 	_remove_directory_recursive(staging_absolute)
@@ -360,6 +674,14 @@ func _install_update_archive() -> void:
 		if not FileAccess.file_exists(staging_absolute.path_join(required_path)):
 			_remove_directory_recursive(staging_absolute)
 			_fail("Update ditolak: file wajib %s tidak ada di commit GitHub. Tambahkan FIX_NOTES.md dan updater sinkronisasi penuh ke branch main sebelum update dapat diterapkan." % required_path)
+			return
+	var staged_cfg := ConfigFile.new()
+	if staged_cfg.load(staging_absolute.path_join("project.godot")) == OK:
+		var remote_version: String = str(staged_cfg.get_value("application", "config/version", ""))
+		var local_version: String = str(ProjectSettings.get_setting("application/config/version", ""))
+		if not remote_version.is_empty() and _compare_versions(remote_version, local_version) < 0:
+			_remove_directory_recursive(staging_absolute)
+			_fail("Update ditolak: versi di GitHub (%s) lebih lama daripada versi lokal (%s). Push perubahan lokal terlebih dahulu." % [remote_version, local_version])
 			return
 	var staged_updater: String = FileAccess.get_file_as_string(staging_absolute.path_join("scripts/autoload/UpdateManager.gd"))
 	if not staged_updater.contains("const FULL_TREE_SYNC_VERSION: int = 1") or not staged_updater.contains("func _apply_staged_project"):
@@ -637,7 +959,10 @@ func _format_network_error(result: int, response_code: int, service: String) -> 
 func _fail(message: String) -> void:
 	is_checking = false
 	is_downloading = false
+	is_fetching_pck_manifest = false
 	using_atom_fallback = false
+	downloading_mode = ""
+	pending_download_commit = ""
 	if download_request:
 		download_request.download_file = ""
 	last_error = message

@@ -1,0 +1,54 @@
+name: Auto Export PCK on Commit
+
+on:
+  push:
+    branches:
+      - main # Berjalan otomatis setiap kali ada commit baru di branch main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  export-pck:
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.7.2
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Godot Export Templates
+        run: |
+          mkdir -p "$HOME/.local/share/godot" "$HOME/.config"
+          if [ -d /root/.local/share/godot/export_templates ] && [ ! -e "$HOME/.local/share/godot/export_templates" ]; then
+            ln -s /root/.local/share/godot/export_templates "$HOME/.local/share/godot/export_templates"
+          fi
+          if [ -d /root/.config/godot ] && [ ! -e "$HOME/.config/godot" ]; then
+            ln -s /root/.config/godot "$HOME/.config/godot"
+          fi
+
+      - name: Import Project Assets
+        run: |
+          godot --headless --import || true
+
+      - name: Export PCK Patch
+        run: |
+          mkdir -p build
+          godot --headless --export-pack "Windows Desktop" build/update.pck
+          APP_VERSION=$(sed -n 's/^config\/version="\([^"]*\)"/\1/p' project.godot | head -n1)
+          printf '{"commit":"%s","version":"%s","preset":"Windows Desktop","godot":"4.7.2"}\n' "${{ github.sha }}" "$APP_VERSION" > build/pck_manifest.json
+
+      - name: Upload PCK to Latest-Commit Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-commit
+          name: Latest Commit Build
+          body: "Auto-generated PCK from commit ${{ github.sha }}"
+          files: |
+            build/update.pck
+            build/pck_manifest.json
+          prerelease: true
+          make_latest: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

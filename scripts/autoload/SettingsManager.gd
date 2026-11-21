@@ -5,7 +5,7 @@ const DEFAULT_MOUSE_SENSITIVITY: float = 1.0
 const DEFAULT_CAMERA_SENSITIVITY: float = 1.0
 const DEFAULT_GRAPHICS_QUALITY: String = "auto"
 const DEFAULT_BRIGHTNESS: float = 1.0
-const DEFAULT_AUTO_UPDATE: bool = false
+const DEFAULT_AUTO_UPDATE: bool = true
 const DEFAULT_MOBILE_BUTTON_SCALE: float = 1.0
 const DEFAULT_MOBILE_JOYSTICK_SCALE: float = 1.0
 

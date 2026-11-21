@@ -1,8 +1,8 @@
 3e2cc9f74922c2592e3236b3f5b5179c
-::res://::1795177205
+::res://::1795237396
 ANDROID_UPDATE_PERMISSION.md::TextFile::-1::1795155334::0::1::::<><><>0<>0<><>::
 export_presets.cfg::TextFile::-1::1795155335::0::1::::<><><>0<>0<><>::
-FIX_NOTES.md::TextFile::-1::1795163484::0::1::::<><><>0<>0<><>::
+FIX_NOTES.md::TextFile::-1::1795181924::0::1::::<><><>0<>0<><>::
 README.md::TextFile::-1::1795155334::0::1::::<><><>0<>0<><>::
 REDEEM_AND_UPDATE.md::TextFile::-1::1795155334::0::1::::<><><>0<>0<><>::
 UPDATER_GITHUB_SETUP.md::TextFile::-1::1795155334::0::1::::<><><>0<>0<><>::
@@ -69,9 +69,9 @@ LamporStateMachine.gd::GDScript::8120430255660850092::1795156585::0::1::::Lampor
 AudioManager.gd::GDScript::2803630579770963394::1795155335::0::1::::<>Node<><>0<>0<><>::
 GameManager.gd::GDScript::6616463805063124293::1795176443::0::1::::<>Node<><>0<>0<><>::
 JumpscareManager.gd::GDScript::5324543311065079923::1795155335::0::1::::<>CanvasLayer<><>0<>0<><>::
-SettingsManager.gd::GDScript::3417881251258726366::1795176441::0::1::::<>Node<><>0<>0<><>::
+SettingsManager.gd::GDScript::3417881251258726366::1795237024::0::1::::<>Node<><>0<>0<><>::
 SignalBus.gd::GDScript::2251700891095933977::1795155335::0::1::::<>Node<><>0<>0<><>::
-UpdateManager.gd::GDScript::5493300924600864511::1795163486::0::1::::<>Node<><>0<>0<><>::
+UpdateManager.gd::GDScript::5493300924600864511::1795237098::0::1::::<>Node<><>0<>0<><>::
 ::res://scripts/player/::1795155335
 InteractionRay.gd::GDScript::7460539817931423403::1795155335::0::1::::InteractionRay<>RayCast3D<><>0<>0<><>::
 InventorySystem.gd::GDScript::5791387855345299559::1795155335::0::1::::InventorySystem<>Node<><>0<>0<><>::
@@ -83,7 +83,7 @@ GameOverScreen.gd::GDScript::6253218846369600669::1795158863::0::1::::GameOverSc
 HidingSpot.gd::GDScript::8456255834921389138::1795155335::0::1::::HidingSpot<>Area3D<><>0<>0<><>::
 HUD.gd::GDScript::1474453377409325632::1795175628::0::1::::HUD<>CanvasLayer<><>0<>0<><>::
 ItemRandomizer.gd::GDScript::8429841317755793448::1795155335::0::1::::<>Node3D<><>0<>0<><>::
-MainMenu.gd::GDScript::686429278319520189::1795158749::0::1::::MainMenu<>Control<><>0<>0<><>::
+MainMenu.gd::GDScript::686429278319520189::1795237111::0::1::::MainMenu<>Control<><>0<>0<><>::
 PickupItem.gd::GDScript::2711189669991575152::1795159953::0::1::::PickupItem<>Area3D<><>0<>0<><>::
 RedemptionCodes.gd::GDScript::788838240028634627::1795156970::0::1::::RedemptionCodes<>RefCounted<><>0<>0<><>::
 RitualAltar.gd::GDScript::431258482443477444::1795155335::0::1::::RitualAltar<>StaticBody3D<><>0<>0<><>::

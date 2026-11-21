@@ -1,4 +1,12 @@
-# LAMPOR v1.2.3
+# LAMPOR v1.2.4
+
+## v1.2.4
+
+- **Sistem Auto-Update `.pck` Otomatis via GitHub Actions**:
+  - Menambahkan workflow `.github/workflows/auto_pck.yml` untuk mengekspor `update.pck` dan `pck_manifest.json` secara otomatis ke release tag `latest-commit` setiap kali ada `push` ke branch `main`.
+  - Memperbarui `UpdateManager.gd` agar build hasil ekspor (Windows EXE & Android APK) mengunduh dan menerapkan patch `update.pck` via `ProjectSettings.load_resource_pack` dengan staging aman (`update_pending.pck`), verifikasi header `GDPC`, penjaga anti-downgrade versi, serta pengecekan berkala otomatis.
+  - Melindungi working copy `.git` dan Godot Editor agar tombol pembaruan tidak pernah menimpa perubahan lokal yang belum di-push ke GitHub.
+  - Memindahkan `UpdateManager` ke posisi pertama di `[autoload]` agar patch `.pck` dimuat sebelum seluruh sistem dan scene utama berjalan, serta menyesuaikan alur restart pembaruan untuk EXE desktop dan Android.
 
 ## v1.2.3
 

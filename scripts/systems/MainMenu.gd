@@ -1,7 +1,7 @@
 class_name MainMenu
 extends Control
 
-const GAME_VERSION: String = "v1.2.3"
+const GAME_VERSION: String = "v1.2.4"
 const HORROR_TITLE_FONT: Font = preload("res://assets/fonts/HorrorTitle.ttf")
 const ACCENT: Color = Color(0.76, 0.10, 0.12, 1.0)
 const ACCENT_GOLD: Color = Color(0.84, 0.68, 0.34, 1.0)
@@ -349,7 +349,7 @@ func _build_settings_modal() -> void:
 	content.add_child(graphics_row)
 
 	auto_update_check = CheckButton.new()
-	auto_update_check.text = "Ekstrak/pasang source update otomatis"
+	auto_update_check.text = "Unduh & pasang update otomatis"
 	auto_update_check.button_pressed = SettingsManager.auto_update
 	auto_update_check.toggled.connect(SettingsManager.set_auto_update)
 	content.add_child(auto_update_check)
@@ -526,12 +526,16 @@ func _check_for_game_updates() -> void:
 
 func _on_update_available(commit_sha: String, commit_message: String) -> void:
 	update_button.disabled = false
+	update_check_button.text = "PERIKSA PEMBARUAN GAME"
+	if UpdateManager.is_git_working_copy():
+		update_button.visible = false
+		update_status_label.text = "Mode Developer (Git/Editor): Commit GitHub %s (%s). Gunakan git pull/push agar perubahan lokal tidak tertimpa." % [commit_sha.substr(0, 10), commit_message]
+		return
 	update_button.visible = not UpdateManager.is_update_processed()
 	update_button.text = "PASANG PEMBARUAN"
 	update_button.tooltip_text = commit_message
-	update_check_button.text = "PERIKSA PEMBARUAN GAME"
 	if UpdateManager.is_update_processed():
-		update_status_label.text = "Source commit %s sudah diekstrak sebelumnya." % commit_sha.substr(0, 10)
+		update_status_label.text = "Commit %s sudah terpasang." % commit_sha.substr(0, 10)
 	else:
 		update_status_label.text = "Commit terbaru %s: %s" % [commit_sha.substr(0, 10), commit_message]
 
@@ -556,26 +560,30 @@ func _build_update_restart_modal() -> void:
 	var modal: Dictionary = _create_modal("PEMBARUAN BERHASIL")
 	update_restart_overlay = modal["overlay"] as ColorRect
 	var body: VBoxContainer = modal["body"] as VBoxContainer
-	var explanation := _make_label("Semua perubahan dari repository sudah diterapkan ke folder proyek. Mulai ulang permainan sekarang agar skrip, resource, file baru, dan penghapusan dimuat sepenuhnya. Progress permainan akan disimpan sebelum dimulai ulang.", 14, TEXT_MAIN, HORIZONTAL_ALIGNMENT_CENTER)
+	var explanation := _make_label("Semua perubahan terbaru dari repository sudah siap diterapkan. Mulai ulang permainan sekarang agar semua skrip, scene, dan resource terbaru dimuat sepenuhnya. Progress permainan akan disimpan sebelum dimulai ulang.", 14, TEXT_MAIN, HORIZONTAL_ALIGNMENT_CENTER)
 	explanation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_child(explanation)
 	update_restart_status = _make_label("Disarankan: mulai ulang sekarang.", 12, TEXT_MUTED, HORIZONTAL_ALIGNMENT_CENTER)
 	update_restart_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_child(update_restart_status)
-	var restart := _make_button("MULAI ULANG SEKARANG", true)
+	var restart_label: String = "TUTUP GAME UNTUK MENERAPKAN" if OS.has_feature("android") else "MULAI ULANG SEKARANG"
+	var restart := _make_button(restart_label, true)
 	restart.pressed.connect(_restart_after_update)
 	body.add_child(restart)
 	var later := _make_button("NANTI, SAYA MULAI ULANG MANUAL")
 	later.pressed.connect(func() -> void:
 		update_restart_overlay.visible = false
-		update_status_label.text = "Pembaruan sudah diterapkan. Tutup permainan lalu buka kembali proyek Lampor untuk memuat seluruh perubahan."
+		update_status_label.text = "Pembaruan sudah siap. Tutup permainan lalu buka kembali Lampor untuk memuat seluruh perubahan."
 	)
 	body.add_child(later)
 
 func _show_update_restart_prompt(commit_sha: String) -> void:
 	if update_restart_overlay == null:
 		return
-	update_restart_status.text = "Commit terpasang: %s · Mulai ulang disarankan." % commit_sha.substr(0, 10)
+	if OS.has_feature("android"):
+		update_restart_status.text = "Commit terpasang: %s · Tutup game lalu buka kembali untuk menerapkan patch." % commit_sha.substr(0, 10)
+	else:
+		update_restart_status.text = "Commit terpasang: %s · Mulai ulang disarankan." % commit_sha.substr(0, 10)
 	update_restart_overlay.visible = true
 	update_restart_overlay.move_to_front()
 
@@ -584,19 +592,25 @@ func _restart_after_update() -> void:
 		update_restart_status.text = "Menyimpan progress dan memulai ulang..."
 	GameManager.save_active_run()
 	GameManager.save_game_data()
+	if OS.has_feature("android"):
+		get_tree().quit()
+		return
 	var executable_path: String = OS.get_executable_path()
-	var project_root: String = ProjectSettings.globalize_path("res://")
-	var process_id: int = OS.create_process(executable_path, ["--path", project_root])
+	var args: PackedStringArray = PackedStringArray()
+	if UpdateManager.is_source_sync_mode():
+		args.append("--path")
+		args.append(ProjectSettings.globalize_path("res://"))
+	var process_id: int = OS.create_process(executable_path, args)
 	if process_id <= 0:
 		if update_restart_status:
-			update_restart_status.text = "Permainan tidak dapat dimulai ulang otomatis. Tutup game, lalu buka kembali proyek Lampor secara manual. Progress sudah diminta untuk disimpan."
+			update_restart_status.text = "Permainan tidak dapat dimulai ulang otomatis. Tutup game, lalu buka kembali Lampor secara manual. Progress sudah disimpan."
 		return
 	get_tree().quit()
 
 func _on_update_failed(message: String) -> void:
 	if update_button:
 		update_button.disabled = false
-		update_button.visible = true
+		update_button.visible = not UpdateManager.is_git_working_copy()
 		update_button.text = "UPDATE GAGAL · COBA LAGI"
 		update_button.tooltip_text = message
 	if update_check_button:

@@ -10,7 +10,8 @@ const REPO_OWNER: String = "Reyofficial77"
 const REPO_NAME: String = "lampor"
 const BRANCH: String = "main"
 const FULL_TREE_SYNC_VERSION: int = 1
-const BUILD_COMMIT: String = "d4431b9d4d2e4babb75fe61ac1564ef76af34c11"
+const PCK_COMPAT_GENERATION: int = 2
+const BUILD_COMMIT: String = "a0d04650082593714d3d5404b8e783ef74802a90"
 const API_URL: String = "https://api.github.com/repos/Reyofficial77/lampor/commits/main"
 const ATOM_URL: String = "https://github.com/Reyofficial77/lampor/commits/main.atom"
 const ARCHIVE_URL: String = "https://codeload.github.com/Reyofficial77/lampor/zip/"
@@ -176,8 +177,11 @@ var latest_commit: String = ""
 var latest_message: String = ""
 var installed_commit: String = BUILD_COMMIT
 var active_pck_commit: String = ""
+var active_pck_version: String = ""
 var pending_pck_commit: String = ""
+var pending_pck_version: String = ""
 var pck_manifest_commit: String = ""
+var pck_manifest_version: String = ""
 var pending_download_commit: String = ""
 var remote_fix_notes_markdown: String = ""
 var remote_fix_notes_commit: String = ""
@@ -254,27 +258,47 @@ func _prepare_and_mount_pck() -> void:
 	var has_config: bool = (config.load(UPDATE_CONFIG_PATH) == OK)
 	var saved_base_version: String = str(config.get_value("pck", "base_version", "")) if has_config else ""
 	var saved_base_build: String = str(config.get_value("pck", "base_build_commit", "")) if has_config else ""
+	var saved_compat_gen: int = int(config.get_value("pck", "compat_gen", 0)) if has_config else 0
 	active_pck_commit = str(config.get_value("pck", "active_commit", "")) if has_config else ""
+	active_pck_version = str(config.get_value("pck", "active_version", "")) if has_config else ""
 	pending_pck_commit = str(config.get_value("pck", "pending_commit", "")) if has_config else ""
+	pending_pck_version = str(config.get_value("pck", "pending_version", "")) if has_config else ""
 
-	# Jika pemain memasang build dasar APK/EXE baru, bersihkan PCK dari versi lama agar tidak terjadi downgrade.
-	if (not saved_base_version.is_empty() and saved_base_version != base_version) or (not saved_base_build.is_empty() and saved_base_build != BUILD_COMMIT):
+	var pck_outdated: bool = false
+	if not has_config or saved_compat_gen != PCK_COMPAT_GENERATION:
+		pck_outdated = true
+	elif not saved_base_version.is_empty() and saved_base_version != base_version:
+		pck_outdated = true
+	elif not saved_base_build.is_empty() and saved_base_build != BUILD_COMMIT:
+		pck_outdated = true
+	elif not active_pck_commit.is_empty() and (active_pck_version.is_empty() or _compare_versions(active_pck_version, base_version) < 0):
+		pck_outdated = true
+	elif not pending_pck_commit.is_empty() and (pending_pck_version.is_empty() or _compare_versions(pending_pck_version, base_version) < 0):
+		pck_outdated = true
+
+	# Jika pemain memasang build dasar APK/EXE baru atau ada PCK versi lama, bersihkan agar tidak terjadi downgrade.
+	if pck_outdated:
 		_remove_user_file(PCK_PATH)
 		_remove_user_file(PENDING_PCK_PATH)
 		_remove_user_file(TEMP_PCK_PATH)
 		active_pck_commit = ""
+		active_pck_version = ""
 		pending_pck_commit = ""
+		pending_pck_version = ""
 		config.set_value("update", "installed_commit", BUILD_COMMIT)
 		config.set_value("update", "base_version", base_version)
+		config.set_value("pck", "compat_gen", PCK_COMPAT_GENERATION)
 		config.set_value("pck", "base_version", base_version)
 		config.set_value("pck", "base_build_commit", BUILD_COMMIT)
 		config.set_value("pck", "active_commit", "")
+		config.set_value("pck", "active_version", "")
 		config.set_value("pck", "pending_commit", "")
+		config.set_value("pck", "pending_version", "")
 		config.save(UPDATE_CONFIG_PATH)
 		return
 
 	if FileAccess.file_exists(PENDING_PCK_PATH):
-		if _is_valid_pck_file(PENDING_PCK_PATH):
+		if _is_valid_pck_file(PENDING_PCK_PATH) and not pending_pck_version.is_empty() and _compare_versions(pending_pck_version, base_version) >= 0:
 			_remove_user_file(PCK_PATH)
 			var rename_err: Error = DirAccess.rename_absolute(
 				ProjectSettings.globalize_path(PENDING_PCK_PATH),
@@ -283,19 +307,24 @@ func _prepare_and_mount_pck() -> void:
 			if rename_err == OK:
 				if not pending_pck_commit.is_empty():
 					active_pck_commit = pending_pck_commit
+					active_pck_version = pending_pck_version
 					pending_pck_commit = ""
+					pending_pck_version = ""
 				config.set_value("update", "installed_commit", active_pck_commit if not active_pck_commit.is_empty() else BUILD_COMMIT)
 				config.set_value("update", "base_version", base_version)
+				config.set_value("pck", "compat_gen", PCK_COMPAT_GENERATION)
 				config.set_value("pck", "base_version", base_version)
 				config.set_value("pck", "base_build_commit", BUILD_COMMIT)
 				config.set_value("pck", "active_commit", active_pck_commit)
+				config.set_value("pck", "active_version", active_pck_version)
 				config.set_value("pck", "pending_commit", "")
+				config.set_value("pck", "pending_version", "")
 				config.save(UPDATE_CONFIG_PATH)
 		else:
 			_remove_user_file(PENDING_PCK_PATH)
 
 	if FileAccess.file_exists(PCK_PATH):
-		if _is_valid_pck_file(PCK_PATH):
+		if _is_valid_pck_file(PCK_PATH) and not active_pck_version.is_empty() and _compare_versions(active_pck_version, base_version) >= 0:
 			if ProjectSettings.load_resource_pack(PCK_PATH, true):
 				pck_loaded_this_session = true
 		else:
@@ -310,7 +339,9 @@ func _load_update_state() -> void:
 		saved_version = str(config.get_value("update", "base_version", ""))
 		remote_fix_notes_commit = str(config.get_value("update", "fix_notes_commit", ""))
 		active_pck_commit = str(config.get_value("pck", "active_commit", ""))
+		active_pck_version = str(config.get_value("pck", "active_version", ""))
 		pending_pck_commit = str(config.get_value("pck", "pending_commit", ""))
+		pending_pck_version = str(config.get_value("pck", "pending_version", ""))
 	if is_pck_update_mode():
 		if not pending_pck_commit.is_empty() and FileAccess.file_exists(PENDING_PCK_PATH):
 			pck_pending_restart = true
@@ -337,10 +368,13 @@ func _save_update_state() -> void:
 	config.set_value("update", "base_version", str(ProjectSettings.get_setting("application/config/version", "")))
 	config.set_value("update", "fix_notes_commit", remote_fix_notes_commit)
 	if is_pck_update_mode():
+		config.set_value("pck", "compat_gen", PCK_COMPAT_GENERATION)
 		config.set_value("pck", "base_version", str(ProjectSettings.get_setting("application/config/version", "")))
 		config.set_value("pck", "base_build_commit", BUILD_COMMIT)
 		config.set_value("pck", "active_commit", active_pck_commit)
+		config.set_value("pck", "active_version", active_pck_version)
 		config.set_value("pck", "pending_commit", pending_pck_commit)
+		config.set_value("pck", "pending_version", pending_pck_version)
 	config.save(UPDATE_CONFIG_PATH)
 
 func is_pck_update_mode() -> bool:
@@ -430,29 +464,33 @@ func download_update() -> void:
 func _start_pck_update_flow() -> void:
 	is_fetching_pck_manifest = true
 	pck_manifest_commit = ""
+	pck_manifest_version = ""
 	var url: String = "%s?t=%d" % [PCK_MANIFEST_URL, int(Time.get_unix_time_from_system())]
 	var headers: PackedStringArray = ["User-Agent: Lampor-Game", "Cache-Control: no-cache"]
 	var err: Error = pck_manifest_request.request(url, headers)
 	if err != OK:
 		is_fetching_pck_manifest = false
-		_download_pck_binary(latest_commit)
+		_fail("Tidak dapat memeriksa manifest PCK di GitHub Release.")
 
 func _on_pck_manifest_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 	is_fetching_pck_manifest = false
-	if result == HTTPRequest.RESULT_SUCCESS and response_code == 200:
-		var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
-		if parsed is Dictionary:
-			pck_manifest_commit = str(parsed.get("commit", "")).strip_edges()
-			var manifest_version: String = str(parsed.get("version", "")).strip_edges()
-			var local_version: String = str(ProjectSettings.get_setting("application/config/version", ""))
-			if not manifest_version.is_empty() and _compare_versions(manifest_version, local_version) < 0:
-				_fail("Paket PCK di GitHub (%s) lebih lama daripada versi aplikasi ini (%s). Pembaruan dibatalkan." % [manifest_version, local_version])
-				return
-			if not pck_manifest_commit.is_empty() and pck_manifest_commit != latest_commit and pck_manifest_commit == installed_commit:
-				_fail("Paket PCK untuk commit %s masih dikompilasi di GitHub Actions. Coba lagi dalam 1–2 menit." % latest_commit.substr(0, 7))
-				return
-	var target_commit: String = pck_manifest_commit if not pck_manifest_commit.is_empty() else latest_commit
-	_download_pck_binary(target_commit)
+	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
+		_fail("Manifest paket PCK belum tersedia di GitHub Release.")
+		return
+	var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
+	if not parsed is Dictionary:
+		_fail("Manifest paket PCK tidak valid.")
+		return
+	pck_manifest_commit = str(parsed.get("commit", "")).strip_edges()
+	pck_manifest_version = str(parsed.get("version", "")).strip_edges()
+	var local_version: String = str(ProjectSettings.get_setting("application/config/version", ""))
+	if pck_manifest_version.is_empty() or _compare_versions(pck_manifest_version, local_version) < 0:
+		_fail("Paket PCK di GitHub (%s) lebih lama daripada versi aplikasi ini (%s). Pembaruan dibatalkan." % [pck_manifest_version if not pck_manifest_version.is_empty() else "lama", local_version])
+		return
+	if pck_manifest_commit.is_empty() or pck_manifest_commit != latest_commit:
+		_fail("Paket PCK untuk commit terbaru (%s) belum selesai dikompilasi di GitHub Actions." % latest_commit.substr(0, 7))
+		return
+	_download_pck_binary(pck_manifest_commit)
 
 func _download_pck_binary(target_commit: String) -> void:
 	pending_download_commit = target_commit
@@ -645,26 +683,12 @@ func _on_pck_downloaded(result: int, response_code: int) -> void:
 		return
 
 	var applied_commit: String = pending_download_commit if not pending_download_commit.is_empty() else latest_commit
+	var applied_version: String = pck_manifest_version if not pck_manifest_version.is_empty() else str(ProjectSettings.get_setting("application/config/version", ""))
 	pending_download_commit = ""
 	var temp_abs: String = ProjectSettings.globalize_path(TEMP_PCK_PATH)
 
-	if not pck_loaded_this_session:
-		_remove_user_file(PCK_PATH)
-		var rename_err: Error = DirAccess.rename_absolute(temp_abs, ProjectSettings.globalize_path(PCK_PATH))
-		if rename_err == OK:
-			ProjectSettings.load_resource_pack(PCK_PATH, true)
-			pck_loaded_this_session = true
-			installed_commit = applied_commit
-			active_pck_commit = applied_commit
-			pending_pck_commit = ""
-			pck_pending_restart = false
-			has_update = (installed_commit != latest_commit)
-			_save_update_state()
-			update_installed.emit(ProjectSettings.globalize_path(PCK_PATH), applied_commit, true)
-			return
-
-	# Jika update.pck sudah termuat pada sesi ini (terkunci oleh OS), simpan ke update_pending.pck
-	# agar otomatis dipromosikan oleh _init() sebelum resource lain dimuat saat restart.
+	# Simpan ke update_pending.pck agar otomatis dipromosikan oleh _init() sebelum
+	# autoload dan scene dimuat saat aplikasi dimulai ulang (mencegah ketidakcocokan skrip di memori).
 	_remove_user_file(PENDING_PCK_PATH)
 	var pending_err: Error = DirAccess.rename_absolute(temp_abs, ProjectSettings.globalize_path(PENDING_PCK_PATH))
 	if pending_err != OK:
@@ -672,6 +696,7 @@ func _on_pck_downloaded(result: int, response_code: int) -> void:
 		_fail("Gagal menyimpan patch PCK ke penyimpanan lokal (kode %d)." % pending_err)
 		return
 	pending_pck_commit = applied_commit
+	pending_pck_version = applied_version
 	pck_pending_restart = true
 	has_update = false
 	_save_update_state()

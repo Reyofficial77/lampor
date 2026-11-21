@@ -59,6 +59,12 @@ var desktop_hint_panel: PanelContainer
 var pause_settings_panel: PanelContainer
 var pause_settings_container: CenterContainer
 var pause_settings_scroll: ScrollContainer
+var pause_graphics_option: OptionButton
+var _pause_drag_scrolling: bool = false
+var _pause_drag_start_y: float = 0.0
+var _pause_drag_last_y: float = 0.0
+var _pause_drag_moved: bool = false
+var _pause_drag_button: BaseButton = null
 var objective_texts: Dictionary = {}
 var mission_panel: PanelContainer
 var mission_title: Label
@@ -132,6 +138,7 @@ func _ready() -> void:
 
 	# Setup Pause buttons
 	resume_button.pressed.connect(toggle_pause)
+	exit_button.text = "Kembali ke Menu Utama"
 	exit_button.pressed.connect(_show_exit_confirm)
 	settings_button.text = "Pengaturan"
 	settings_button.pressed.connect(_open_pause_settings)
@@ -325,6 +332,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 			else:
 				Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _is_touch_device() else Input.MOUSE_MODE_CAPTURED
+		elif pause_settings_container and pause_settings_container.visible:
+			_pause_settings_container_hide()
+			pause_menu.get_node("Center").visible = true
+			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		elif barricade_dialog.visible:
 			_close_barricade_dialog()
 		elif inventory_overlay and inventory_overlay.visible:
@@ -416,6 +427,7 @@ func _build_pause_settings_panel() -> void:
 	_add_pause_slider(box, "Sensitivitas Kamera", SettingsManager.camera_sensitivity * 100.0, 25.0, 200.0, func(v: float) -> void: SettingsManager.set_camera_sensitivity(v / 100.0))
 	_add_pause_slider(box, "Kecerahan", SettingsManager.brightness * 100.0, 50.0, 150.0, func(v: float) -> void: SettingsManager.set_brightness(v / 100.0))
 	var quality := OptionButton.new()
+	pause_graphics_option = quality
 	quality.add_item("Grafik: Otomatis (Perangkat)")
 	quality.add_item("Grafik: Low")
 	quality.add_item("Grafik: Medium")
@@ -520,8 +532,11 @@ func _on_main_menu_pressed() -> void:
 		_finish_mobile_editor()
 	if desktop_hint_panel:
 		desktop_hint_panel.visible = false
+	if exit_confirm_overlay:
+		exit_confirm_overlay.visible = false
 	barricade_dialog.visible = false
 	get_tree().paused = false
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	GameManager.current_state = GameManager.GameState.MENU
 	get_tree().change_scene_to_file("res://scenes/ui/MainMenu.tscn")
 
@@ -723,13 +738,13 @@ func _build_exit_confirm() -> void:
 	box.add_theme_constant_override("separation", 14)
 	exit_panel.add_child(box)
 	var title := Label.new()
-	title.text = "KELUAR DARI GAME?"
+	title.text = "KEMBALI KE MENU UTAMA?"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 21)
 	title.add_theme_color_override("font_color", Color(0.85, 0.25, 0.25, 1.0))
 	box.add_child(title)
 	var message := Label.new()
-	message.text = "Yakin ingin keluar dari game?\nProgres tersimpan otomatis setiap 5 detik dan dapat dilanjutkan dari menu utama."
+	message.text = "Yakin ingin kembali ke menu utama?\nProgres tersimpan otomatis setiap 5 detik dan dapat dilanjutkan dari menu utama."
 	message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	message.add_theme_font_size_override("font_size", 15)
@@ -746,11 +761,8 @@ func _build_exit_confirm() -> void:
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _is_touch_device() else Input.MOUSE_MODE_CAPTURED
 	)
 	buttons.add_child(cancel)
-	var confirm := _make_exit_button("YA, KELUAR", true)
-	confirm.pressed.connect(func() -> void:
-		GameManager.save_active_run()
-		get_tree().quit()
-	)
+	var confirm := _make_exit_button("YA, KE MENU UTAMA", true)
+	confirm.pressed.connect(_on_main_menu_pressed)
 	buttons.add_child(confirm)
 
 func _show_exit_confirm() -> void:
@@ -1014,6 +1026,12 @@ func _input(event: InputEvent) -> void:
 	if mobile_editor_active:
 		_handle_mobile_editor_input(event)
 		return
+	if pause_settings_container and pause_settings_container.visible and pause_settings_scroll:
+		if _handle_pause_settings_scroll_input(event):
+			return
+	_pause_drag_scrolling = false
+	_pause_drag_moved = false
+	_pause_drag_button = null
 	if not touch_controls_enabled or get_tree().paused or GameManager.current_state != GameManager.GameState.PLAYING:
 		return
 	if event is InputEventScreenTouch:
@@ -1044,6 +1062,54 @@ func _input(event: InputEvent) -> void:
 			var player: PlayerController = GameManager.player_character as PlayerController
 			if player:
 				player.apply_touch_look(drag.relative)
+
+func _handle_pause_settings_scroll_input(event: InputEvent) -> bool:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if (mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN) and mb.pressed:
+			if pause_graphics_option and pause_graphics_option.get_popup().visible:
+				return false
+			if pause_settings_scroll.get_global_rect().has_point(mb.position):
+				var step: int = -48 if mb.button_index == MOUSE_BUTTON_WHEEL_UP else 48
+				pause_settings_scroll.scroll_vertical = maxi(0, pause_settings_scroll.scroll_vertical + step)
+				get_viewport().set_input_as_handled()
+				return true
+		elif mb.button_index == MOUSE_BUTTON_LEFT:
+			if mb.pressed and pause_settings_scroll.get_global_rect().has_point(mb.position):
+				var hovered: Control = get_viewport().gui_get_hovered_control()
+				if hovered is HSlider or hovered is VScrollBar or hovered is HScrollBar or hovered is LineEdit or hovered is TextEdit or hovered is OptionButton:
+					return false
+				_pause_drag_scrolling = true
+				_pause_drag_start_y = mb.position.y
+				_pause_drag_last_y = mb.position.y
+				_pause_drag_moved = false
+				_pause_drag_button = hovered as BaseButton
+				return false
+			elif not mb.pressed and _pause_drag_scrolling:
+				var was_dragged: bool = _pause_drag_moved
+				_pause_drag_scrolling = false
+				_pause_drag_moved = false
+				_pause_drag_button = null
+				if was_dragged:
+					get_viewport().set_input_as_handled()
+					return true
+	elif event is InputEventMouseMotion and _pause_drag_scrolling:
+		var mm := event as InputEventMouseMotion
+		if not _pause_drag_moved and absf(mm.position.y - _pause_drag_start_y) > 8.0:
+			_pause_drag_moved = true
+			if is_instance_valid(_pause_drag_button):
+				var was_disabled: bool = _pause_drag_button.disabled
+				_pause_drag_button.disabled = true
+				_pause_drag_button.disabled = was_disabled
+				_pause_drag_button = null
+		if _pause_drag_moved:
+			var delta_y: float = mm.position.y - _pause_drag_last_y
+			pause_settings_scroll.scroll_vertical = maxi(0, pause_settings_scroll.scroll_vertical - int(round(delta_y)))
+			get_viewport().set_input_as_handled()
+			_pause_drag_last_y = mm.position.y
+			return true
+		_pause_drag_last_y = mm.position.y
+	return false
 
 func _handle_mobile_editor_input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:

@@ -1,4 +1,14 @@
-# LAMPOR v1.2.4
+# LAMPOR v1.2.5
+
+## v1.2.5
+
+- **Perbaikan Tombol Keluar Menu Jeda (`Esc`) ke Main Menu**:
+  - Menghubungkan opsi keluar pada menu jeda (`PauseMenu`) ke `_on_main_menu_pressed()` sehingga pemain kembali ke Menu Utama dengan menyimpan progres aktif terlebih dahulu, alih-alih langsung menutup aplikasi game.
+  - Menekan `Esc` saat panel Pengaturan Jeda terbuka kini mengembalikan ke Menu Jeda terlebih dahulu.
+- **Perbaikan Scroll & Pengaturan Menu Utama**:
+  - Menambahkan dukungan scroll langsung (roda mouse, sentuh/swipe, dan klik-geser di area konten) pada menu **Pengaturan**, **Toko Item**, **Catatan Pembaruan**, dan **Pengaturan Jeda** tanpa harus menahan scrollbar.
+  - Memuat catatan pembaruan versi sebelumnya secara bertahap saat digulir agar pembukaan **Catatan Pembaruan** bebas freeze, merapikan jarak baris serta kode inline, dan memperbarui judul modal **Hak Cipta** menjadi `LAMPOR`.
+  - Menampilkan persentase pada slider **Volume** dan memastikan default kualitas grafik berada pada `Otomatis (Perangkat)`.
 
 ## v1.2.4
 

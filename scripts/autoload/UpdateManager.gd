@@ -10,7 +10,7 @@ const REPO_OWNER: String = "Reyofficial77"
 const REPO_NAME: String = "lampor"
 const BRANCH: String = "main"
 const FULL_TREE_SYNC_VERSION: int = 1
-const BUILD_COMMIT: String = "ae503c1cbcf5cf7651fb87f215b21e9e5fc7171f"
+const BUILD_COMMIT: String = "d4431b9d4d2e4babb75fe61ac1564ef76af34c11"
 const API_URL: String = "https://api.github.com/repos/Reyofficial77/lampor/commits/main"
 const ATOM_URL: String = "https://github.com/Reyofficial77/lampor/commits/main.atom"
 const ARCHIVE_URL: String = "https://codeload.github.com/Reyofficial77/lampor/zip/"
@@ -26,7 +26,17 @@ const FIX_NOTES_CACHE_PATH: String = "user://lampor_fix_notes.md"
 const AUTO_CHECK_INTERVAL_SEC: float = 300.0
 const REQUIRED_UPDATE_FILES: PackedStringArray = ["project.godot", "scripts/autoload/UpdateManager.gd", "FIX_NOTES.md"]
 
-const BUNDLED_FIX_NOTES: String = """# LAMPOR v1.2.4
+const BUNDLED_FIX_NOTES: String = """# LAMPOR v1.2.5
+
+## v1.2.5
+
+- **Perbaikan Tombol Keluar Menu Jeda (`Esc`) ke Main Menu**:
+  - Menghubungkan opsi keluar pada menu jeda (`PauseMenu`) ke `_on_main_menu_pressed()` sehingga pemain kembali ke Menu Utama dengan menyimpan progres aktif terlebih dahulu, alih-alih langsung menutup aplikasi game.
+  - Menekan `Esc` saat panel Pengaturan Jeda terbuka kini mengembalikan ke Menu Jeda terlebih dahulu.
+- **Perbaikan Scroll & Pengaturan Menu Utama**:
+  - Menambahkan dukungan scroll langsung (roda mouse, sentuh/swipe, dan klik-geser di area konten) pada menu **Pengaturan**, **Toko Item**, **Catatan Pembaruan**, dan **Pengaturan Jeda** tanpa harus menahan scrollbar.
+  - Memuat catatan pembaruan versi sebelumnya secara bertahap saat digulir agar pembukaan **Catatan Pembaruan** bebas freeze, merapikan jarak baris serta kode inline, dan memperbarui judul modal **Hak Cipta** menjadi `LAMPOR`.
+  - Menampilkan persentase pada slider **Volume** dan memastikan default kualitas grafik berada pada `Otomatis (Perangkat)`.
 
 ## v1.2.4
 

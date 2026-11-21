@@ -649,4 +649,4 @@ text = "Pengaturan"
 custom_minimum_size = Vector2(0, 40)
 layout_mode = 2
 theme_override_font_sizes/font_size = 15
-text = "Keluar Permainan"
+text = "Kembali ke Menu Utama"

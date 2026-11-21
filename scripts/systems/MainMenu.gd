@@ -1,7 +1,7 @@
 class_name MainMenu
 extends Control
 
-const GAME_VERSION: String = "v1.2.4"
+const GAME_VERSION: String = "v1.2.5"
 const HORROR_TITLE_FONT: Font = preload("res://assets/fonts/HorrorTitle.ttf")
 const ACCENT: Color = Color(0.76, 0.10, 0.12, 1.0)
 const ACCENT_GOLD: Color = Color(0.84, 0.68, 0.34, 1.0)
@@ -48,8 +48,11 @@ var fix_notes_hint_label: Label
 var fix_notes_sections: Array[String] = []
 var fix_notes_loaded_sections: int = 0
 var fix_notes_rendered_markdown: String = ""
-var _fix_notes_dragging: bool = false
-var _fix_notes_drag_last_y: float = 0.0
+var _active_drag_scroll: ScrollContainer = null
+var _drag_start_y: float = 0.0
+var _drag_last_y: float = 0.0
+var _drag_moved: bool = false
+var _drag_pressed_button: BaseButton = null
 var _rx_table_sep: RegEx
 var _rx_numbered: RegEx
 var _rx_inline_code: RegEx
@@ -64,12 +67,14 @@ var nightmare_lock_label: Label
 var volume_slider: HSlider
 var fullscreen_button: Button
 var settings_scroll: ScrollContainer
+var shop_scroll: ScrollContainer
 var mouse_sensitivity_slider: HSlider
 var camera_sensitivity_slider: HSlider
 var brightness_slider: HSlider
 var mouse_sensitivity_value: Label
 var camera_sensitivity_value: Label
 var brightness_value: Label
+var volume_value: Label
 var graphics_option: OptionButton
 
 func _ready() -> void:
@@ -317,24 +322,19 @@ func _build_settings_modal() -> void:
 	settings_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	settings_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	body.add_child(settings_scroll)
+	var settings_margin := MarginContainer.new()
+	settings_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	settings_margin.mouse_filter = Control.MOUSE_FILTER_PASS
+	settings_margin.add_theme_constant_override("margin_right", 12)
+	settings_scroll.add_child(settings_margin)
 	var content := VBoxContainer.new()
 	content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	content.mouse_filter = Control.MOUSE_FILTER_PASS
 	content.add_theme_constant_override("separation", 10)
-	settings_scroll.add_child(content)
+	settings_margin.add_child(content)
 
-	var audio_row := HBoxContainer.new()
-	var sound_label := _make_label("Volume", 13, TEXT_MAIN, HORIZONTAL_ALIGNMENT_LEFT)
-	sound_label.custom_minimum_size.x = 132.0
-	audio_row.add_child(sound_label)
-	volume_slider = HSlider.new()
-	volume_slider.min_value = 0.0
-	volume_slider.max_value = 100.0
-	volume_slider.step = 1.0
-	volume_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	volume_slider.value = clampf(db_to_linear(AudioServer.get_bus_volume_db(0)) * 100.0, 0.0, 100.0)
-	volume_slider.value_changed.connect(_on_volume_changed)
-	audio_row.add_child(volume_slider)
-	content.add_child(audio_row)
+	var initial_volume: float = clampf(db_to_linear(AudioServer.get_bus_volume_db(0)) * 100.0, 0.0, 100.0)
+	volume_slider = _add_slider_setting(content, "Volume", initial_volume, 0.0, 100.0, 1.0, _on_volume_changed)
 
 	mouse_sensitivity_slider = _add_slider_setting(content, "Sensitivitas Mouse", SettingsManager.mouse_sensitivity * 100.0, 25.0, 200.0, 5.0, _on_mouse_sensitivity_changed)
 	camera_sensitivity_slider = _add_slider_setting(content, "Sensitivitas Kamera", SettingsManager.camera_sensitivity * 100.0, 25.0, 200.0, 5.0, _on_camera_sensitivity_changed)
@@ -358,6 +358,7 @@ func _build_settings_modal() -> void:
 		"low": graphics_option.select(1)
 		"medium": graphics_option.select(2)
 		"high": graphics_option.select(3)
+		_: graphics_option.select(0)
 	graphics_option.item_selected.connect(_on_graphics_quality_selected)
 	graphics_row.add_child(graphics_option)
 	content.add_child(graphics_row)
@@ -417,6 +418,7 @@ func _build_settings_modal() -> void:
 
 func _add_slider_setting(parent: VBoxContainer, title_text: String, initial_value: float, min_value: float, max_value: float, step_value: float, callback: Callable) -> HSlider:
 	var row := HBoxContainer.new()
+	row.mouse_filter = Control.MOUSE_FILTER_PASS
 	var title := _make_label(title_text, 13, TEXT_MAIN, HORIZONTAL_ALIGNMENT_LEFT)
 	title.custom_minimum_size.x = 132.0
 	row.add_child(title)
@@ -431,7 +433,9 @@ func _add_slider_setting(parent: VBoxContainer, title_text: String, initial_valu
 	row.add_child(slider)
 	row.add_child(value_label)
 	parent.add_child(row)
-	if title_text == "Sensitivitas Mouse":
+	if title_text == "Volume":
+		volume_value = value_label
+	elif title_text == "Sensitivitas Mouse":
 		mouse_sensitivity_value = value_label
 	elif title_text == "Sensitivitas Kamera":
 		camera_sensitivity_value = value_label
@@ -447,14 +451,21 @@ func _build_shop_modal() -> void:
 	var body: VBoxContainer = modal["body"] as VBoxContainer
 	shop_balance_label = _make_label("Koin Emas: %d" % GameManager.coins, 15, Color(0.9, 0.76, 0.42, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
 	body.add_child(shop_balance_label)
-	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(0.0, 270.0)
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	body.add_child(scroll)
+	shop_scroll = ScrollContainer.new()
+	shop_scroll.custom_minimum_size = Vector2(0.0, 270.0)
+	shop_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	shop_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	body.add_child(shop_scroll)
+	var shop_margin := MarginContainer.new()
+	shop_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	shop_margin.mouse_filter = Control.MOUSE_FILTER_PASS
+	shop_margin.add_theme_constant_override("margin_right", 12)
+	shop_scroll.add_child(shop_margin)
 	var offers := VBoxContainer.new()
 	offers.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	offers.mouse_filter = Control.MOUSE_FILTER_PASS
 	offers.add_theme_constant_override("separation", 8)
-	scroll.add_child(offers)
+	shop_margin.add_child(offers)
 	_add_shop_offer(offers, "Jamu Tolak Bala x1", "Memulihkan 45 kewarasan dan seluruh stamina.", "30 koin", "jamu", 1)
 	_add_shop_offer(offers, "Jamu Tolak Bala x3", "Persediaan jamu untuk tiga kali pemakaian.", "90 koin", "jamu", 3)
 	_add_shop_offer(offers, "Baterai Senter x1", "Mengisi ulang 50% daya senter saat digunakan.", "20 koin", "baterai", 1)
@@ -470,15 +481,18 @@ func _build_shop_modal() -> void:
 
 func _add_shop_offer(parent: VBoxContainer, title_text: String, description: String, price_text: String, item_id: String, quantity: int) -> void:
 	var offer := PanelContainer.new()
+	offer.mouse_filter = Control.MOUSE_FILTER_PASS
 	offer.add_theme_stylebox_override("panel", _panel_style())
 	parent.add_child(offer)
 	var margin := MarginContainer.new()
+	margin.mouse_filter = Control.MOUSE_FILTER_PASS
 	for side in ["left", "right"]:
 		margin.add_theme_constant_override("margin_" + side, 10)
 	for side in ["top", "bottom"]:
 		margin.add_theme_constant_override("margin_" + side, 8)
 	offer.add_child(margin)
 	var column := VBoxContainer.new()
+	column.mouse_filter = Control.MOUSE_FILTER_PASS
 	column.add_theme_constant_override("separation", 5)
 	margin.add_child(column)
 	var heading := _make_label(title_text, 14, TEXT_MAIN, HORIZONTAL_ALIGNMENT_LEFT)
@@ -653,7 +667,6 @@ func _build_fix_notes_modal() -> void:
 	fix_notes_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	fix_notes_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	fix_notes_scroll.mouse_filter = Control.MOUSE_FILTER_STOP
-	fix_notes_scroll.gui_input.connect(_on_fix_notes_scroll_gui_input)
 	fix_notes_scroll.get_v_scroll_bar().value_changed.connect(_on_fix_notes_scroll_value_changed)
 	body.add_child(fix_notes_scroll)
 	var notes_margin := MarginContainer.new()
@@ -773,26 +786,74 @@ func _on_fix_notes_scroll_value_changed(_value: float) -> void:
 	if vbar and (vbar.value + fix_notes_scroll.size.y >= vbar.max_value - 120.0):
 		_load_next_fix_notes_section()
 
-func _on_fix_notes_scroll_gui_input(event: InputEvent) -> void:
-	if fix_notes_scroll == null:
+func _get_active_scroll_container() -> ScrollContainer:
+	if fix_notes_overlay and fix_notes_overlay.visible and fix_notes_scroll:
+		return fix_notes_scroll
+	if settings_overlay and settings_overlay.visible and settings_scroll:
+		return settings_scroll
+	if shop_overlay and shop_overlay.visible and shop_scroll:
+		return shop_scroll
+	return null
+
+func _is_scroll_drag_blocked_control(control: Control) -> bool:
+	return control is HSlider or control is VScrollBar or control is HScrollBar or control is LineEdit or control is TextEdit or control is OptionButton
+
+func _input(event: InputEvent) -> void:
+	var active_scroll: ScrollContainer = _get_active_scroll_container()
+	if active_scroll == null:
+		_active_drag_scroll = null
+		_drag_moved = false
+		_drag_pressed_button = null
 		return
-	var vbar: VScrollBar = fix_notes_scroll.get_v_scroll_bar()
+	var vbar: VScrollBar = active_scroll.get_v_scroll_bar()
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
-			if fix_notes_loaded_sections < fix_notes_sections.size() and vbar and vbar.max_value <= fix_notes_scroll.size.y + 8.0:
-				_load_next_fix_notes_section()
+		if (mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN) and mb.pressed:
+			if graphics_option and graphics_option.get_popup().visible:
+				return
+			if active_scroll.get_global_rect().has_point(mb.position):
+				var step: int = -48 if mb.button_index == MOUSE_BUTTON_WHEEL_UP else 48
+				active_scroll.scroll_vertical = maxi(0, active_scroll.scroll_vertical + step)
+				if active_scroll == fix_notes_scroll and mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+					if fix_notes_loaded_sections < fix_notes_sections.size() and vbar and vbar.max_value <= fix_notes_scroll.size.y + 8.0:
+						_load_next_fix_notes_section()
+				get_viewport().set_input_as_handled()
 		elif mb.button_index == MOUSE_BUTTON_LEFT:
-			_fix_notes_dragging = mb.pressed
-			_fix_notes_drag_last_y = mb.position.y
-	elif event is InputEventMouseMotion and _fix_notes_dragging:
+			if mb.pressed:
+				if active_scroll.get_global_rect().has_point(mb.position):
+					var hovered: Control = get_viewport().gui_get_hovered_control()
+					if _is_scroll_drag_blocked_control(hovered):
+						return
+					_active_drag_scroll = active_scroll
+					_drag_start_y = mb.position.y
+					_drag_last_y = mb.position.y
+					_drag_moved = false
+					_drag_pressed_button = hovered as BaseButton
+			elif _active_drag_scroll != null:
+				var was_dragged: bool = _drag_moved
+				_active_drag_scroll = null
+				_drag_moved = false
+				_drag_pressed_button = null
+				if was_dragged:
+					get_viewport().set_input_as_handled()
+	elif event is InputEventMouseMotion and _active_drag_scroll != null:
 		var mm := event as InputEventMouseMotion
-		var delta_y: float = mm.position.y - _fix_notes_drag_last_y
-		_fix_notes_drag_last_y = mm.position.y
-		fix_notes_scroll.scroll_vertical = maxi(0, fix_notes_scroll.scroll_vertical - int(round(delta_y)))
-		if delta_y < -2.0 and fix_notes_loaded_sections < fix_notes_sections.size() and vbar and vbar.max_value <= fix_notes_scroll.size.y + 8.0:
-			_load_next_fix_notes_section()
-	elif event is InputEventScreenDrag:
+		if not _drag_moved and absf(mm.position.y - _drag_start_y) > 8.0:
+			_drag_moved = true
+			if is_instance_valid(_drag_pressed_button):
+				var was_disabled: bool = _drag_pressed_button.disabled
+				_drag_pressed_button.disabled = true
+				_drag_pressed_button.disabled = was_disabled
+				_drag_pressed_button = null
+		if _drag_moved:
+			var delta_y: float = mm.position.y - _drag_last_y
+			_active_drag_scroll.scroll_vertical = maxi(0, _active_drag_scroll.scroll_vertical - int(round(delta_y)))
+			if _active_drag_scroll == fix_notes_scroll and delta_y < -2.0:
+				if fix_notes_loaded_sections < fix_notes_sections.size() and vbar and vbar.max_value <= fix_notes_scroll.size.y + 8.0:
+					_load_next_fix_notes_section()
+			get_viewport().set_input_as_handled()
+		_drag_last_y = mm.position.y
+	elif event is InputEventScreenDrag and active_scroll == fix_notes_scroll:
 		var sd := event as InputEventScreenDrag
 		if sd.relative.y < -2.0 and fix_notes_loaded_sections < fix_notes_sections.size() and vbar and vbar.max_value <= fix_notes_scroll.size.y + 8.0:
 			_load_next_fix_notes_section()
@@ -1152,6 +1213,8 @@ func _apply_layout() -> void:
 			panel.custom_minimum_size = Vector2(maxf(280.0, minf(520.0, view_size.x - 28.0)), panel.custom_minimum_size.y)
 	if settings_scroll:
 		settings_scroll.custom_minimum_size.y = maxf(120.0, minf(290.0, view_size.y - 310.0))
+	if shop_scroll:
+		shop_scroll.custom_minimum_size.y = maxf(140.0, minf(310.0, view_size.y - 290.0))
 	if fix_notes_scroll:
 		fix_notes_scroll.custom_minimum_size.y = maxf(170.0, minf(460.0, view_size.y - 210.0))
 	if horror_backdrop:
@@ -1169,6 +1232,8 @@ func _update_nightmare_status() -> void:
 		nightmare_lock_label.add_theme_color_override("font_color", TEXT_MUTED)
 
 func _on_volume_changed(value: float) -> void:
+	if volume_value:
+		volume_value.text = "%d%%" % int(round(value))
 	var bus_index: int = AudioServer.get_bus_index("Master")
 	if bus_index < 0:
 		return

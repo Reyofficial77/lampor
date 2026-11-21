@@ -10,6 +10,7 @@ uniform float pulse_speed : hint_range(0.0, 10.0) = 1.0;
 uniform float pulse_intensity : hint_range(0.0, 1.0) = 0.0;
 uniform float dizzy_intensity : hint_range(0.0, 1.0) = 0.0;
 uniform float grain_multiplier : hint_range(0.0, 1.0) = 1.0;
+uniform float fast_mode : hint_range(0.0, 1.0) = 0.0;
 
 float random(vec2 uv) {
     return fract(sin(dot(uv.xy, vec2(12.9898, 78.233))) * 43758.5453123);
@@ -29,14 +30,17 @@ void fragment() {
     
     // Dynamic pulse
     float pulse = sin(TIME * pulse_speed) * 0.5 + 0.5;
-    float current_aberration = aberration_amount + pulse * pulse_intensity * 0.01 + dizzy_intensity * 0.008;
-    
-    // Chromatic Aberration
-    vec2 dir = normalize(uv - center + vec2(0.0001));
-    float r = texture(screen_texture, uv + dir * current_aberration).r;
-    float g = texture(screen_texture, uv).g;
-    float b = texture(screen_texture, uv - dir * current_aberration).b;
-    vec3 color = vec3(r, g, b);
+    vec3 color;
+    if (fast_mode > 0.5 && dizzy_intensity <= 0.001 && pulse_intensity <= 0.12) {
+        color = texture(screen_texture, uv).rgb;
+    } else {
+        float current_aberration = aberration_amount + pulse * pulse_intensity * 0.01 + dizzy_intensity * 0.008;
+        vec2 dir = normalize(uv - center + vec2(0.0001));
+        float r = texture(screen_texture, uv + dir * current_aberration).r;
+        float g = texture(screen_texture, uv).g;
+        float b = texture(screen_texture, uv - dir * current_aberration).b;
+        color = vec3(r, g, b);
+    }
     
     // Vignette
     float vig = smoothstep(0.8, 0.8 - vignette_intensity, dist * (1.0 + pulse * pulse_intensity * 0.3));

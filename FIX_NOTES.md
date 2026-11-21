@@ -9,6 +9,9 @@
   - Menambahkan dukungan scroll langsung (roda mouse, sentuh/swipe, dan klik-geser di area konten) pada menu **Pengaturan**, **Toko Item**, **Catatan Pembaruan**, dan **Pengaturan Jeda** tanpa harus menahan scrollbar.
   - Memuat catatan pembaruan versi sebelumnya secara bertahap saat digulir agar pembukaan **Catatan Pembaruan** bebas freeze, merapikan jarak baris serta kode inline, dan memperbarui judul modal **Hak Cipta** menjadi `LAMPOR`.
   - Menampilkan persentase pada slider **Volume** dan memastikan default kualitas grafik berada pada `Otomatis (Perangkat)`.
+- **Suasana Horor Preset Grafik `Low` Setara `Medium` & Tetap Ringan**:
+  - Mengaktifkan kembali kabut kedalaman (`fog_enabled = true`), menyelaraskan warna ambient (`0.11, 0.13, 0.19`) dan cahaya bulan (`0.55`) dengan preset `Medium`, serta menaikkan jarak render kamera (`cam.far = 90.0`) dan skala resolusi (`0.68`) agar desa tidak tampak polos atau terpotong hitam.
+  - Menjaga `HorrorOverlay` tetap aktif dengan mode ringan (`fast_mode = 1.0`, tanpa *film grain* maupun *chromatic aberration* saat kewarasan normal) serta mempertahankan pendar `ItemLight` pada item tanpa bayangan (`shadow_enabled = false`), sementara MSAA, FXAA, dan seluruh shadow pass tetap nonaktif agar performa tetap ringan.
 
 ## v1.2.4
 

@@ -30,10 +30,10 @@ func _update_ritual_visibility(act_number: int) -> void:
 	monitoring = unlocked
 	monitorable = unlocked
 	set_process(unlocked)
-	if item_light and SettingsManager.get_effective_graphics_quality() == "low":
+	if item_light:
 		item_light.visible = unlocked
 		if unlocked:
-			item_light.light_energy = 0.45
+			item_light.light_energy = 1.1 if SettingsManager.get_effective_graphics_quality() == "low" else 1.5
 
 func _update_model_appearance() -> void:
 	var target_name: String = "GenericVisual"

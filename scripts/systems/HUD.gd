@@ -1271,8 +1271,7 @@ func _on_sanity_changed(current: float, max_val: float) -> void:
 	var fear: float = 1.0 - clampf(current / maxf(1.0, max_val), 0.0, 1.0)
 	var dizzy: float = clampf((fear - 0.30) / 0.70, 0.0, 1.0)
 	if post_process_rect:
-		var is_low: bool = bool(post_process_rect.get_meta("low_quality_mode", SettingsManager.get_effective_graphics_quality() == "low"))
-		post_process_rect.visible = (not is_low) or (fear > 0.12)
+		post_process_rect.visible = true
 	if post_process_material:
 		post_process_material.set_shader_parameter("vignette_intensity", lerp(0.35, 1.25, fear))
 		post_process_material.set_shader_parameter("aberration_amount", lerp(0.001, 0.016, fear))

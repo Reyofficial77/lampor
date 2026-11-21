@@ -1,6 +1,7 @@
 extends Node
 
 const REDEMPTION_CODES = preload("res://scripts/systems/RedemptionCodes.gd")
+const ADMIN_PANEL_SCRIPT = preload("res://scripts/ui/AdminPanel.gd")
 
 # Game Manager Singleton
 
@@ -38,9 +39,10 @@ var ritual_items: Dictionary = {
 const TOTAL_RITUAL_ITEMS: int = 4
 
 var furnace_burning: bool = false
-var furnace_time_left: float = 90.0
+var furnace_time_left: float = 45.0
+var furnace_total_time: float = 45.0
 var last_furnace_elapsed_sec: int = -1
-const FURNACE_TOTAL_TIME: float = 90.0
+const FURNACE_TOTAL_TIME: float = 45.0
 
 var player_character: Node = null
 var last_death_reason: String = ""
@@ -50,6 +52,7 @@ var death_sequence_active: bool = false
 var total_wins: int = 0
 var coins: int = 0
 var extra_lives: int = 0
+const MAX_COINS: int = 999999999
 const MAX_EXTRA_LIVES: int = 5
 const MAX_SHOP_ITEM_QTY: int = 5
 var item_stash: Dictionary = {"jamu": 0, "baterai": 0}
@@ -67,6 +70,10 @@ var autosave_elapsed: float = 0.0
 var autosave_last_success_unix: int = 0
 var has_saved_run_cache: bool = false
 var is_resuming_saved_run: bool = false
+var tutorial_completed: bool = false
+var is_tutorial_mode: bool = false
+var admin_god_mode: bool = false
+var admin_panel: CanvasLayer = null
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -75,12 +82,19 @@ func _ready() -> void:
 	SignalBus.torch_lit.connect(_on_torch_lit)
 	SignalBus.ritual_item_collected.connect(_on_ritual_item_collected)
 	SignalBus.player_death_requested.connect(_on_player_death_requested)
+	call_deferred("_setup_admin_panel")
+
+func _setup_admin_panel() -> void:
+	if admin_panel == null and ADMIN_PANEL_SCRIPT != null:
+		admin_panel = ADMIN_PANEL_SCRIPT.new()
+		add_child(admin_panel)
 
 func load_save_data() -> void:
 	if not FileAccess.file_exists(SAVE_PATH):
 		total_wins = 0
 		coins = 0
 		extra_lives = 0
+		tutorial_completed = false
 		return
 	var file: FileAccess = FileAccess.open(SAVE_PATH, FileAccess.READ)
 	if not file:
@@ -90,8 +104,12 @@ func load_save_data() -> void:
 		return
 	var data: Dictionary = json.data
 	total_wins = maxi(0, int(data.get("total_wins", 0)))
-	coins = maxi(0, int(data.get("coins", 0)))
+	var raw_coins: int = int(data.get("coins", 0))
+	if raw_coins < 0 or raw_coins > MAX_COINS:
+		raw_coins = MAX_COINS if raw_coins < 0 else clampi(raw_coins, 0, MAX_COINS)
+	coins = clampi(raw_coins, 0, MAX_COINS)
 	extra_lives = clampi(int(data.get("extra_lives", 0)), 0, MAX_EXTRA_LIVES)
+	tutorial_completed = bool(data.get("tutorial_completed", false))
 	var saved_stash: Variant = data.get("item_stash", {})
 	if saved_stash is Dictionary:
 		item_stash["jamu"] = clampi(int(saved_stash.get("jamu", 0)), 0, MAX_SHOP_ITEM_QTY)
@@ -104,6 +122,7 @@ func load_save_data() -> void:
 				redeemed_codes.append(normalized)
 
 func save_game_data() -> void:
+	coins = clampi(coins, 0, MAX_COINS)
 	var file: FileAccess = FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if not file:
 		return
@@ -111,11 +130,17 @@ func save_game_data() -> void:
 		"total_wins": total_wins,
 		"coins": coins,
 		"extra_lives": extra_lives,
+		"tutorial_completed": tutorial_completed,
 		"item_stash": item_stash,
 		"redeemed_codes": redeemed_codes
 	}
 	file.store_string(JSON.stringify(data))
 	file.flush()
+
+func mark_tutorial_completed() -> void:
+	if not tutorial_completed:
+		tutorial_completed = true
+		save_game_data()
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_WM_GO_BACK_REQUEST or what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
@@ -261,6 +286,7 @@ func save_active_run() -> bool:
 		"run_version": 1,
 		"saved_at": Time.get_unix_time_from_system(),
 		"selected_difficulty": int(selected_difficulty),
+		"is_tutorial_mode": is_tutorial_mode,
 		"current_act": int(current_act),
 		"current_hour": current_hour,
 		"current_minute": current_minute,
@@ -313,7 +339,9 @@ func resume_saved_game() -> void:
 		clear_run_save()
 		return
 	selected_difficulty = _saved_difficulty(int(snapshot.get("selected_difficulty", Difficulty.NORMAL)))
+	is_tutorial_mode = bool(snapshot.get("is_tutorial_mode", false))
 	seconds_per_game_minute = get_seconds_per_minute_for_difficulty(selected_difficulty)
+	furnace_total_time = get_furnace_duration_for_difficulty(selected_difficulty)
 	current_act = _saved_act(int(snapshot.get("current_act", Act.BABAK_1)))
 	current_hour = clampi(int(snapshot.get("current_hour", 1)), 1, 5)
 	current_minute = clampi(int(snapshot.get("current_minute", 0)), 0, 59)
@@ -325,8 +353,8 @@ func resume_saved_game() -> void:
 	for ritual_name: String in ritual_items.keys():
 		ritual_items[ritual_name] = bool(saved_ritual.get(ritual_name, false)) if saved_ritual is Dictionary else false
 	furnace_burning = bool(snapshot.get("furnace_burning", false))
-	furnace_time_left = clampf(float(snapshot.get("furnace_time_left", FURNACE_TOTAL_TIME)), 0.0, FURNACE_TOTAL_TIME)
-	last_furnace_elapsed_sec = int(FURNACE_TOTAL_TIME - furnace_time_left) if furnace_burning else -1
+	furnace_time_left = clampf(float(snapshot.get("furnace_time_left", furnace_total_time)), 0.0, furnace_total_time)
+	last_furnace_elapsed_sec = int(furnace_total_time - furnace_time_left) if furnace_burning else -1
 	death_sequence_active = false
 	last_death_reason = ""
 	is_resuming_saved_run = true
@@ -548,7 +576,7 @@ func get_current_objectives_data() -> Array[Dictionary]:
 				"completed": false
 			})
 		Act.BABAK_3:
-			var survive_elapsed: int = clampi(int(FURNACE_TOTAL_TIME - furnace_time_left), 0, int(FURNACE_TOTAL_TIME)) if furnace_burning else 0
+			var survive_elapsed: int = clampi(int(furnace_total_time - furnace_time_left), 0, int(furnace_total_time)) if furnace_burning else 0
 			list.append({
 				"id": "burn_ritual",
 				"text": "Bakar semua benda ritual di Tungku Balai Desa",
@@ -560,7 +588,7 @@ func get_current_objectives_data() -> Array[Dictionary]:
 				"id": "survive_furnace",
 				"text": "Bertahan hidup dari amukan Lampor hingga ritual selesai",
 				"current": survive_elapsed,
-				"required": int(FURNACE_TOTAL_TIME),
+				"required": int(furnace_total_time),
 				"completed": furnace_burning and furnace_time_left <= 0.0
 			})
 	return list
@@ -582,7 +610,7 @@ func _broadcast_resumed_run_state() -> void:
 	if current_act >= Act.BABAK_2:
 		SignalBus.lampor_state_changed.emit("CHASE" if furnace_burning else "PATROL")
 	if furnace_burning:
-		SignalBus.furnace_progress_updated.emit(furnace_time_left, FURNACE_TOTAL_TIME)
+		SignalBus.furnace_progress_updated.emit(furnace_time_left, furnace_total_time)
 
 func purchase_shop_item(item_id: String, quantity: int = 1) -> Dictionary:
 	var safe_quantity: int = clampi(quantity, 1, 3)
@@ -639,7 +667,7 @@ func apply_reward(reward: Dictionary) -> void:
 	var quantity: int = maxi(1, int(reward.get("quantity", 1)))
 	match str(reward.get("type", "")):
 		"coins":
-			coins += quantity
+			coins = clampi(coins + quantity, 0, MAX_COINS)
 		"lives":
 			extra_lives = mini(MAX_EXTRA_LIVES, extra_lives + quantity)
 		"item":
@@ -676,7 +704,9 @@ func _award_run_coins(amount: int) -> void:
 		return
 	run_reward_awarded = true
 	last_run_coin_reward = maxi(0, amount)
-	coins += last_run_coin_reward
+	if coins < 0 or coins > MAX_COINS:
+		coins = MAX_COINS
+	coins = clampi(coins + last_run_coin_reward, 0, MAX_COINS)
 	save_game_data()
 
 func is_nightmare_unlocked() -> bool:
@@ -693,6 +723,21 @@ func get_seconds_per_minute_for_difficulty(diff: Difficulty) -> float:
 		Difficulty.NIGHTMARE:
 			return 0.5 # Nightmare: 1 menit game = 0,5 detik nyata
 	return 3.0
+
+# Durasi pembakaran ritual di Tungku Balai Desa disesuaikan secara proporsional
+# dengan laju jam per tingkat kesulitan (~13-16 menit waktu game) agar pemain
+# tidak terlahap batas pukul 05.00 WIB saat membakar di mode cepat (Hard/Nightmare).
+func get_furnace_duration_for_difficulty(diff: Difficulty) -> float:
+	match diff:
+		Difficulty.EASY:
+			return 60.0 # ~13,3 menit game (1 menit = 4,5 dtk)
+		Difficulty.NORMAL:
+			return 45.0 # 15 menit game (1 menit = 3,0 dtk)
+		Difficulty.HARD:
+			return 15.0 # 15 menit game (1 menit = 1,0 dtk)
+		Difficulty.NIGHTMARE:
+			return 8.0 # 16 menit game (1 menit = 0,5 dtk)
+	return 45.0
 
 func get_lampor_speeds_for_difficulty(diff: Difficulty) -> Dictionary:
 	match diff:
@@ -745,13 +790,21 @@ func get_difficulty_name(diff: Difficulty) -> String:
 		Difficulty.NIGHTMARE: return "NIGHTMARE"
 	return "NORMAL"
 
-func start_new_game(diff: Difficulty = Difficulty.NORMAL) -> void:
+func start_tutorial_game() -> void:
+	start_new_game(Difficulty.EASY, true)
+
+func start_new_game(diff: Difficulty = Difficulty.NORMAL, tutorial: bool = false) -> void:
 	clear_run_save()
 	is_resuming_saved_run = false
+	if not tutorial_completed and not tutorial:
+		tutorial = true
+		diff = Difficulty.EASY
+	is_tutorial_mode = tutorial
 	selected_difficulty = diff
 	run_reward_awarded = false
 	last_run_coin_reward = 0
 	seconds_per_game_minute = get_seconds_per_minute_for_difficulty(selected_difficulty)
+	furnace_total_time = get_furnace_duration_for_difficulty(selected_difficulty)
 	
 	current_state = GameState.PLAYING
 	current_act = Act.BABAK_1
@@ -762,7 +815,7 @@ func start_new_game(diff: Difficulty = Difficulty.NORMAL) -> void:
 	torches_lit = 0
 	doors_barricaded = 0
 	furnace_burning = false
-	furnace_time_left = FURNACE_TOTAL_TIME
+	furnace_time_left = furnace_total_time
 	last_furnace_elapsed_sec = -1
 	
 	last_death_reason = ""
@@ -841,15 +894,15 @@ func _process(delta: float) -> void:
 			_advance_time(1)
 	if furnace_burning:
 		furnace_time_left = maxf(0.0, furnace_time_left - delta)
-		SignalBus.furnace_progress_updated.emit(furnace_time_left, FURNACE_TOTAL_TIME)
-		var elapsed_sec: int = clampi(int(FURNACE_TOTAL_TIME - furnace_time_left), 0, int(FURNACE_TOTAL_TIME))
+		SignalBus.furnace_progress_updated.emit(furnace_time_left, furnace_total_time)
+		var elapsed_sec: int = clampi(int(furnace_total_time - furnace_time_left), 0, int(furnace_total_time))
 		if elapsed_sec != last_furnace_elapsed_sec:
 			last_furnace_elapsed_sec = elapsed_sec
 			SignalBus.objective_updated.emit(
 				"survive_furnace",
 				"Bertahan hidup dari amukan Lampor hingga ritual selesai",
 				elapsed_sec,
-				int(FURNACE_TOTAL_TIME),
+				int(furnace_total_time),
 				furnace_time_left <= 0.0
 			)
 		if furnace_time_left <= 0.0:
@@ -877,10 +930,16 @@ func _advance_time(minutes: int) -> void:
 			_enter_act_3()
 
 	if dawn_reached:
-		if furnace_burning:
-			SignalBus.dialog_requested.emit("Fajar telah tiba. Bertahan sedikit lagi hingga ritual selesai!", 3.5)
-		else:
-			SignalBus.player_death_requested.emit("Fajar telah tiba sebelum ritual berhasil diselesaikan.")
+		trigger_dawn_lampor_devour()
+
+func trigger_dawn_lampor_devour() -> void:
+	if current_state != GameState.PLAYING or death_sequence_active:
+		return
+	if admin_god_mode:
+		SignalBus.dialog_requested.emit("[GOD MODE] Pukul 05.00 WIB terlewati tanpa dilahap Lampor.", 3.0)
+		return
+	furnace_burning = false
+	_execute_player_death("Waktu telah menunjukkan pukul 05.00 WIB sebelum ritual penolak bala tuntas! Keranda Lampor langsung melahap dan menyeret jiwamu ke dalam kegelapan abadi.", true, false)
 
 func _enter_act_1() -> void:
 	current_act = Act.BABAK_1
@@ -913,10 +972,8 @@ func _enter_act_3() -> void:
 		return
 	current_act = Act.BABAK_3
 	SignalBus.dialog_requested.emit("Waktunya memutus kutukan. Bakar semua benda ritual!", 3.5)
-	# Babak III dimulai minimal pukul 04.00, tanpa mengulang waktu jika terlambat.
-	if current_hour < 4:
-		current_hour = 4
-		current_minute = 0
+	# Pertahankan sisa waktu yang berhasil dihemat pemain di Babak II agar tidak
+	# memotong waktu tempuh menuju Tungku Balai Desa sebelum batas pukul 05.00 WIB.
 	SignalBus.time_tick.emit("%02d:%02d" % [current_hour, current_minute], current_hour, current_minute)
 	SignalBus.act_started.emit(3, "Babak III: Klimaks Pembakaran (04.00 - 05.00)")
 	broadcast_all_objectives()
@@ -938,8 +995,9 @@ func try_start_ritual() -> bool:
 
 func start_furnace_burning() -> void:
 	if not furnace_burning and current_act == Act.BABAK_3:
+		furnace_total_time = get_furnace_duration_for_difficulty(selected_difficulty)
 		furnace_burning = true
-		furnace_time_left = FURNACE_TOTAL_TIME
+		furnace_time_left = furnace_total_time
 		last_furnace_elapsed_sec = 0
 		broadcast_all_objectives()
 		SignalBus.lampor_state_changed.emit("CHASE")
@@ -1019,6 +1077,8 @@ func trigger_victory() -> void:
 	if current_state == GameState.GAMEOVER or current_state == GameState.VICTORY:
 		return
 	clear_run_save()
+	if is_tutorial_mode:
+		mark_tutorial_completed()
 	current_state = GameState.VICTORY
 	total_wins += 1
 	_award_run_coins(WIN_COIN_REWARD)
@@ -1030,10 +1090,15 @@ func trigger_victory() -> void:
 # karena Lampor). Dipakai untuk memutuskan apakah jumpscare dimainkan.
 func is_lampor_kill(reason: String) -> bool:
 	var lower: String = reason.to_lower()
-	return lower.contains("keranda") or lower.contains("ditarik") or lower.contains("lampor")
+	return lower.contains("keranda") or lower.contains("ditarik") or lower.contains("lampor") or lower.contains("dilahap")
 
 func _on_player_death_requested(reason: String) -> void:
+	_execute_player_death(reason, false, false)
+
+func _execute_player_death(reason: String, ignore_extra_lives: bool = false, bypass_god_mode: bool = false) -> void:
 	if death_sequence_active or current_state == GameState.GAMEOVER or current_state == GameState.VICTORY:
+		return
+	if admin_god_mode and not bypass_god_mode:
 		return
 	death_sequence_active = true
 	current_state = GameState.PAUSED
@@ -1047,8 +1112,8 @@ func _on_player_death_requested(reason: String) -> void:
 		await get_tree().create_timer(0.65, true).timeout
 	if not is_inside_tree():
 		return
-	# Nyawa tambahan menghidupkan kembali pemain di titik awal desa.
-	if extra_lives > 0 and is_instance_valid(player_character) and player_character.has_method("revive_from_extra_life"):
+	# Nyawa tambahan menghidupkan kembali pemain di titik awal desa (kecuali batas pukul 05.00 atau force lose).
+	if not ignore_extra_lives and extra_lives > 0 and is_instance_valid(player_character) and player_character.has_method("revive_from_extra_life"):
 		extra_lives -= 1
 		save_game_data()
 		current_state = GameState.PLAYING
@@ -1068,3 +1133,147 @@ func _on_player_death_requested(reason: String) -> void:
 	SignalBus.game_over.emit(reason)
 	get_tree().paused = false
 	get_tree().change_scene_to_file("res://scenes/ui/GameOverScreen.tscn")
+
+# ---------- Fungsi Bantuan Admin & Tester Panel (Alt+F2) ----------
+
+func is_in_active_gameplay() -> bool:
+	var world_root: Node = get_tree().current_scene
+	return world_root != null and world_root.scene_file_path == "res://scenes/world/VillageMap.tscn"
+
+func admin_instant_win() -> bool:
+	if not is_in_active_gameplay():
+		return false
+	death_sequence_active = false
+	get_tree().paused = false
+	current_state = GameState.PLAYING
+	trigger_victory()
+	return true
+
+func admin_instant_lose() -> bool:
+	if not is_in_active_gameplay():
+		return false
+	death_sequence_active = false
+	get_tree().paused = false
+	current_state = GameState.PLAYING
+	_execute_player_death("Ditelan Keranda Lampor secara instan melalui Admin Panel.", true, true)
+	return true
+
+func admin_set_coins(new_coins: int) -> void:
+	coins = clampi(new_coins, 0, MAX_COINS)
+	save_game_data()
+
+func admin_set_extra_lives(new_lives: int) -> void:
+	extra_lives = clampi(new_lives, 0, MAX_EXTRA_LIVES)
+	save_game_data()
+
+func admin_set_total_wins(new_wins: int) -> void:
+	total_wins = clampi(new_wins, 0, 999999)
+	save_game_data()
+
+func admin_set_time(hour: int, minute: int) -> bool:
+	if not is_in_active_gameplay():
+		return false
+	current_hour = clampi(hour, 1, 5)
+	current_minute = clampi(minute, 0, 59)
+	time_accumulator = 0.0
+	dawn_reached = (current_hour >= 5)
+	if dawn_reached:
+		current_hour = 5
+		current_minute = 0
+	var time_str: String = "%02d:%02d" % [current_hour, current_minute]
+	SignalBus.time_tick.emit(time_str, current_hour, current_minute)
+	if dawn_reached:
+		trigger_dawn_lampor_devour()
+	return true
+
+func admin_jump_to_act(target_act: int) -> bool:
+	if not is_in_active_gameplay():
+		return false
+	if target_act <= 1:
+		current_act = Act.BABAK_1
+		current_hour = 1
+		current_minute = 0
+		dawn_reached = false
+		furnace_burning = false
+		_enter_act_1()
+	elif target_act == 2:
+		admin_complete_babak_1_objectives()
+		if current_act < Act.BABAK_2:
+			_enter_act_2()
+	elif target_act >= 3:
+		admin_complete_babak_1_objectives()
+		if current_act < Act.BABAK_2:
+			_enter_act_2()
+		admin_collect_all_ritual_items()
+		if current_act < Act.BABAK_3:
+			_enter_act_3()
+	return true
+
+func admin_complete_babak_1_objectives() -> void:
+	for node: Node in get_tree().get_nodes_in_group("torch"):
+		if node is SafeZoneTorch:
+			var t := node as SafeZoneTorch
+			t.is_lit = true
+			t._update_visuals()
+	torches_lit = REQUIRED_TORCHES
+	var count_d: int = 0
+	for node: Node in get_tree().get_nodes_in_group("interactable"):
+		if node is Door and count_d < REQUIRED_BARRICADES:
+			var d := node as Door
+			d.is_open = false
+			d.is_barricaded = true
+			d.target_rotation_y = 0.0
+			if d.hinge:
+				d.hinge.rotation.y = 0.0
+			if d.barricade_visual:
+				d.barricade_visual.visible = true
+			d._update_blocker()
+			count_d += 1
+	doors_barricaded = REQUIRED_BARRICADES
+	broadcast_all_objectives()
+
+func admin_collect_all_ritual_items() -> void:
+	for k: String in ritual_items.keys():
+		ritual_items[k] = true
+	for node: Node in get_tree().get_nodes_in_group("interactable"):
+		if node is PickupItem and (node as PickupItem).is_ritual_item:
+			node.queue_free()
+	SignalBus.ritual_item_collected.emit("Keris Pusaka", TOTAL_RITUAL_ITEMS, TOTAL_RITUAL_ITEMS)
+	broadcast_all_objectives()
+
+func admin_give_all_items() -> void:
+	if not is_instance_valid(player_character):
+		return
+	var inv: InventorySystem = player_character.get_node_or_null("InventorySystem") as InventorySystem
+	if not inv:
+		return
+	inv.add_item({"id": "minyak_tanah", "name": "Minyak Tanah & Korek", "type": "resource", "quantity": 5})
+	inv.add_item({"id": "papan_paku", "name": "Papan & Paku", "type": "resource", "quantity": 4})
+	inv.add_item({"id": "jamu", "name": "Jamu Tolak Bala", "type": "consumable", "quantity": 5})
+	inv.add_item({"id": "baterai", "name": "Baterai Senter", "type": "consumable", "quantity": 5})
+
+func admin_refill_player_stats() -> void:
+	if not is_instance_valid(player_character) or not (player_character is PlayerController):
+		return
+	var pc := player_character as PlayerController
+	pc.current_stamina = pc.max_stamina
+	pc.flashlight_battery = 100.0
+	if pc.sanity_system:
+		pc.sanity_system.current_sanity = pc.sanity_system.max_sanity
+		SignalBus.player_sanity_changed.emit(pc.sanity_system.current_sanity, pc.sanity_system.max_sanity)
+	SignalBus.player_stamina_changed.emit(pc.current_stamina, pc.max_stamina)
+	SignalBus.flashlight_battery_changed.emit(pc.flashlight_battery, 100.0)
+
+func admin_teleport_to_altar() -> void:
+	if not is_instance_valid(player_character) or not (player_character is PlayerController):
+		return
+	var world_root: Node = get_tree().current_scene
+	if not world_root:
+		return
+	var altar: Node3D = world_root.find_child("RitualAltar", true, false) as Node3D
+	if altar:
+		var pc := player_character as PlayerController
+		if pc.is_hiding:
+			pc.exit_hiding()
+		pc.global_position = altar.global_position + Vector3(0.0, 0.3, 2.2)
+		pc.velocity = Vector3.ZERO

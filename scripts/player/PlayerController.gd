@@ -1,7 +1,8 @@
 class_name PlayerController
 extends CharacterBody3D
 
-const PLAYER_MODEL_SCENE: PackedScene = preload("res://assets/models/player/character-suit.glb")
+const PLAYER_MODEL_SCENE: PackedScene = preload("res://assets/models/player/ordinaryMan.fbx")
+const PLAYER_TEXTURE_1024: Texture2D = preload("res://assets/models/player/OrdinaryManTexture_1024x1024.png")
 
 @export var walk_speed: float = 4.2
 @export var sprint_speed: float = 7.0
@@ -27,11 +28,16 @@ var virtual_move_input: Vector2 = Vector2.ZERO
 var virtual_sprint_pressed: bool = false
 var is_caught: bool = false
 
-# Head Bobbing
+# Head Bobbing & Natural Motion
 var bob_freq: float = 2.4
-var bob_amp: float = 0.032
+var bob_amp: float = 0.034
 var bob_time: float = 0.0
 var initial_camera_pos: Vector3
+var was_on_floor: bool = true
+var landing_dip: float = 0.0
+var look_sway: Vector2 = Vector2.ZERO
+var look_sway_target: Vector2 = Vector2.ZERO
+var equip_raise_blend: float = 1.0
 
 # Footstep tracking
 var step_distance: float = 0.0
@@ -79,6 +85,28 @@ var move_blend: float = 0.0
 var sprint_blend: float = 0.0
 const PLAYER_MODEL_FPP_POS: Vector3 = Vector3(0.0, 0.0, 0.19)
 
+const BONE_ALIASES: Dictionary = {
+	"Hips": ["hip", "Hips"],
+	"Torso": ["spine", "Torso", "Abdomen"],
+	"Chest": ["chest", "Chest"],
+	"Neck": ["neck", "Neck"],
+	"Head": ["head", "Head"],
+	"Shoulder.L": ["Shoulder.L"],
+	"UpperArm.L": ["upperArm.l", "UpperArm.L"],
+	"LowerArm.L": ["lowerArm.l", "LowerArm.L"],
+	"Hand.L": ["hand.l", "Hand.L"],
+	"Shoulder.R": ["Shoulder.R"],
+	"UpperArm.R": ["upperArm.r", "UpperArm.R"],
+	"LowerArm.R": ["lowerArm.r", "LowerArm.R"],
+	"Hand.R": ["hand.r", "Hand.R"],
+	"UpperLeg.L": ["upperLeg.l", "UpperLeg.L"],
+	"LowerLeg.L": ["lowerLeg.l", "LowerLeg.L"],
+	"Foot.L": ["foot.l", "Foot.L"],
+	"UpperLeg.R": ["upperLeg.r", "UpperLeg.R"],
+	"LowerLeg.R": ["lowerLeg.r", "LowerLeg.R"],
+	"Foot.R": ["foot.r", "Foot.R"]
+}
+
 var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 
 func _ready() -> void:
@@ -101,17 +129,35 @@ func _ready() -> void:
 		_apply_equipped_item(inventory_system.get_equipped_item())
 	else:
 		_sync_flashlight_state(true)
-	
+
 	SignalBus.flashlight_battery_changed.emit(flashlight_battery, 100.0)
 	SignalBus.player_stamina_changed.emit(current_stamina, max_stamina)
+
+func _resolve_bone_name(skel: Skeleton3D, canonical_name: String) -> String:
+	if not skel:
+		return ""
+	if skel.find_bone(canonical_name) >= 0:
+		return canonical_name
+	if BONE_ALIASES.has(canonical_name):
+		for candidate: String in BONE_ALIASES[canonical_name]:
+			if skel.find_bone(candidate) >= 0:
+				return candidate
+	return ""
+
+func _find_bone_idx(skel: Skeleton3D, canonical_name: String) -> int:
+	var actual: String = _resolve_bone_name(skel, canonical_name)
+	return skel.find_bone(actual) if not actual.is_empty() else -1
 
 func _process(_delta: float) -> void:
 	if is_caught:
 		_play_player_anim("die", 0.08, 1.0)
 		if player_skeleton:
-			var hand_idx: int = player_skeleton.find_bone("Hand.R")
+			var hand_idx: int = _find_bone_idx(player_skeleton, "Hand.R")
 			if hand_idx >= 0:
 				player_skeleton.set_bone_pose_scale(hand_idx, Vector3.ONE)
+			var head_idx: int = _find_bone_idx(player_skeleton, "Head")
+			if head_idx >= 0:
+				player_skeleton.set_bone_pose_scale(head_idx, Vector3.ONE)
 		if model_head_mesh:
 			model_head_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
 		if player_model:
@@ -126,14 +172,13 @@ func _unhandled_input(event: InputEvent) -> void:
 	if GameManager.current_state != GameManager.GameState.PLAYING:
 		return
 
-	if is_inventory_open:
+	if is_inventory_open or (get_viewport().gui_get_focus_owner() is LineEdit):
 		return
 
 	if is_hiding:
 		if event.is_action_pressed("interact"):
 			_request_exit_hiding()
 		elif event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-			# Mengintip dari dalam lemari: arah pandang dibatasi di sekitar pintu
 			var new_yaw: float = rotation.y - event.relative.x * mouse_sensitivity
 			var yaw_diff: float = clampf(angle_difference(hide_yaw_center, new_yaw), -deg_to_rad(HIDE_LOOK_YAW), deg_to_rad(HIDE_LOOK_YAW))
 			rotation.y = hide_yaw_center + yaw_diff
@@ -145,14 +190,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		rotate_y(-event.relative.x * mouse_sensitivity)
 		head.rotate_x(-event.relative.y * mouse_sensitivity)
 		head.rotation.x = clamp(head.rotation.x, deg_to_rad(-80), deg_to_rad(80))
+		look_sway_target.x = clampf(look_sway_target.x - event.relative.x * 0.14, -10.0, 10.0)
+		look_sway_target.y = clampf(look_sway_target.y - event.relative.y * 0.12, -8.0, 8.0)
 
 	if event.is_action_pressed("flashlight"):
 		toggle_flashlight()
 
 	if event.is_action_pressed("interact"):
-		trigger_action_animation("interact-right", 0.45)
-		interaction_ray.trigger_interaction(self)
-		
+		_perform_interact_or_use()
+
 	if event.is_action_pressed("slot_1"):
 		inventory_system.select_slot(0)
 	elif event.is_action_pressed("slot_2"):
@@ -163,13 +209,25 @@ func _unhandled_input(event: InputEvent) -> void:
 		inventory_system.select_slot(3)
 	elif event.is_action_pressed("slot_5"):
 		inventory_system.select_slot(4)
-		
-	if event.is_action_pressed("ui_accept"):
-		_try_use_equipped_item()
-		
+
 	if event.is_action_pressed("drop_item"):
 		var drop_pos: Vector3 = global_position + (-camera.global_transform.basis.z * 1.2) + Vector3(0, 0.4, 0)
 		inventory_system.drop_equipped_item(drop_pos)
+
+func _perform_interact_or_use() -> void:
+	if is_caught or GameManager.current_state != GameManager.GameState.PLAYING:
+		return
+	if is_hiding:
+		_request_exit_hiding()
+		return
+	var interacted: bool = false
+	if interaction_ray:
+		interacted = interaction_ray.trigger_interaction(self)
+	if interacted:
+		trigger_action_animation("interact-right", 0.45)
+	else:
+		if not _try_use_equipped_item():
+			trigger_action_animation("interact-right", 0.42)
 
 func _physics_process(delta: float) -> void:
 	if GameManager.current_state != GameManager.GameState.PLAYING:
@@ -178,20 +236,22 @@ func _physics_process(delta: float) -> void:
 		in_cutscene = false
 		_sync_hand_prop_visibility()
 		_sync_flashlight_state(true)
-		
-	if is_hiding or is_inventory_open:
+
+	if is_hiding or is_inventory_open or (get_viewport().gui_get_focus_owner() is LineEdit):
 		current_noise_level = 0.0
 		velocity = Vector3.ZERO
 		_update_fpp_camera_and_arm(delta, false)
 		_update_player_animation(delta, false)
 		return
 
-	# Gravity
+	var pre_fall_vy: float = velocity.y
 	if not is_on_floor():
 		velocity.y -= gravity * delta
 
+	var god_mode: bool = ("admin_god_mode" in GameManager) and bool(GameManager.get("admin_god_mode"))
+
 	# Sprinting & Stamina
-	var wants_sprint: bool = (Input.is_action_pressed("sprint") or virtual_sprint_pressed) and is_on_floor() and current_stamina > 5.0
+	var wants_sprint: bool = (Input.is_action_pressed("sprint") or virtual_sprint_pressed) and is_on_floor() and (current_stamina > 5.0 or god_mode)
 	var input_dir: Vector2 = Input.get_vector("move_left", "move_right", "move_forward", "move_backward")
 	if virtual_move_input.length_squared() > 0.01:
 		input_dir = virtual_move_input
@@ -199,7 +259,10 @@ func _physics_process(delta: float) -> void:
 
 	if wants_sprint and is_moving:
 		is_sprinting = true
-		current_stamina = max(0.0, current_stamina - stamina_drain_rate * delta)
+		if not god_mode:
+			current_stamina = max(0.0, current_stamina - stamina_drain_rate * delta)
+		else:
+			current_stamina = max_stamina
 	else:
 		is_sprinting = false
 		current_stamina = min(max_stamina, current_stamina + stamina_recovery_rate * delta)
@@ -219,6 +282,10 @@ func _physics_process(delta: float) -> void:
 
 	move_and_slide()
 
+	if is_on_floor() and not was_on_floor and pre_fall_vy < -1.5:
+		landing_dip = clampf(-pre_fall_vy * 0.014, 0.0, 0.065)
+	was_on_floor = is_on_floor()
+
 	# Noise generation
 	if not is_moving:
 		current_noise_level = 0.0
@@ -226,14 +293,14 @@ func _physics_process(delta: float) -> void:
 		current_noise_level = 0.95
 	else:
 		current_noise_level = 0.35
-		
+
 	if current_noise_level > 0.1:
 		SignalBus.player_noise_made.emit(current_noise_level, global_position)
 
 	# Head Bobbing, Camera Perspective, Footsteps & Animations
 	if is_on_floor() and is_moving:
 		var current_speed: float = velocity.length()
-		bob_time += delta * current_speed * (1.3 if is_sprinting else 1.0)
+		bob_time += delta * current_speed * (1.32 if is_sprinting else 1.0)
 		step_distance += current_speed * delta
 		var req_step: float = step_interval * (0.75 if is_sprinting else 1.0)
 		if step_distance >= req_step:
@@ -243,9 +310,12 @@ func _physics_process(delta: float) -> void:
 	_update_fpp_camera_and_arm(delta, is_moving)
 	_update_player_animation(delta, is_moving)
 
-	# Flashlight battery drain (only when flashlight is actively held & turned on)
+	# Flashlight battery drain
 	if flashlight_on and equipped_item_id == "flashlight":
-		flashlight_battery = max(0.0, flashlight_battery - flashlight_drain_rate * delta)
+		if not god_mode:
+			flashlight_battery = max(0.0, flashlight_battery - flashlight_drain_rate * delta)
+		else:
+			flashlight_battery = 100.0
 		SignalBus.flashlight_battery_changed.emit(flashlight_battery, 100.0)
 		if flashlight_battery <= 0.0:
 			toggle_flashlight(false)
@@ -265,19 +335,14 @@ func apply_touch_look(relative: Vector2) -> void:
 	rotate_y(-relative.x * camera_sensitivity)
 	head.rotate_x(-relative.y * camera_sensitivity)
 	head.rotation.x = clampf(head.rotation.x, deg_to_rad(-80.0), deg_to_rad(80.0))
+	look_sway_target.x = clampf(look_sway_target.x - relative.x * 0.14, -10.0, 10.0)
+	look_sway_target.y = clampf(look_sway_target.y - relative.y * 0.12, -8.0, 8.0)
 
 func touch_interact() -> void:
-	if is_caught or GameManager.current_state != GameManager.GameState.PLAYING:
-		return
-	if is_hiding:
-		_request_exit_hiding()
-	else:
-		trigger_action_animation("interact-right", 0.45)
-		interaction_ray.trigger_interaction(self)
+	_perform_interact_or_use()
 
 func touch_use_item() -> void:
-	if not is_caught and not get_tree().paused and GameManager.current_state == GameManager.GameState.PLAYING:
-		_try_use_equipped_item()
+	_perform_interact_or_use()
 
 func touch_select_slot(slot_index: int) -> void:
 	if not is_caught and not get_tree().paused and GameManager.current_state == GameManager.GameState.PLAYING:
@@ -325,9 +390,14 @@ func _on_item_equipped(_slot_index: int, item_data: Dictionary) -> void:
 	_apply_equipped_item(item_data)
 
 func _apply_equipped_item(item_data: Dictionary) -> void:
-	equipped_item_id = str(item_data.get("id", ""))
+	var next_id: String = str(item_data.get("id", ""))
+	if next_id != equipped_item_id:
+		equip_raise_blend = 0.0
+	equipped_item_id = next_id
 	_sync_hand_prop_visibility()
 	_sync_flashlight_state(true)
+	if interaction_ray:
+		interaction_ray._update_prompt()
 
 func _sync_hand_prop_visibility() -> void:
 	var show_prop: bool = not in_cutscene and not is_caught and not is_hiding and equipped_item_id != ""
@@ -363,14 +433,12 @@ func enter_hiding(spot: Node) -> void:
 		global_position = spot.get_hide_global_position()
 	else:
 		global_position = spot.global_position + Vector3(0, 0.2, 0)
-	# Hadapkan pandangan ke arah pintu lemari (sisi depan lemari = +Z lokal lemari)
 	hide_yaw_center = spot.global_rotation.y + PI
 	rotation.y = hide_yaw_center
 	head.rotation.x = 0.0
 	SignalBus.player_entered_hiding.emit(true)
 
 func _request_exit_hiding() -> void:
-	# Keluar lewat HidingSpot supaya status is_occupied ikut ter-reset
 	if hiding_spot and is_instance_valid(hiding_spot) and hiding_spot.has_method("interact"):
 		hiding_spot.interact(self)
 	else:
@@ -392,11 +460,11 @@ func exit_hiding() -> void:
 	hiding_spot = null
 	SignalBus.player_entered_hiding.emit(false)
 
-func _try_use_equipped_item() -> void:
+func _try_use_equipped_item() -> bool:
 	var item: Dictionary = inventory_system.get_equipped_item()
 	if item.is_empty():
-		return
-		
+		return false
+
 	if item.get("id") == "jamu":
 		sanity_system.restore_sanity(45.0)
 		current_stamina = max_stamina
@@ -404,15 +472,24 @@ func _try_use_equipped_item() -> void:
 		inventory_system.consume_equipped_item()
 		trigger_action_animation("pick-up", 0.5)
 		AudioManager.play_sound("item_pickup", -4.0, 0.8)
+		SignalBus.item_used.emit(item)
+		if interaction_ray:
+			interaction_ray._update_prompt()
+		return true
 	elif item.get("id") == "baterai":
 		if flashlight_battery >= 99.0:
 			SignalBus.dialog_requested.emit("Baterai senter masih penuh.", 2.0)
-			return
+			return true
 		flashlight_battery = minf(100.0, flashlight_battery + 50.0)
 		SignalBus.flashlight_battery_changed.emit(flashlight_battery, 100.0)
 		inventory_system.consume_equipped_item()
 		trigger_action_animation("pick-up", 0.5)
 		AudioManager.play_sound("item_pickup", -4.0, 0.8)
+		SignalBus.item_used.emit(item)
+		if interaction_ray:
+			interaction_ray._update_prompt()
+		return true
+	return false
 
 func _setup_player_model() -> void:
 	if not PLAYER_MODEL_SCENE:
@@ -426,22 +503,22 @@ func _setup_player_model() -> void:
 	player_model.position = PLAYER_MODEL_FPP_POS
 	add_child(player_model)
 
-	# Keep model hands, cuffs, and suit faintly legible even in dark unlit rooms
+	# Hapus node referensi Blender (Side/Front) bila ada pada FBX
+	for helper_name: String in ["Side", "Front"]:
+		var helper_node: Node = player_model.get_node_or_null(helper_name)
+		if helper_node:
+			helper_node.queue_free()
+
 	_apply_dark_visibility_floor(player_model)
-	var body_mesh: GeometryInstance3D = player_model.find_child("Suit_Body", true, false) as GeometryInstance3D
-	if body_mesh:
-		body_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	for mi_node: Node in player_model.find_children("*", "MeshInstance3D", true, false):
+		if mi_node is GeometryInstance3D:
+			(mi_node as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 	var head_node: Node = player_model.find_child("Suit_Head", true, false)
 	if not (head_node is GeometryInstance3D):
 		head_node = player_model.find_child("head-mesh", true, false)
 	if head_node is GeometryInstance3D:
 		model_head_mesh = head_node as GeometryInstance3D
-	else:
-		for child: Node in player_model.find_children("*", "GeometryInstance3D", true, false):
-			if child.name.to_lower().contains("head") and child is GeometryInstance3D:
-				model_head_mesh = child as GeometryInstance3D
-				break
 
 	player_skeleton = player_model.find_child("Skeleton3D", true, false) as Skeleton3D
 	model_anim_player = player_model.find_child("AnimationPlayer", true, false) as AnimationPlayer
@@ -464,12 +541,22 @@ func _apply_dark_visibility_floor(root_node: Node) -> void:
 			continue
 		for surf_idx: int in range(mi.mesh.get_surface_count()):
 			var base_mat: Material = mi.get_active_material(surf_idx)
+			var cloned: StandardMaterial3D = null
 			if base_mat is StandardMaterial3D:
-				var cloned: StandardMaterial3D = base_mat.duplicate() as StandardMaterial3D
-				cloned.emission_enabled = true
+				cloned = base_mat.duplicate() as StandardMaterial3D
+			else:
+				cloned = StandardMaterial3D.new()
+			if PLAYER_TEXTURE_1024 and (cloned.albedo_texture != null or mi.name == "Cube"):
+				cloned.albedo_texture = PLAYER_TEXTURE_1024
+			cloned.roughness = 0.78
+			cloned.emission_enabled = true
+			if cloned.albedo_texture:
+				cloned.emission_texture = cloned.albedo_texture
+				cloned.emission = Color.WHITE
+			else:
 				cloned.emission = cloned.albedo_color
-				cloned.emission_energy_multiplier = 0.04
-				mi.set_surface_override_material(surf_idx, cloned)
+			cloned.emission_energy_multiplier = 0.045
+			mi.set_surface_override_material(surf_idx, cloned)
 
 func _make_suit_mat(color: Color, rough: float = 0.72, metal: float = 0.04, ambient_floor: float = 0.045) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
@@ -495,8 +582,9 @@ func _attach_suit_box(parent_node: Node3D, box_name: String, size_vec: Vector3, 
 	parent_node.add_child(mi)
 	return mi
 
-func _bone_pose_quat(skel: Skeleton3D, bone_name: String, rot_x_deg: float, rot_z_deg: float, rot_y_deg: float = 0.0) -> Quaternion:
-	var idx: int = skel.find_bone(bone_name)
+func _bone_pose_quat(skel: Skeleton3D, canonical_bone_name: String, rot_x_deg: float, rot_z_deg: float, rot_y_deg: float = 0.0) -> Quaternion:
+	var actual_name: String = _resolve_bone_name(skel, canonical_bone_name)
+	var idx: int = skel.find_bone(actual_name) if not actual_name.is_empty() else -1
 	if idx < 0:
 		return Quaternion.IDENTITY
 	var rest_b: Basis = skel.get_bone_rest(idx).basis
@@ -518,17 +606,18 @@ func _add_suit_anim(lib: AnimationLibrary, skel_path: String, skel: Skeleton3D, 
 	var anim := Animation.new()
 	anim.length = length
 	anim.loop_mode = loop_mode
-	for bone_name: String in keyframes.keys():
-		if skel.find_bone(bone_name) < 0:
+	for canonical_name: String in keyframes.keys():
+		var actual_name: String = _resolve_bone_name(skel, canonical_name)
+		if actual_name.is_empty() or skel.find_bone(actual_name) < 0:
 			continue
 		var track_idx: int = anim.add_track(Animation.TYPE_ROTATION_3D)
-		anim.track_set_path(track_idx, skel_path + ":" + bone_name)
-		anim.track_set_interpolation_type(track_idx, Animation.INTERPOLATION_LINEAR)
-		var keys: Array = keyframes[bone_name]
+		anim.track_set_path(track_idx, skel_path + ":" + actual_name)
+		anim.track_set_interpolation_type(track_idx, Animation.INTERPOLATION_CUBIC)
+		var keys: Array = keyframes[canonical_name]
 		for kf: Array in keys:
 			var t: float = float(kf[0])
 			var deg: Vector3 = kf[1] as Vector3
-			var q: Quaternion = _bone_pose_quat(skel, bone_name, deg.x, deg.y, deg.z)
+			var q: Quaternion = _bone_pose_quat(skel, canonical_name, deg.x, deg.y, deg.z)
 			anim.rotation_track_insert_key(track_idx, t, q)
 	lib.add_animation(anim_name, anim)
 
@@ -541,53 +630,251 @@ func _build_suit_animations(skel: Skeleton3D) -> void:
 	model_anim_player.add_animation_library("", lib)
 	var skel_path: String = String(player_model.get_path_to(skel))
 
-	_add_suit_anim(lib, skel_path, skel, "idle", 1.6, Animation.LOOP_LINEAR, {
-		"Hips": [[0.0, Vector3.ZERO], [0.8, Vector3.ZERO], [1.6, Vector3.ZERO]],
-		"Torso": [[0.0, Vector3.ZERO], [0.8, Vector3(-1.5, 0.0, 0.0)], [1.6, Vector3.ZERO]],
-		"Chest": [[0.0, Vector3(-1.0, 0.0, 0.0)], [0.8, Vector3(2.0, 0.0, 0.0)], [1.6, Vector3(-1.0, 0.0, 0.0)]],
-		"Head": [[0.0, Vector3(0.0, 0.0, 0.0)], [0.8, Vector3(1.5, 0.0, 0.0)], [1.6, Vector3(0.0, 0.0, 0.0)]],
-		"UpperArm.L": [[0.0, Vector3(4.0, 78.0, 0.0)], [0.8, Vector3(2.0, 76.0, 0.0)], [1.6, Vector3(4.0, 78.0, 0.0)]],
-		"LowerArm.L": [[0.0, Vector3(-14.0, 0.0, 0.0)], [0.8, Vector3(-18.0, 0.0, 0.0)], [1.6, Vector3(-14.0, 0.0, 0.0)]],
-		"UpperArm.R": [[0.0, Vector3(6.0, -78.0, 0.0)], [0.8, Vector3(4.0, -76.0, 0.0)], [1.6, Vector3(6.0, -78.0, 0.0)]],
-		"LowerArm.R": [[0.0, Vector3(-14.0, 0.0, 0.0)], [0.8, Vector3(-18.0, 0.0, 0.0)], [1.6, Vector3(-14.0, 0.0, 0.0)]],
-		"UpperLeg.L": [[0.0, Vector3.ZERO], [1.6, Vector3.ZERO]],
-		"LowerLeg.L": [[0.0, Vector3.ZERO], [1.6, Vector3.ZERO]],
-		"Foot.L": [[0.0, Vector3.ZERO], [1.6, Vector3.ZERO]],
-		"UpperLeg.R": [[0.0, Vector3.ZERO], [1.6, Vector3.ZERO]],
-		"LowerLeg.R": [[0.0, Vector3.ZERO], [1.6, Vector3.ZERO]],
-		"Foot.R": [[0.0, Vector3.ZERO], [1.6, Vector3.ZERO]]
+	# Idle: napas alami bertingkat, sedikit perpindahan tumpuan pinggul, siku rileks
+	_add_suit_anim(lib, skel_path, skel, "idle", 2.4, Animation.LOOP_LINEAR, {
+		"Hips": [
+			[0.0, Vector3(0.5, 0.8, 0.4)],
+			[0.6, Vector3(0.0, -0.4, -0.3)],
+			[1.2, Vector3(0.8, -0.8, -0.5)],
+			[1.8, Vector3(0.2, 0.3, 0.2)],
+			[2.4, Vector3(0.5, 0.8, 0.4)]
+		],
+		"Torso": [
+			[0.0, Vector3(-1.0, -0.5, -0.4)],
+			[0.6, Vector3(0.5, 0.3, 0.3)],
+			[1.2, Vector3(-2.2, 0.6, 0.5)],
+			[1.8, Vector3(-0.4, -0.2, -0.2)],
+			[2.4, Vector3(-1.0, -0.5, -0.4)]
+		],
+		"Chest": [
+			[0.0, Vector3(-1.2, 0.0, 0.0)],
+			[0.6, Vector3(1.4, 0.0, 0.4)],
+			[1.2, Vector3(2.6, 0.0, -0.4)],
+			[1.8, Vector3(0.4, 0.0, 0.2)],
+			[2.4, Vector3(-1.2, 0.0, 0.0)]
+		],
+		"Head": [
+			[0.0, Vector3(0.4, 0.0, -0.6)],
+			[0.8, Vector3(1.8, 0.0, 0.8)],
+			[1.6, Vector3(-0.6, 0.0, -0.4)],
+			[2.4, Vector3(0.4, 0.0, -0.6)]
+		],
+		"UpperArm.L": [
+			[0.0, Vector3(5.0, 76.0, -2.0)],
+			[0.6, Vector3(3.0, 74.5, 0.0)],
+			[1.2, Vector3(1.5, 73.5, 1.5)],
+			[1.8, Vector3(3.5, 75.0, -0.5)],
+			[2.4, Vector3(5.0, 76.0, -2.0)]
+		],
+		"LowerArm.L": [
+			[0.0, Vector3(-18.0, 0.0, 4.0)],
+			[1.2, Vector3(-23.0, 0.0, 6.0)],
+			[2.4, Vector3(-18.0, 0.0, 4.0)]
+		],
+		"UpperArm.R": [
+			[0.0, Vector3(6.0, -76.0, 2.0)],
+			[0.6, Vector3(4.0, -74.5, 0.0)],
+			[1.2, Vector3(2.0, -73.5, -1.5)],
+			[1.8, Vector3(4.5, -75.0, 0.5)],
+			[2.4, Vector3(6.0, -76.0, 2.0)]
+		],
+		"LowerArm.R": [
+			[0.0, Vector3(-18.0, 0.0, -4.0)],
+			[1.2, Vector3(-23.0, 0.0, -6.0)],
+			[2.4, Vector3(-18.0, 0.0, -4.0)]
+		],
+		"UpperLeg.L": [[0.0, Vector3(-2.0, 0.0, 0.0)], [1.2, Vector3(-3.5, 0.0, 0.0)], [2.4, Vector3(-2.0, 0.0, 0.0)]],
+		"LowerLeg.L": [[0.0, Vector3(4.0, 0.0, 0.0)], [1.2, Vector3(6.5, 0.0, 0.0)], [2.4, Vector3(4.0, 0.0, 0.0)]],
+		"Foot.L": [[0.0, Vector3(-2.0, 0.0, 0.0)], [2.4, Vector3(-2.0, 0.0, 0.0)]],
+		"UpperLeg.R": [[0.0, Vector3(-3.0, 0.0, 0.0)], [1.2, Vector3(-1.5, 0.0, 0.0)], [2.4, Vector3(-3.0, 0.0, 0.0)]],
+		"LowerLeg.R": [[0.0, Vector3(5.5, 0.0, 0.0)], [1.2, Vector3(3.5, 0.0, 0.0)], [2.4, Vector3(5.5, 0.0, 0.0)]],
+		"Foot.R": [[0.0, Vector3(-2.0, 0.0, 0.0)], [2.4, Vector3(-2.0, 0.0, 0.0)]]
 	})
 
-	_add_suit_anim(lib, skel_path, skel, "walk", 0.8, Animation.LOOP_LINEAR, {
-		"Hips": [[0.0, Vector3(2.0, 0.0, 3.0)], [0.4, Vector3(2.0, 0.0, -3.0)], [0.8, Vector3(2.0, 0.0, 3.0)]],
-		"Torso": [[0.0, Vector3(3.0, 0.0, -4.0)], [0.4, Vector3(3.0, 0.0, 4.0)], [0.8, Vector3(3.0, 0.0, -4.0)]],
-		"Chest": [[0.0, Vector3(2.0, 0.0, 0.0)], [0.4, Vector3(2.0, 0.0, 0.0)], [0.8, Vector3(2.0, 0.0, 0.0)]],
-		"UpperArm.L": [[0.0, Vector3(18.0, 76.0, 0.0)], [0.4, Vector3(-22.0, 76.0, 0.0)], [0.8, Vector3(18.0, 76.0, 0.0)]],
-		"LowerArm.L": [[0.0, Vector3(-24.0, 0.0, 0.0)], [0.4, Vector3(-36.0, 0.0, 0.0)], [0.8, Vector3(-24.0, 0.0, 0.0)]],
-		"UpperArm.R": [[0.0, Vector3(-16.0, -76.0, 0.0)], [0.4, Vector3(20.0, -76.0, 0.0)], [0.8, Vector3(-16.0, -76.0, 0.0)]],
-		"LowerArm.R": [[0.0, Vector3(-34.0, 0.0, 0.0)], [0.4, Vector3(-22.0, 0.0, 0.0)], [0.8, Vector3(-34.0, 0.0, 0.0)]],
-		"UpperLeg.L": [[0.0, Vector3(-28.0, 0.0, 0.0)], [0.2, Vector3(0.0, 0.0, 0.0)], [0.4, Vector3(24.0, 0.0, 0.0)], [0.6, Vector3(-8.0, 0.0, 0.0)], [0.8, Vector3(-28.0, 0.0, 0.0)]],
-		"LowerLeg.L": [[0.0, Vector3(14.0, 0.0, 0.0)], [0.2, Vector3(8.0, 0.0, 0.0)], [0.4, Vector3(36.0, 0.0, 0.0)], [0.6, Vector3(46.0, 0.0, 0.0)], [0.8, Vector3(14.0, 0.0, 0.0)]],
-		"Foot.L": [[0.0, Vector3(-8.0, 0.0, 0.0)], [0.4, Vector3(14.0, 0.0, 0.0)], [0.8, Vector3(-8.0, 0.0, 0.0)]],
-		"UpperLeg.R": [[0.0, Vector3(24.0, 0.0, 0.0)], [0.2, Vector3(-8.0, 0.0, 0.0)], [0.4, Vector3(-28.0, 0.0, 0.0)], [0.6, Vector3(0.0, 0.0, 0.0)], [0.8, Vector3(24.0, 0.0, 0.0)]],
-		"LowerLeg.R": [[0.0, Vector3(36.0, 0.0, 0.0)], [0.2, Vector3(46.0, 0.0, 0.0)], [0.4, Vector3(14.0, 0.0, 0.0)], [0.6, Vector3(8.0, 0.0, 0.0)], [0.8, Vector3(36.0, 0.0, 0.0)]],
-		"Foot.R": [[0.0, Vector3(14.0, 0.0, 0.0)], [0.4, Vector3(-8.0, 0.0, 0.0)], [0.8, Vector3(14.0, 0.0, 0.0)]]
+	# Walk: siklus langkah 5-fase organik dengan ayunan lengan & tindak lanjut lengan bawah
+	_add_suit_anim(lib, skel_path, skel, "walk", 0.88, Animation.LOOP_LINEAR, {
+		"Hips": [
+			[0.0, Vector3(2.5, -2.2, 3.8)],
+			[0.22, Vector3(1.5, 0.0, 1.2)],
+			[0.44, Vector3(2.5, 2.2, -3.8)],
+			[0.66, Vector3(1.5, 0.0, -1.2)],
+			[0.88, Vector3(2.5, -2.2, 3.8)]
+		],
+		"Torso": [
+			[0.0, Vector3(3.5, 1.8, -4.5)],
+			[0.22, Vector3(4.5, 0.0, -1.5)],
+			[0.44, Vector3(3.5, -1.8, 4.5)],
+			[0.66, Vector3(4.5, 0.0, 1.5)],
+			[0.88, Vector3(3.5, 1.8, -4.5)]
+		],
+		"Chest": [
+			[0.0, Vector3(2.5, 0.8, -2.0)],
+			[0.22, Vector3(3.5, 0.0, 0.0)],
+			[0.44, Vector3(2.5, -0.8, 2.0)],
+			[0.66, Vector3(3.5, 0.0, 0.0)],
+			[0.88, Vector3(2.5, 0.8, -2.0)]
+		],
+		"UpperArm.L": [
+			[0.0, Vector3(22.0, 74.0, -4.0)],
+			[0.22, Vector3(4.0, 75.5, 0.0)],
+			[0.44, Vector3(-24.0, 74.0, 5.0)],
+			[0.66, Vector3(-2.0, 75.5, 0.0)],
+			[0.88, Vector3(22.0, 74.0, -4.0)]
+		],
+		"LowerArm.L": [
+			[0.0, Vector3(-20.0, 0.0, 4.0)],
+			[0.22, Vector3(-28.0, 0.0, 5.0)],
+			[0.44, Vector3(-42.0, 0.0, 7.0)],
+			[0.66, Vector3(-30.0, 0.0, 5.0)],
+			[0.88, Vector3(-20.0, 0.0, 4.0)]
+		],
+		"UpperArm.R": [
+			[0.0, Vector3(-24.0, -74.0, -5.0)],
+			[0.22, Vector3(-2.0, -75.5, 0.0)],
+			[0.44, Vector3(22.0, -74.0, 4.0)],
+			[0.66, Vector3(4.0, -75.5, 0.0)],
+			[0.88, Vector3(-24.0, -74.0, -5.0)]
+		],
+		"LowerArm.R": [
+			[0.0, Vector3(-42.0, 0.0, -7.0)],
+			[0.22, Vector3(-30.0, 0.0, -5.0)],
+			[0.44, Vector3(-20.0, 0.0, -4.0)],
+			[0.66, Vector3(-28.0, 0.0, -5.0)],
+			[0.88, Vector3(-42.0, 0.0, -7.0)]
+		],
+		"UpperLeg.L": [
+			[0.0, Vector3(-30.0, 0.0, 0.0)],
+			[0.22, Vector3(-4.0, 0.0, 0.0)],
+			[0.44, Vector3(24.0, 0.0, 0.0)],
+			[0.66, Vector3(-12.0, 0.0, 0.0)],
+			[0.88, Vector3(-30.0, 0.0, 0.0)]
+		],
+		"LowerLeg.L": [
+			[0.0, Vector3(12.0, 0.0, 0.0)],
+			[0.22, Vector3(18.0, 0.0, 0.0)],
+			[0.44, Vector3(34.0, 0.0, 0.0)],
+			[0.66, Vector3(52.0, 0.0, 0.0)],
+			[0.88, Vector3(12.0, 0.0, 0.0)]
+		],
+		"Foot.L": [
+			[0.0, Vector3(-10.0, 0.0, 0.0)],
+			[0.22, Vector3(2.0, 0.0, 0.0)],
+			[0.44, Vector3(16.0, 0.0, 0.0)],
+			[0.66, Vector3(6.0, 0.0, 0.0)],
+			[0.88, Vector3(-10.0, 0.0, 0.0)]
+		],
+		"UpperLeg.R": [
+			[0.0, Vector3(24.0, 0.0, 0.0)],
+			[0.22, Vector3(-12.0, 0.0, 0.0)],
+			[0.44, Vector3(-30.0, 0.0, 0.0)],
+			[0.66, Vector3(-4.0, 0.0, 0.0)],
+			[0.88, Vector3(24.0, 0.0, 0.0)]
+		],
+		"LowerLeg.R": [
+			[0.0, Vector3(34.0, 0.0, 0.0)],
+			[0.22, Vector3(52.0, 0.0, 0.0)],
+			[0.44, Vector3(12.0, 0.0, 0.0)],
+			[0.66, Vector3(18.0, 0.0, 0.0)],
+			[0.88, Vector3(34.0, 0.0, 0.0)]
+		],
+		"Foot.R": [
+			[0.0, Vector3(16.0, 0.0, 0.0)],
+			[0.22, Vector3(6.0, 0.0, 0.0)],
+			[0.44, Vector3(-10.0, 0.0, 0.0)],
+			[0.66, Vector3(2.0, 0.0, 0.0)],
+			[0.88, Vector3(16.0, 0.0, 0.0)]
+		]
 	})
 
-	_add_suit_anim(lib, skel_path, skel, "sprint", 0.52, Animation.LOOP_LINEAR, {
-		"Hips": [[0.0, Vector3(4.0, 0.0, 5.0)], [0.26, Vector3(4.0, 0.0, -5.0)], [0.52, Vector3(4.0, 0.0, 5.0)]],
-		"Torso": [[0.0, Vector3(6.0, 0.0, -6.0)], [0.26, Vector3(6.0, 0.0, 6.0)], [0.52, Vector3(6.0, 0.0, -6.0)]],
-		"Chest": [[0.0, Vector3(4.0, 0.0, 0.0)], [0.26, Vector3(4.0, 0.0, 0.0)], [0.52, Vector3(4.0, 0.0, 0.0)]],
-		"UpperArm.L": [[0.0, Vector3(34.0, 74.0, 0.0)], [0.26, Vector3(-38.0, 74.0, 0.0)], [0.52, Vector3(34.0, 74.0, 0.0)]],
-		"LowerArm.L": [[0.0, Vector3(-56.0, 0.0, 0.0)], [0.26, Vector3(-68.0, 0.0, 0.0)], [0.52, Vector3(-56.0, 0.0, 0.0)]],
-		"UpperArm.R": [[0.0, Vector3(-34.0, -74.0, 0.0)], [0.26, Vector3(34.0, -74.0, 0.0)], [0.52, Vector3(-34.0, -74.0, 0.0)]],
-		"LowerArm.R": [[0.0, Vector3(-66.0, 0.0, 0.0)], [0.26, Vector3(-54.0, 0.0, 0.0)], [0.52, Vector3(-66.0, 0.0, 0.0)]],
-		"UpperLeg.L": [[0.0, Vector3(-44.0, 0.0, 0.0)], [0.13, Vector3(0.0, 0.0, 0.0)], [0.26, Vector3(38.0, 0.0, 0.0)], [0.39, Vector3(-12.0, 0.0, 0.0)], [0.52, Vector3(-44.0, 0.0, 0.0)]],
-		"LowerLeg.L": [[0.0, Vector3(18.0, 0.0, 0.0)], [0.13, Vector3(14.0, 0.0, 0.0)], [0.26, Vector3(58.0, 0.0, 0.0)], [0.39, Vector3(70.0, 0.0, 0.0)], [0.52, Vector3(18.0, 0.0, 0.0)]],
-		"Foot.L": [[0.0, Vector3(-10.0, 0.0, 0.0)], [0.26, Vector3(18.0, 0.0, 0.0)], [0.52, Vector3(-10.0, 0.0, 0.0)]],
-		"UpperLeg.R": [[0.0, Vector3(38.0, 0.0, 0.0)], [0.13, Vector3(-12.0, 0.0, 0.0)], [0.26, Vector3(-44.0, 0.0, 0.0)], [0.39, Vector3(0.0, 0.0, 0.0)], [0.52, Vector3(38.0, 0.0, 0.0)]],
-		"LowerLeg.R": [[0.0, Vector3(58.0, 0.0, 0.0)], [0.13, Vector3(70.0, 0.0, 0.0)], [0.26, Vector3(18.0, 0.0, 0.0)], [0.39, Vector3(14.0, 0.0, 0.0)], [0.52, Vector3(58.0, 0.0, 0.0)]],
-		"Foot.R": [[0.0, Vector3(18.0, 0.0, 0.0)], [0.26, Vector3(-10.0, 0.0, 0.0)], [0.52, Vector3(18.0, 0.0, 0.0)]]
+	# Sprint / Run: lari panik realistis dengan condong tubuh & dorongan siku aktif
+	_add_suit_anim(lib, skel_path, skel, "sprint", 0.56, Animation.LOOP_LINEAR, {
+		"Hips": [
+			[0.0, Vector3(6.0, -3.5, 6.0)],
+			[0.14, Vector3(4.0, 0.0, 2.0)],
+			[0.28, Vector3(6.0, 3.5, -6.0)],
+			[0.42, Vector3(4.0, 0.0, -2.0)],
+			[0.56, Vector3(6.0, -3.5, 6.0)]
+		],
+		"Torso": [
+			[0.0, Vector3(9.0, 2.5, -7.5)],
+			[0.14, Vector3(11.0, 0.0, -2.0)],
+			[0.28, Vector3(9.0, -2.5, 7.5)],
+			[0.42, Vector3(11.0, 0.0, 2.0)],
+			[0.56, Vector3(9.0, 2.5, -7.5)]
+		],
+		"Chest": [
+			[0.0, Vector3(6.0, 1.5, -4.0)],
+			[0.14, Vector3(8.0, 0.0, 0.0)],
+			[0.28, Vector3(6.0, -1.5, 4.0)],
+			[0.42, Vector3(8.0, 0.0, 0.0)],
+			[0.56, Vector3(6.0, 1.5, -4.0)]
+		],
+		"UpperArm.L": [
+			[0.0, Vector3(38.0, 70.0, -8.0)],
+			[0.14, Vector3(4.0, 72.0, 0.0)],
+			[0.28, Vector3(-44.0, 68.0, 10.0)],
+			[0.42, Vector3(-6.0, 72.0, 0.0)],
+			[0.56, Vector3(38.0, 70.0, -8.0)]
+		],
+		"LowerArm.L": [
+			[0.0, Vector3(-54.0, 0.0, 8.0)],
+			[0.14, Vector3(-66.0, 0.0, 10.0)],
+			[0.28, Vector3(-82.0, 0.0, 14.0)],
+			[0.42, Vector3(-68.0, 0.0, 10.0)],
+			[0.56, Vector3(-54.0, 0.0, 8.0)]
+		],
+		"UpperArm.R": [
+			[0.0, Vector3(-44.0, -68.0, -10.0)],
+			[0.14, Vector3(-6.0, -72.0, 0.0)],
+			[0.28, Vector3(38.0, -70.0, 8.0)],
+			[0.42, Vector3(4.0, -72.0, 0.0)],
+			[0.56, Vector3(-44.0, -68.0, -10.0)]
+		],
+		"LowerArm.R": [
+			[0.0, Vector3(-82.0, 0.0, -14.0)],
+			[0.14, Vector3(-68.0, 0.0, -10.0)],
+			[0.28, Vector3(-54.0, 0.0, -8.0)],
+			[0.42, Vector3(-66.0, 0.0, -10.0)],
+			[0.56, Vector3(-82.0, 0.0, -14.0)]
+		],
+		"UpperLeg.L": [
+			[0.0, Vector3(-48.0, 0.0, 0.0)],
+			[0.14, Vector3(-6.0, 0.0, 0.0)],
+			[0.28, Vector3(40.0, 0.0, 0.0)],
+			[0.42, Vector3(-18.0, 0.0, 0.0)],
+			[0.56, Vector3(-48.0, 0.0, 0.0)]
+		],
+		"LowerLeg.L": [
+			[0.0, Vector3(20.0, 0.0, 0.0)],
+			[0.14, Vector3(24.0, 0.0, 0.0)],
+			[0.28, Vector3(56.0, 0.0, 0.0)],
+			[0.42, Vector3(78.0, 0.0, 0.0)],
+			[0.56, Vector3(20.0, 0.0, 0.0)]
+		],
+		"Foot.L": [
+			[0.0, Vector3(-14.0, 0.0, 0.0)],
+			[0.28, Vector3(22.0, 0.0, 0.0)],
+			[0.56, Vector3(-14.0, 0.0, 0.0)]
+		],
+		"UpperLeg.R": [
+			[0.0, Vector3(40.0, 0.0, 0.0)],
+			[0.14, Vector3(-18.0, 0.0, 0.0)],
+			[0.28, Vector3(-48.0, 0.0, 0.0)],
+			[0.42, Vector3(-6.0, 0.0, 0.0)],
+			[0.56, Vector3(40.0, 0.0, 0.0)]
+		],
+		"LowerLeg.R": [
+			[0.0, Vector3(56.0, 0.0, 0.0)],
+			[0.14, Vector3(78.0, 0.0, 0.0)],
+			[0.28, Vector3(20.0, 0.0, 0.0)],
+			[0.42, Vector3(24.0, 0.0, 0.0)],
+			[0.56, Vector3(56.0, 0.0, 0.0)]
+		],
+		"Foot.R": [
+			[0.0, Vector3(22.0, 0.0, 0.0)],
+			[0.28, Vector3(-14.0, 0.0, 0.0)],
+			[0.56, Vector3(22.0, 0.0, 0.0)]
+		]
 	})
 
 	_add_suit_anim(lib, skel_path, skel, "jump", 0.4, Animation.LOOP_NONE, {
@@ -627,22 +914,22 @@ func _build_suit_animations(skel: Skeleton3D) -> void:
 
 	_add_suit_anim(lib, skel_path, skel, "interact-right", 0.45, Animation.LOOP_NONE, {
 		"Torso": [[0.0, Vector3.ZERO], [0.18, Vector3(-6.0, 0.0, 6.0)], [0.45, Vector3.ZERO]],
-		"UpperArm.R": [[0.0, Vector3(6.0, -78.0, 0.0)], [0.18, Vector3(-58.0, -68.0, 0.0)], [0.45, Vector3(6.0, -78.0, 0.0)]],
-		"LowerArm.R": [[0.0, Vector3(-14.0, 0.0, 0.0)], [0.18, Vector3(-34.0, 0.0, 0.0)], [0.45, Vector3(-14.0, 0.0, 0.0)]]
+		"UpperArm.R": [[0.0, Vector3(6.0, -76.0, 0.0)], [0.18, Vector3(-58.0, -64.0, 8.0)], [0.45, Vector3(6.0, -76.0, 0.0)]],
+		"LowerArm.R": [[0.0, Vector3(-18.0, 0.0, 0.0)], [0.18, Vector3(-36.0, 0.0, 0.0)], [0.45, Vector3(-18.0, 0.0, 0.0)]]
 	})
 
 	_add_suit_anim(lib, skel_path, skel, "pick-up", 0.5, Animation.LOOP_NONE, {
-		"Torso": [[0.0, Vector3.ZERO], [0.22, Vector3(-24.0, 0.0, 4.0)], [0.5, Vector3.ZERO]],
-		"Chest": [[0.0, Vector3.ZERO], [0.22, Vector3(-12.0, 0.0, 0.0)], [0.5, Vector3.ZERO]],
-		"UpperArm.R": [[0.0, Vector3(6.0, -78.0, 0.0)], [0.22, Vector3(-68.0, -65.0, 0.0)], [0.5, Vector3(6.0, -78.0, 0.0)]],
-		"LowerArm.R": [[0.0, Vector3(-14.0, 0.0, 0.0)], [0.22, Vector3(-28.0, 0.0, 0.0)], [0.5, Vector3(-14.0, 0.0, 0.0)]]
+		"Torso": [[0.0, Vector3.ZERO], [0.22, Vector3(-22.0, 0.0, 4.0)], [0.5, Vector3.ZERO]],
+		"Chest": [[0.0, Vector3.ZERO], [0.22, Vector3(-10.0, 0.0, 0.0)], [0.5, Vector3.ZERO]],
+		"UpperArm.R": [[0.0, Vector3(6.0, -76.0, 0.0)], [0.22, Vector3(-68.0, -62.0, 10.0)], [0.5, Vector3(6.0, -76.0, 0.0)]],
+		"LowerArm.R": [[0.0, Vector3(-18.0, 0.0, 0.0)], [0.22, Vector3(-32.0, 0.0, 0.0)], [0.5, Vector3(-18.0, 0.0, 0.0)]]
 	})
 
 	_add_suit_anim(lib, skel_path, skel, "die", 0.7, Animation.LOOP_NONE, {
 		"Hips": [[0.0, Vector3.ZERO], [0.5, Vector3(82.0, 0.0, 0.0)], [0.7, Vector3(82.0, 0.0, 0.0)]],
 		"Head": [[0.0, Vector3.ZERO], [0.5, Vector3(18.0, 0.0, 0.0)], [0.7, Vector3(18.0, 0.0, 0.0)]],
-		"UpperArm.L": [[0.0, Vector3(4.0, 78.0, 0.0)], [0.7, Vector3(18.0, 62.0, 0.0)]],
-		"UpperArm.R": [[0.0, Vector3(6.0, -78.0, 0.0)], [0.7, Vector3(18.0, -62.0, 0.0)]]
+		"UpperArm.L": [[0.0, Vector3(4.0, 76.0, 0.0)], [0.7, Vector3(18.0, 62.0, 0.0)]],
+		"UpperArm.R": [[0.0, Vector3(6.0, -76.0, 0.0)], [0.7, Vector3(18.0, -62.0, 0.0)]]
 	})
 
 func _build_hand_item_holder(skel: Skeleton3D) -> void:
@@ -652,12 +939,15 @@ func _build_hand_item_holder(skel: Skeleton3D) -> void:
 		hand_item_holder.queue_free()
 	hand_item_props.clear()
 
+	var right_hand_bone: String = _resolve_bone_name(skel, "Hand.R")
+	if right_hand_bone.is_empty():
+		return
+
 	hand_item_holder = BoneAttachment3D.new()
 	hand_item_holder.name = "HandItemHolder"
-	hand_item_holder.bone_name = "Hand.R"
+	hand_item_holder.bone_name = right_hand_bone
 	skel.add_child(hand_item_holder)
 
-	# Compensate CharacterArmature (100x) import scale so props are built in real meters
 	var parent_scale: Vector3 = skel.get_parent().scale if skel.get_parent() is Node3D else Vector3.ONE
 	hand_prop_pivot = Node3D.new()
 	hand_prop_pivot.name = "HandPropPivot"
@@ -666,9 +956,12 @@ func _build_hand_item_holder(skel: Skeleton3D) -> void:
 		1.0 / maxf(0.001, absf(parent_scale.y)),
 		1.0 / maxf(0.001, absf(parent_scale.z))
 	)
+	# Pada ordinaryMan.fbx, sumbu lokal X/Z hand.r berputar 90 derajat di sekitar sumbu jari (+Y)
+	if right_hand_bone == "hand.r":
+		hand_prop_pivot.rotation_degrees = Vector3(0.0, 90.0, 0.0)
 	hand_item_holder.add_child(hand_prop_pivot)
 
-	# 1. Flashlight (cylinder aligned with Hand.R +Y finger axis)
+	# 1. Flashlight
 	var torch_root := Node3D.new()
 	torch_root.name = "Prop_flashlight"
 	hand_prop_pivot.add_child(torch_root)
@@ -705,7 +998,7 @@ func _build_hand_item_holder(skel: Skeleton3D) -> void:
 	handheld_flashlight_lens.position = Vector3(0.0, 0.204, -0.028)
 	torch_root.add_child(handheld_flashlight_lens)
 
-	# 2. Jamu Tolak Bala (green glass bottle + wooden cork)
+	# 2. Jamu Tolak Bala
 	var jamu_root := Node3D.new()
 	jamu_root.name = "Prop_jamu"
 	jamu_root.rotation_degrees = Vector3(-28.0, 0.0, -14.0)
@@ -732,7 +1025,7 @@ func _build_hand_item_holder(skel: Skeleton3D) -> void:
 	jamu_cork.material_override = _make_suit_mat(Color(0.55, 0.36, 0.18), 0.85, 0.0)
 	jamu_root.add_child(jamu_cork)
 
-	# 3. Minyak Tanah & Korek (canister + red matchbox)
+	# 3. Minyak Tanah & Korek
 	var minyak_root := Node3D.new()
 	minyak_root.name = "Prop_minyak_tanah"
 	minyak_root.rotation_degrees = Vector3(-26.0, 0.0, -12.0)
@@ -744,7 +1037,7 @@ func _build_hand_item_holder(skel: Skeleton3D) -> void:
 	_attach_suit_box(minyak_root, "CanCap", Vector3(0.022, 0.016, 0.022), Vector3(0.012, 0.050, 0.0), _make_suit_mat(Color(0.85, 0.72, 0.2), 0.35, 0.6))
 	_attach_suit_box(minyak_root, "Matchbox", Vector3(0.032, 0.022, 0.014), Vector3(-0.010, 0.046, 0.018), _make_suit_mat(Color(0.82, 0.22, 0.14), 0.8, 0.0, 0.06))
 
-	# 4. Papan & Paku (wooden plank + metal nails)
+	# 4. Papan & Paku
 	var papan_root := Node3D.new()
 	papan_root.name = "Prop_papan_paku"
 	papan_root.position = Vector3(0.0, 0.125, -0.028)
@@ -757,7 +1050,7 @@ func _build_hand_item_holder(skel: Skeleton3D) -> void:
 	_attach_suit_box(papan_root, "Nail1", Vector3(0.008, 0.008, 0.032), Vector3(0.012, 0.055, 0.006), nail_mat)
 	_attach_suit_box(papan_root, "Nail2", Vector3(0.008, 0.008, 0.032), Vector3(-0.012, -0.045, 0.006), nail_mat)
 
-	# 5. Baterai (battery cylinder + brass cathode)
+	# 5. Baterai
 	var bat_root := Node3D.new()
 	bat_root.name = "Prop_baterai"
 	bat_root.rotation_degrees = Vector3(-28.0, 0.0, -12.0)
@@ -790,39 +1083,131 @@ func _apply_fpp_hand_override() -> void:
 	if not player_skeleton or in_cutscene or is_caught or is_hiding:
 		return
 
-	# Keep upper torso upright & untwisted in FPP so walking/sprinting never shoves the shoulder/hand toward the camera
+	# Stabilkan tulang punggung di FPP dan sembunyikan vertex kepala agar tidak menghalangi kamera
 	for spine_bone: String in ["Hips", "Torso", "Chest", "Neck", "Head"]:
-		var spine_idx: int = player_skeleton.find_bone(spine_bone)
+		var spine_idx: int = _find_bone_idx(player_skeleton, spine_bone)
 		if spine_idx >= 0:
 			player_skeleton.set_bone_pose_rotation(spine_idx, player_skeleton.get_bone_rest(spine_idx).basis.get_rotation_quaternion())
+	var head_idx: int = _find_bone_idx(player_skeleton, "Head")
+	if head_idx >= 0:
+		player_skeleton.set_bone_pose_scale(head_idx, Vector3(0.001, 0.001, 0.001))
 
-	var hand_idx: int = player_skeleton.find_bone("Hand.R")
-	if equipped_item_id == "":
-		if hand_idx >= 0:
-			player_skeleton.set_bone_pose_scale(hand_idx, Vector3.ONE)
-		return
-
-	var pitch_deg: float = clampf(rad_to_deg(head.rotation.x) * 0.98, -78.0, 20.0) if head else 0.0
+	var pitch_deg: float = clampf(rad_to_deg(head.rotation.x) * 0.96, -78.0, 22.0) if head else 0.0
 	var walk_phase: float = bob_time * bob_freq * 0.5
-	var idle_breath: float = sin(idle_arm_time * 1.7) * 1.1
-	var sway_yaw: float = sin(walk_phase) * lerpf(2.2, 3.8, sprint_blend) * move_blend
-	var sway_lift: float = absf(cos(walk_phase)) * lerpf(1.2, 2.4, sprint_blend) * move_blend
-	var wrist_lag: float = cos(walk_phase) * lerpf(1.5, 2.8, sprint_blend) * move_blend
+	var breath_primary: float = sin(idle_arm_time * 1.85)
+	var breath_secondary: float = cos(idle_arm_time * 0.95) * 0.5
+	var idle_breath: float = (breath_primary + breath_secondary) * lerpf(1.35, 2.8, sprint_blend)
+	var fear_tremor: float = 0.0
+	if sanity_system:
+		var s_ratio: float = clampf(sanity_system.current_sanity / maxf(1.0, sanity_system.max_sanity), 0.0, 1.0)
+		if s_ratio < 0.5:
+			fear_tremor = (0.5 - s_ratio) * 2.4 * sin(idle_arm_time * 19.0)
+
 	var action_nudge: float = 0.0
 	if action_anim_timer > 0.0:
 		var progress: float = clampf(1.0 - (action_anim_timer / maxf(0.01, action_anim_duration)), 0.0, 1.0)
-		action_nudge = sin(progress * PI) * 12.0
+		action_nudge = sin(progress * PI) * 16.0
+
+	var hand_idx: int = _find_bone_idx(player_skeleton, "Hand.R")
+	var hand_l_idx: int = _find_bone_idx(player_skeleton, "Hand.L")
+
+	# 1. Mode TIDAK PEGANG BARANG (Empty-Handed): kedua lengan berayun & bernapas realistis
+	if equipped_item_id == "":
+		if hand_idx >= 0:
+			player_skeleton.set_bone_pose_scale(hand_idx, Vector3(0.86, 0.86, 0.86))
+		if hand_l_idx >= 0:
+			player_skeleton.set_bone_pose_scale(hand_l_idx, Vector3(0.86, 0.86, 0.86))
+
+		var stride_r: float = sin(walk_phase) * lerpf(18.0, 42.0, sprint_blend) * move_blend
+		var stride_l: float = -sin(walk_phase) * lerpf(18.0, 42.0, sprint_blend) * move_blend
+		var elbow_pump_r: float = maxf(0.0, -sin(walk_phase - 0.35)) * lerpf(14.0, 34.0, sprint_blend) * move_blend
+		var elbow_pump_l: float = maxf(0.0, sin(walk_phase - 0.35)) * lerpf(14.0, 34.0, sprint_blend) * move_blend
+		var guard_lift: float = lerpf(0.0, 26.0, sprint_blend) * move_blend
+
+		# Lengan kanan (tidak pegang barang: ayunan langkah + guard saat lari + gerakan meraih saat interaksi)
+		_set_skeleton_bone_rot(
+			"UpperArm.R",
+			-22.0 - guard_lift - stride_r - idle_breath * 0.9 - action_nudge * 2.2 + look_sway.y * 0.6,
+			-66.0 + sprint_blend * 8.0,
+			14.0 + look_sway.x * 0.8 + sin(walk_phase) * 4.0 * move_blend
+		)
+		_set_skeleton_bone_rot(
+			"LowerArm.R",
+			-24.0 - guard_lift * 0.7 - elbow_pump_r - action_nudge * 1.1 - absf(breath_primary) * 2.0,
+			-8.0,
+			-6.0 + look_sway.x * 0.6
+		)
+		_set_skeleton_bone_rot("Hand.R", -4.0 - action_nudge * 0.8, 0.0, -6.0 + cos(walk_phase) * 5.0 * move_blend)
+
+		# Lengan kiri (penyeimbang alami saat jalan/lari & napas)
+		_set_skeleton_bone_rot(
+			"UpperArm.L",
+			-20.0 - guard_lift - stride_l - idle_breath * 0.8 + look_sway.y * 0.5,
+			66.0 - sprint_blend * 8.0,
+			-14.0 + look_sway.x * 0.7 - sin(walk_phase) * 4.0 * move_blend
+		)
+		_set_skeleton_bone_rot(
+			"LowerArm.L",
+			-24.0 - guard_lift * 0.7 - elbow_pump_l - absf(breath_primary) * 2.0,
+			8.0,
+			6.0 + look_sway.x * 0.5
+		)
+		_set_skeleton_bone_rot("Hand.L", -4.0, 0.0, 6.0 - cos(walk_phase) * 5.0 * move_blend)
+		return
+
+	# 2. Mode PEGANG BARANG (Holding Item): postur spesifik barang + inersia kamera + transisi angkat tangan
+	var sway_yaw: float = sin(walk_phase) * lerpf(2.8, 5.2, sprint_blend) * move_blend
+	var sway_lift: float = absf(cos(walk_phase)) * lerpf(1.8, 3.8, sprint_blend) * move_blend
+	var wrist_lag: float = cos(walk_phase - 0.35) * lerpf(2.2, 4.4, sprint_blend) * move_blend
+	var raise_drop: float = (1.0 - ease(equip_raise_blend, 0.35)) * 32.0
+
+	var item_pitch_offset: float = 0.0
+	var item_drop_offset: float = 0.0
+	var item_yaw_offset: float = 0.0
+	match equipped_item_id:
+		"jamu", "baterai":
+			item_pitch_offset = 6.0
+			item_drop_offset = 4.0
+			item_yaw_offset = 5.0
+		"papan_paku", "minyak_tanah":
+			item_pitch_offset = 4.0
+			item_drop_offset = -3.0
+			item_yaw_offset = -2.0
 
 	_set_skeleton_bone_rot("Shoulder.R", -18.0, -8.0, 6.0)
-	_set_skeleton_bone_rot("UpperArm.R", -95.0 - pitch_deg - idle_breath - sway_lift * 0.5 + action_nudge * 0.5, -54.0 - sprint_blend * 4.0, 28.0 + sway_yaw + sprint_blend * 6.0)
-	_set_skeleton_bone_rot("LowerArm.R", -20.0 - sway_lift * 0.5 - sprint_blend * 8.0 + action_nudge * 0.6, -10.0, wrist_lag + idle_breath * 0.5)
-	_set_skeleton_bone_rot("Hand.R", -4.0 - action_nudge * 0.8, 0.0, -10.0 + wrist_lag * 0.7)
+	_set_skeleton_bone_rot(
+		"UpperArm.R",
+		-95.0 - pitch_deg + item_pitch_offset + raise_drop - idle_breath - sway_lift * 0.65 + action_nudge * 0.55 + look_sway.y * 0.85 + fear_tremor * 0.4,
+		-54.0 + item_drop_offset - sprint_blend * 4.5,
+		28.0 + item_yaw_offset + sway_yaw + sprint_blend * 6.5 + look_sway.x * 1.15
+	)
+	_set_skeleton_bone_rot(
+		"LowerArm.R",
+		-20.0 - sway_lift * 0.65 - sprint_blend * 9.0 + action_nudge * 0.65 + look_sway.y * 0.45,
+		-10.0,
+		wrist_lag + idle_breath * 0.55 + look_sway.x * 0.75 + fear_tremor * 0.6
+	)
+	_set_skeleton_bone_rot(
+		"Hand.R",
+		-4.0 - action_nudge * 0.85 + look_sway.y * 0.35,
+		0.0,
+		-10.0 + wrist_lag * 0.8 + look_sway.x * 0.5 + fear_tremor
+	)
 
-	# Keep Kenney's oversized stylized hand proportional in FPP without changing dynamically
+	# Lengan kiri tetap mengayun sebagai penyeimbang tubuh saat memegang barang di tangan kanan
+	var left_stride: float = -sin(walk_phase) * lerpf(16.0, 36.0, sprint_blend) * move_blend
+	var left_pump: float = maxf(0.0, sin(walk_phase - 0.35)) * lerpf(12.0, 28.0, sprint_blend) * move_blend
+	_set_skeleton_bone_rot(
+		"UpperArm.L",
+		-18.0 - lerpf(0.0, 20.0, sprint_blend) * move_blend - left_stride - idle_breath * 0.7,
+		68.0 - sprint_blend * 6.0,
+		-12.0 + look_sway.x * 0.5
+	)
+	_set_skeleton_bone_rot("LowerArm.L", -22.0 - left_pump, 6.0, 5.0)
+
 	if hand_idx >= 0:
-		player_skeleton.set_bone_pose_scale(hand_idx, Vector3(0.76, 0.76, 0.76))
+		player_skeleton.set_bone_pose_scale(hand_idx, Vector3(0.78, 0.78, 0.78))
 
-	# Natural relaxed finger grip around the held item
 	for finger_name: String in ["Index", "Middle", "Ring", "Pinky"]:
 		_set_skeleton_bone_rot(finger_name + "2.R", 0.0, -42.0, 0.0)
 		_set_skeleton_bone_rot(finger_name + "3.R", 0.0, -52.0, 0.0)
@@ -830,18 +1215,21 @@ func _apply_fpp_hand_override() -> void:
 	_set_skeleton_bone_rot("Thumb2.R", 14.0, -34.0, -18.0)
 	_set_skeleton_bone_rot("Thumb3.R", 8.0, -24.0, 0.0)
 
-func _set_skeleton_bone_rot(bone_name: String, rot_x_deg: float, rot_z_deg: float, rot_y_deg: float) -> void:
-	var idx: int = player_skeleton.find_bone(bone_name)
+func _set_skeleton_bone_rot(canonical_bone_name: String, rot_x_deg: float, rot_z_deg: float, rot_y_deg: float) -> void:
+	var idx: int = _find_bone_idx(player_skeleton, canonical_bone_name)
 	if idx >= 0:
-		player_skeleton.set_bone_pose_rotation(idx, _bone_pose_quat(player_skeleton, bone_name, rot_x_deg, rot_z_deg, rot_y_deg))
+		player_skeleton.set_bone_pose_rotation(idx, _bone_pose_quat(player_skeleton, canonical_bone_name, rot_x_deg, rot_z_deg, rot_y_deg))
 
 func prepare_for_cutscene() -> void:
 	in_cutscene = true
 	action_anim_timer = 0.0
 	if player_skeleton:
-		var hand_idx: int = player_skeleton.find_bone("Hand.R")
+		var hand_idx: int = _find_bone_idx(player_skeleton, "Hand.R")
 		if hand_idx >= 0:
 			player_skeleton.set_bone_pose_scale(hand_idx, Vector3.ONE)
+		var head_idx: int = _find_bone_idx(player_skeleton, "Head")
+		if head_idx >= 0:
+			player_skeleton.set_bone_pose_scale(head_idx, Vector3.ONE)
 	if model_head_mesh:
 		model_head_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	if player_model:
@@ -890,11 +1278,11 @@ func _update_player_animation(delta: float, is_moving: bool) -> void:
 			_play_player_anim("fall", 0.15, 1.0)
 		return
 	if is_moving and is_sprinting:
-		_play_player_anim("sprint", 0.12, 1.15)
+		_play_player_anim("sprint", 0.14, 1.12)
 	elif is_moving:
-		_play_player_anim("walk", 0.12, 1.0)
+		_play_player_anim("walk", 0.14, 1.0)
 	else:
-		_play_player_anim("idle", 0.18, 1.0)
+		_play_player_anim("idle", 0.22, 1.0)
 
 func _update_fpp_camera_and_arm(delta: float, is_moving: bool) -> void:
 	if not camera or not head:
@@ -906,33 +1294,40 @@ func _update_fpp_camera_and_arm(delta: float, is_moving: bool) -> void:
 	var target_move: float = 1.0 if (is_on_floor() and is_moving and not is_hiding and not is_caught) else 0.0
 	var target_sprint: float = 1.0 if (target_move > 0.5 and is_sprinting) else 0.0
 	if delta > 0.0:
-		move_blend = lerpf(move_blend, target_move, minf(1.0, delta * 8.0))
-		sprint_blend = lerpf(sprint_blend, target_sprint, minf(1.0, delta * 8.0))
+		move_blend = lerpf(move_blend, target_move, minf(1.0, delta * 8.5))
+		sprint_blend = lerpf(sprint_blend, target_sprint, minf(1.0, delta * 7.5))
+		equip_raise_blend = minf(1.0, equip_raise_blend + delta * 4.5)
+		landing_dip = move_toward(landing_dip, 0.0, delta * 0.24)
+		look_sway_target = look_sway_target.lerp(Vector2.ZERO, minf(1.0, delta * 10.0))
+		look_sway = look_sway.lerp(look_sway_target, minf(1.0, delta * 14.0))
 	else:
 		move_blend = target_move
 		sprint_blend = target_sprint
+		equip_raise_blend = 1.0
 
-	if is_on_floor() and is_moving and not is_hiding and not is_caught:
-		camera.position = Vector3(
-			initial_camera_pos.x + cos(bob_time * bob_freq * 0.5) * bob_amp * 0.6,
-			initial_camera_pos.y + sin(bob_time * bob_freq) * bob_amp,
-			initial_camera_pos.z
-		)
-	elif delta > 0.0:
-		camera.position = camera.position.lerp(initial_camera_pos, minf(1.0, delta * 8.0))
+	var breath_cam_y: float = sin(idle_arm_time * 1.85) * 0.004 * (1.0 - move_blend * 0.6)
+	var walk_bob_x: float = cos(bob_time * bob_freq * 0.5) * bob_amp * 0.65 * lerpf(1.0, 1.35, sprint_blend) * move_blend
+	var walk_bob_y: float = sin(bob_time * bob_freq) * bob_amp * lerpf(1.0, 1.4, sprint_blend) * move_blend
+	var target_cam_pos := Vector3(
+		initial_camera_pos.x + walk_bob_x,
+		initial_camera_pos.y + walk_bob_y + breath_cam_y - landing_dip,
+		initial_camera_pos.z
+	)
+	if delta > 0.0:
+		camera.position = camera.position.lerp(target_cam_pos, minf(1.0, delta * 14.0))
 	else:
-		camera.position = initial_camera_pos
+		camera.position = target_cam_pos
 
-	# Low-sanity camera dizzy tilt (works across all graphics presets including Low)
+	# Low-sanity camera dizzy tilt + subtle step roll
 	var dizzy_factor: float = 0.0
 	if sanity_system and not is_caught and not in_cutscene:
 		var sanity_ratio: float = clampf(sanity_system.current_sanity / maxf(1.0, sanity_system.max_sanity), 0.0, 1.0)
 		dizzy_factor = clampf((0.55 - sanity_ratio) / 0.55, 0.0, 1.0)
-	camera.rotation.z = sin(idle_arm_time * 1.9) * deg_to_rad(3.2) * dizzy_factor
+	var step_roll: float = sin(bob_time * bob_freq * 0.5) * deg_to_rad(lerpf(0.45, 1.15, sprint_blend)) * move_blend
+	camera.rotation.z = sin(idle_arm_time * 1.9) * deg_to_rad(3.2) * dizzy_factor + step_roll
 	camera.rotation.x = cos(idle_arm_time * 2.4) * deg_to_rad(1.1) * dizzy_factor
 
 	if player_model:
-		# Keep the FPP model locked to camera head-bobbing so the hand never pulses closer/farther while moving
 		var cam_bob_offset: Vector3 = head.transform.basis * (camera.position - initial_camera_pos)
 		player_model.position = PLAYER_MODEL_FPP_POS + cam_bob_offset
 	if model_anim_player and not model_anim_player.is_playing():
@@ -941,7 +1336,7 @@ func _update_fpp_camera_and_arm(delta: float, is_moving: bool) -> void:
 	if interaction_ray:
 		interaction_ray.position = Vector3.ZERO
 	if flashlight:
-		flashlight.position = Vector3(0.14, -0.09, -0.38)
+		flashlight.position = Vector3(0.14 + look_sway.x * 0.002, -0.09 + look_sway.y * 0.002, -0.38)
 	_sync_hand_prop_visibility()
 
 func revive_from_extra_life() -> void:

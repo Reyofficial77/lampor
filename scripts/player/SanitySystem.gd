@@ -45,6 +45,13 @@ func set_safe_source(source: Object, active: bool) -> void:
 func _process(delta: float) -> void:
 	if GameManager.current_state != GameManager.GameState.PLAYING or get_tree().paused:
 		return
+	if "admin_god_mode" in GameManager and bool(GameManager.get("admin_god_mode")):
+		if current_sanity < max_sanity:
+			current_sanity = max_sanity
+			SignalBus.player_sanity_changed.emit(current_sanity, max_sanity)
+		AudioManager.set_heartbeat_intensity(0.0)
+		AudioManager.set_whisper_intensity(0.0)
+		return
 
 	var delta_sanity: float = 0.0
 

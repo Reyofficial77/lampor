@@ -2,6 +2,7 @@ class_name HUD
 extends CanvasLayer
 
 const INVENTORY_SLOT_UI_SCRIPT = preload("res://scripts/ui/InventorySlotUI.gd")
+const TUTORIAL_OVERLAY_SCRIPT = preload("res://scripts/systems/TutorialOverlay.gd")
 const HORROR_TITLE_FONT: Font = preload("res://assets/fonts/HorrorTitle.ttf")
 
 @onready var interaction_label: Label = $CenterContainer/InteractionLabel
@@ -117,6 +118,7 @@ func _ready() -> void:
 	stare_warning.visible = false
 	jumpscare_rect.visible = false
 	_style_horror_hud_containers()
+	_style_pause_and_dialogs()
 	_build_jumpscare_face()
 	_build_dialog_label()
 	_build_mission_card()
@@ -124,6 +126,8 @@ func _ready() -> void:
 	_build_desktop_hints()
 	_build_inventory_overlay()
 	_build_hud_bag_button()
+	if TUTORIAL_OVERLAY_SCRIPT:
+		add_child(TUTORIAL_OVERLAY_SCRIPT.new())
 	_initialize_objectives_immediate()
 	SettingsManager.call_deferred("_apply_brightness_overlay")
 	if is_instance_valid(GameManager.player_character):
@@ -218,8 +222,7 @@ func _style_horror_hud_containers() -> void:
 	stare_warning.add_theme_font_size_override("font_size", 17)
 	var pause_title: Label = pause_menu.get_node_or_null("Center/Panel/VBox/Title") as Label
 	if pause_title:
-		pause_title.add_theme_font_override("font", HORROR_TITLE_FONT)
-		pause_title.add_theme_font_size_override("font_size", 20)
+		HorrorTheme.style_label(pause_title, "headline-md", HorrorTheme.PRIMARY, 20)
 
 	if not touch:
 		slots_container.add_theme_constant_override("separation", 8)
@@ -240,7 +243,7 @@ func _style_horror_hud_containers() -> void:
 			_apply_slot_horror_style(panel, i == 0)
 			var vbox: VBoxContainer = panel.get_node_or_null("VBox") as VBoxContainer
 			if vbox:
-				vbox.add_theme_constant_override("separation", 0)
+				vbox.add_theme_constant_override("separation", 1)
 			var item_lbl: Label = panel.get_node_or_null("VBox/ItemName") as Label
 			if item_lbl:
 				item_lbl.clip_text = true
@@ -249,27 +252,51 @@ func _style_horror_hud_containers() -> void:
 				item_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 				item_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 				item_lbl.custom_minimum_size = Vector2(54.0, 22.0) if touch else Vector2(72.0, 26.0)
-				item_lbl.add_theme_font_size_override("font_size", 8 if touch else 9)
+				HorrorTheme.style_label(item_lbl, "label-sm", HorrorTheme.ON_SURFACE, 8 if touch else 10)
 			var key_lbl: Label = panel.get_node_or_null("VBox/Key") as Label
 			if key_lbl:
-				key_lbl.add_theme_color_override("font_color", Color(0.84, 0.68, 0.38, 0.95))
-				key_lbl.add_theme_font_size_override("font_size", 8 if touch else 9)
+				HorrorTheme.style_label(key_lbl, "mono-sm", HorrorTheme.PRIMARY if i == 0 else HorrorTheme.OUTLINE, 8 if touch else 9)
 			var qty_lbl: Label = panel.get_node_or_null("VBox/Qty") as Label
 			if qty_lbl:
-				qty_lbl.add_theme_font_size_override("font_size", 8 if touch else 9)
+				HorrorTheme.style_label(qty_lbl, "mono-sm", HorrorTheme.RELIC_BRASS, 8 if touch else 9)
 
 func _apply_slot_horror_style(panel: PanelContainer, is_active: bool) -> void:
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.14, 0.035, 0.045, 0.94) if is_active else Color(0.045, 0.020, 0.026, 0.90)
-	style.border_color = Color(0.95, 0.72, 0.28, 1.0) if is_active else Color(0.45, 0.12, 0.14, 0.88)
-	style.set_border_width_all(2)
+	style.bg_color = Color(HorrorTheme.SECONDARY_CONTAINER.r, HorrorTheme.SECONDARY_CONTAINER.g, HorrorTheme.SECONDARY_CONTAINER.b, 0.94) if is_active else Color(HorrorTheme.SURFACE_LOWEST.r, HorrorTheme.SURFACE_LOWEST.g, HorrorTheme.SURFACE_LOWEST.b, 0.90)
+	style.border_color = HorrorTheme.ACCENT if is_active else HorrorTheme.OUTLINE_VARIANT
+	style.set_border_width_all(2 if is_active else 1)
+	if not is_active:
+		style.border_width_bottom = 2
 	style.set_corner_radius_all(2)
-	style.content_margin_left = 2.0
-	style.content_margin_right = 2.0
-	style.content_margin_top = 2.0
-	style.content_margin_bottom = 2.0
+	style.shadow_color = Color(HorrorTheme.SCRIM.r, HorrorTheme.SCRIM.g, HorrorTheme.SCRIM.b, 0.65)
+	style.shadow_size = 6 if is_active else 3
+	style.content_margin_left = 3.0
+	style.content_margin_right = 3.0
+	style.content_margin_top = 3.0
+	style.content_margin_bottom = 3.0
 	panel.add_theme_stylebox_override("panel", style)
 	panel.modulate = Color.WHITE
+	HorrorTheme.attach_corner_ornaments(
+		panel,
+		HorrorTheme.PRIMARY if is_active else Color(HorrorTheme.OUTLINE_VARIANT.r, HorrorTheme.OUTLINE_VARIANT.g, HorrorTheme.OUTLINE_VARIANT.b, 0.55),
+		7.0 if is_active else 5.0,
+		1.5 if is_active else 1.0,
+		3.0,
+		is_active
+	)
+	var key_lbl: Label = panel.get_node_or_null("VBox/Key") as Label
+	if key_lbl:
+		key_lbl.add_theme_color_override("font_color", HorrorTheme.PRIMARY if is_active else HorrorTheme.OUTLINE)
+	var item_lbl: Label = panel.get_node_or_null("VBox/ItemName") as Label
+	if item_lbl:
+		var is_empty: bool = item_lbl.text == "[Kosong]" or item_lbl.text.is_empty()
+		if is_empty:
+			item_lbl.add_theme_color_override("font_color", Color(HorrorTheme.OUTLINE.r, HorrorTheme.OUTLINE.g, HorrorTheme.OUTLINE.b, 0.72))
+		else:
+			item_lbl.add_theme_color_override("font_color", HorrorTheme.ON_PRIMARY_CONTAINER if is_active else HorrorTheme.ON_SURFACE)
+	var qty_lbl: Label = panel.get_node_or_null("VBox/Qty") as Label
+	if qty_lbl:
+		qty_lbl.add_theme_color_override("font_color", HorrorTheme.PRIMARY if is_active else HorrorTheme.RELIC_BRASS)
 
 func _initialize_objectives_immediate() -> void:
 	var time_str: String = "%02d:%02d" % [GameManager.current_hour, GameManager.current_minute]
@@ -374,11 +401,57 @@ func toggle_pause() -> void:
 			player.set_virtual_move(Vector2.ZERO)
 			player.set_virtual_sprint(false)
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		var pause_panel: Control = pause_menu.get_node_or_null("Center/Panel") as Control
+		if pause_panel:
+			HorrorTheme.animate_surface_enter(pause_panel)
 	else:
 		if pause_settings_container:
 			pause_settings_container.visible = false
 		pause_menu.get_node("Center").visible = true
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _is_touch_device() else Input.MOUSE_MODE_CAPTURED
+
+func _style_pause_and_dialogs() -> void:
+	var dim_overlay: ColorRect = pause_menu.get_node_or_null("DimOverlay") as ColorRect
+	if dim_overlay:
+		dim_overlay.color = Color(HorrorTheme.SCRIM.r, HorrorTheme.SCRIM.g, HorrorTheme.SCRIM.b, 0.65)
+	var pause_panel: PanelContainer = pause_menu.get_node_or_null("Center/Panel") as PanelContainer
+	if pause_panel:
+		pause_panel.add_theme_stylebox_override("panel", HorrorTheme.make_panel_style(HorrorTheme.SURFACE, HorrorTheme.OUTLINE_VARIANT, 4, 2, 24, 22))
+		HorrorTheme.attach_corner_ornaments(pause_panel, HorrorTheme.ACCENT, 12.0, 1.8, 5.0, true)
+	var pause_vbox: VBoxContainer = pause_menu.get_node_or_null("Center/Panel/VBox") as VBoxContainer
+	if pause_vbox:
+		pause_vbox.add_theme_constant_override("separation", 12)
+	var pause_sep: HSeparator = pause_menu.get_node_or_null("Center/Panel/VBox/HSeparator") as HSeparator
+	if pause_sep:
+		var sep_s := StyleBoxFlat.new()
+		sep_s.bg_color = HorrorTheme.PRIMARY_CONTAINER
+		sep_s.content_margin_top = 1.0
+		pause_sep.add_theme_stylebox_override("separator", sep_s)
+	if resume_button:
+		resume_button.text = "LANJUTKAN PERMAINAN [ESC]"
+		HorrorTheme.style_button(resume_button, "primary", 13, true)
+	if settings_button:
+		settings_button.text = "PENGATURAN"
+		HorrorTheme.style_button(settings_button, "secondary", 13, true)
+	if exit_button:
+		exit_button.text = "KEMBALI KE MENU UTAMA"
+		HorrorTheme.style_button(exit_button, "danger", 13, true)
+
+	if barricade_dialog:
+		barricade_dialog.add_theme_stylebox_override("panel", HorrorTheme.make_panel_style(HorrorTheme.SURFACE, HorrorTheme.ACCENT, 4, 2))
+		HorrorTheme.attach_corner_ornaments(barricade_dialog, HorrorTheme.PRIMARY, 12.0, 1.8, 5.0, true)
+		var b_title: Label = barricade_dialog.get_node_or_null("Margin/VBox/Title") as Label
+		if b_title:
+			HorrorTheme.style_label(b_title, "headline-md", HorrorTheme.PRIMARY, 17)
+		var b_msg: Label = barricade_dialog.get_node_or_null("Margin/VBox/Message") as Label
+		if b_msg:
+			HorrorTheme.style_label(b_msg, "body-md", HorrorTheme.ON_SURFACE, 14)
+		if confirm_barricade_btn:
+			confirm_barricade_btn.text = "TETAP PALANG PINTU"
+			HorrorTheme.style_button(confirm_barricade_btn, "primary", 13, true)
+		if cancel_barricade_btn:
+			cancel_barricade_btn.text = "BATAL"
+			HorrorTheme.style_button(cancel_barricade_btn, "secondary", 13, true)
 
 func _build_pause_settings_panel() -> void:
 	pause_settings_container = CenterContainer.new()
@@ -402,27 +475,31 @@ func _build_pause_settings_panel() -> void:
 	pause_settings_panel.custom_minimum_size = Vector2(460.0, 460.0)
 	pause_settings_panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	pause_settings_panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	pause_settings_panel.add_theme_stylebox_override("panel", HorrorTheme.make_panel_style(HorrorTheme.SURFACE, HorrorTheme.OUTLINE_VARIANT, 4, 2))
+	HorrorTheme.attach_corner_ornaments(pause_settings_panel, HorrorTheme.ACCENT, 12.0, 1.8, 5.0, true)
 	pause_settings_container.add_child(pause_settings_panel)
 	var margin := MarginContainer.new()
 	for side in ["left", "right"]:
-		margin.add_theme_constant_override("margin_" + side, 18)
+		margin.add_theme_constant_override("margin_" + side, 20)
 	for side in ["top", "bottom"]:
-		margin.add_theme_constant_override("margin_" + side, 16)
+		margin.add_theme_constant_override("margin_" + side, 18)
 	pause_settings_panel.add_child(margin)
 	pause_settings_scroll = ScrollContainer.new()
 	pause_settings_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	pause_settings_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	pause_settings_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	HorrorTheme.style_scroll_container(pause_settings_scroll)
 	margin.add_child(pause_settings_scroll)
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 8)
+	box.add_theme_constant_override("separation", 10)
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	pause_settings_scroll.add_child(box)
 	var title := Label.new()
 	title.text = "PENGATURAN"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 22)
+	HorrorTheme.style_label(title, "headline-md", HorrorTheme.ON_SURFACE, 20)
 	box.add_child(title)
+	box.add_child(HorrorTheme.create_ritual_divider("◆", HorrorTheme.ACCENT))
 	_add_pause_slider(box, "Sensitivitas Mouse", SettingsManager.mouse_sensitivity * 100.0, 25.0, 200.0, func(v: float) -> void: SettingsManager.set_mouse_sensitivity(v / 100.0))
 	_add_pause_slider(box, "Sensitivitas Kamera", SettingsManager.camera_sensitivity * 100.0, 25.0, 200.0, func(v: float) -> void: SettingsManager.set_camera_sensitivity(v / 100.0))
 	_add_pause_slider(box, "Kecerahan", SettingsManager.brightness * 100.0, 50.0, 150.0, func(v: float) -> void: SettingsManager.set_brightness(v / 100.0))
@@ -435,11 +512,13 @@ func _build_pause_settings_panel() -> void:
 	quality.select({"auto": 0, "low": 1, "medium": 2, "high": 3}.get(SettingsManager.graphics_quality, 0))
 	quality.tooltip_text = "Otomatis menggunakan preset %s berdasarkan perangkat ini" % SettingsManager.recommended_graphics_quality.capitalize()
 	quality.item_selected.connect(func(index: int) -> void: SettingsManager.set_graphics_quality(["auto", "low", "medium", "high"][index]))
+	HorrorTheme.style_option_button(quality)
 	box.add_child(quality)
 	var auto_update := CheckButton.new()
 	auto_update.text = "Unduh update otomatis"
 	auto_update.button_pressed = SettingsManager.auto_update
 	auto_update.toggled.connect(SettingsManager.set_auto_update)
+	HorrorTheme.style_check_button(auto_update)
 	box.add_child(auto_update)
 	if _is_touch_device():
 		_add_pause_slider(box, "Ukuran tombol mobile", SettingsManager.mobile_button_scale * 100.0, 75.0, 150.0, func(v: float) -> void:
@@ -453,17 +532,21 @@ func _build_pause_settings_panel() -> void:
 		var editor_button := Button.new()
 		editor_button.text = "EDITOR POSISI TOMBOL MOBILE"
 		editor_button.custom_minimum_size.y = 42.0
+		HorrorTheme.style_button(editor_button, "secondary", 12, true)
 		editor_button.pressed.connect(_start_mobile_editor)
 		box.add_child(editor_button)
 		var reset_layout := Button.new()
 		reset_layout.text = "RESET TATA LETAK MOBILE"
+		HorrorTheme.style_button(reset_layout, "ghost", 12, true)
 		reset_layout.pressed.connect(func() -> void:
 			SettingsManager.reset_mobile_control_layout()
 			_layout_touch_controls()
 		)
 		box.add_child(reset_layout)
 	var close := Button.new()
-	close.text = "Kembali ke Jeda"
+	close.text = "KEMBALI KE JEDA"
+	close.custom_minimum_size.y = 42.0
+	HorrorTheme.style_button(close, "primary", 13, true)
 	close.pressed.connect(func() -> void:
 		_pause_settings_container_hide()
 		pause_menu.get_node("Center").visible = true
@@ -489,14 +572,17 @@ func _layout_pause_settings_panel() -> void:
 
 func _add_pause_slider(parent: VBoxContainer, caption: String, initial: float, minimum: float, maximum: float, callback: Callable) -> void:
 	var row := VBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
 	var label := Label.new()
 	label.text = "%s: %d%%" % [caption, int(round(initial))]
+	HorrorTheme.style_label(label, "label-sm", HorrorTheme.ON_SURFACE, 13)
 	row.add_child(label)
 	var slider := HSlider.new()
 	slider.min_value = minimum
 	slider.max_value = maximum
 	slider.step = 5.0
 	slider.value = initial
+	HorrorTheme.style_slider(slider)
 	slider.value_changed.connect(func(value: float) -> void:
 		label.text = "%s: %d%%" % [caption, int(round(value))]
 		callback.call(value)
@@ -511,6 +597,7 @@ func _open_pause_settings() -> void:
 		pause_settings_container.move_to_front()
 		pause_settings_container.z_index = 1000
 		_layout_pause_settings_panel()
+		HorrorTheme.animate_surface_enter(pause_settings_panel)
 		call_deferred("_finish_open_pause_settings")
 
 func _finish_open_pause_settings() -> void:
@@ -544,6 +631,7 @@ func _on_barricade_warning(door_node: Node, player_node: Node) -> void:
 	pending_barricade_door = door_node
 	pending_barricade_player = player_node
 	barricade_dialog.visible = true
+	HorrorTheme.animate_surface_enter(barricade_dialog)
 	if touch_root:
 		touch_root.visible = false
 	var player: PlayerController = GameManager.player_character as PlayerController
@@ -701,26 +789,15 @@ func _show_mission_card(num: int, banner_text: String) -> void:
 func _make_exit_button(text_value: String, primary: bool) -> Button:
 	var button := Button.new()
 	button.text = text_value
-	button.custom_minimum_size = Vector2(0.0, 48.0)
+	button.custom_minimum_size = Vector2(0.0, 46.0)
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	button.add_theme_font_size_override("font_size", 15)
-	var normal := StyleBoxFlat.new()
-	normal.bg_color = Color(0.42, 0.065, 0.085, 1.0) if primary else Color(0.14, 0.12, 0.13, 1.0)
-	normal.border_color = Color(0.72, 0.12, 0.14, 1.0) if primary else Color(0.34, 0.09, 0.1, 1.0)
-	normal.border_width_bottom = 2
-	normal.set_corner_radius_all(5)
-	var hover := normal.duplicate() as StyleBoxFlat
-	hover.bg_color = Color(0.62, 0.09, 0.12, 1.0) if primary else Color(0.24, 0.08, 0.09, 1.0)
-	button.add_theme_stylebox_override("normal", normal)
-	button.add_theme_stylebox_override("hover", hover)
-	button.add_theme_stylebox_override("pressed", hover)
-	button.add_theme_stylebox_override("focus", hover)
+	HorrorTheme.style_button(button, "primary" if primary else "secondary", 13, true)
 	return button
 
 func _build_exit_confirm() -> void:
 	exit_confirm_overlay = ColorRect.new()
 	exit_confirm_overlay.name = "ExitConfirmOverlay"
-	exit_confirm_overlay.color = Color(0.0, 0.0, 0.0, 0.82)
+	exit_confirm_overlay.color = Color(HorrorTheme.SCRIM.r, HorrorTheme.SCRIM.g, HorrorTheme.SCRIM.b, 0.88)
 	exit_confirm_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	exit_confirm_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	exit_confirm_overlay.z_index = 20
@@ -732,7 +809,8 @@ func _build_exit_confirm() -> void:
 	exit_confirm_overlay.add_child(center)
 	exit_panel = PanelContainer.new()
 	exit_panel.custom_minimum_size = Vector2(440.0, 0.0)
-	exit_panel.add_theme_stylebox_override("panel", _make_overlay_style(0.98, 22.0, 20.0))
+	exit_panel.add_theme_stylebox_override("panel", HorrorTheme.make_panel_style(HorrorTheme.SURFACE, HorrorTheme.OUTLINE_VARIANT, 4, 2, 24, 22))
+	HorrorTheme.attach_corner_ornaments(exit_panel, HorrorTheme.ACCENT, 12.0, 1.8, 5.0, true)
 	center.add_child(exit_panel)
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 14)
@@ -740,14 +818,15 @@ func _build_exit_confirm() -> void:
 	var title := Label.new()
 	title.text = "KEMBALI KE MENU UTAMA?"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 21)
-	title.add_theme_color_override("font_color", Color(0.85, 0.25, 0.25, 1.0))
+	HorrorTheme.style_label(title, "headline-md", HorrorTheme.PRIMARY, 19)
 	box.add_child(title)
+	box.add_child(HorrorTheme.create_ritual_divider("◆", HorrorTheme.ACCENT))
 	var message := Label.new()
 	message.text = "Yakin ingin kembali ke menu utama?\nProgres tersimpan otomatis setiap 5 detik dan dapat dilanjutkan dari menu utama."
 	message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	message.custom_minimum_size.x = 360.0
 	message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	message.add_theme_font_size_override("font_size", 15)
+	HorrorTheme.style_label(message, "body-md", HorrorTheme.ON_SURFACE, 14)
 	box.add_child(message)
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 10)
@@ -769,6 +848,7 @@ func _show_exit_confirm() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_apply_overlay_layouts()
 	exit_confirm_overlay.visible = true
+	HorrorTheme.animate_surface_enter(exit_panel)
 
 func _apply_overlay_layouts() -> void:
 	var view_size: Vector2 = get_viewport().get_visible_rect().size
@@ -798,9 +878,17 @@ func _apply_overlay_layouts() -> void:
 	if exit_panel:
 		exit_panel.custom_minimum_size.x = minf(440.0, view_size.x - 32.0)
 	if inventory_modal_panel:
-		var panel_w: float = minf(540.0, view_size.x - 24.0)
-		var panel_h: float = minf(460.0, view_size.y - 24.0)
-		inventory_modal_panel.custom_minimum_size = Vector2(panel_w, panel_h)
+		var slot_dim: float = clampf((minf(view_size.y, 720.0) - 196.0) / 4.2, 44.0, 62.0)
+		var slot_vec := Vector2(slot_dim, slot_dim)
+		for s_node: Variant in inventory_storage_slots:
+			if s_node is PanelContainer:
+				(s_node as PanelContainer).custom_minimum_size = slot_vec
+		for h_node: Variant in inventory_hotbar_slots:
+			if h_node is PanelContainer:
+				(h_node as PanelContainer).custom_minimum_size = slot_vec
+		var panel_w: float = minf(maxf(380.0, slot_dim * 5.0 + 68.0), view_size.x - 24.0)
+		inventory_modal_panel.custom_minimum_size = Vector2(panel_w, 0.0)
+		inventory_modal_panel.reset_size()
 
 func _is_touch_device() -> bool:
 	return DisplayServer.is_touchscreen_available() or OS.has_feature("android") or OS.has_feature("ios") or OS.has_feature("web_android") or OS.has_feature("web_ios")
@@ -820,23 +908,20 @@ func _setup_mobile_controls() -> void:
 	joystick_base.draw.connect(_draw_virtual_joystick)
 	touch_root.add_child(joystick_base)
 
-	var run_button := _make_touch_button("LARI")
+	var run_button := _make_touch_button("run")
 	run_button.button_down.connect(_on_touch_run_down)
 	run_button.button_up.connect(_on_touch_run_up)
-	var interact_button := _make_touch_button("E")
+	var interact_button := _make_touch_button("interact")
 	interact_button.pressed.connect(_on_touch_interact)
-	var flashlight_button := _make_touch_button("SENTER")
+	var flashlight_button := _make_touch_button("flashlight")
 	flashlight_button.pressed.connect(_on_touch_flashlight)
-	var use_button := _make_touch_button("PAKAI")
-	use_button.pressed.connect(_on_touch_use)
-	var pause_button := _make_touch_button("Ⅱ")
+	var pause_button := _make_touch_button("pause")
 	pause_button.pressed.connect(toggle_pause)
-	var bag_button := _make_touch_button("TAS")
+	var bag_button := _make_touch_button("bag")
 	bag_button.pressed.connect(toggle_inventory)
 	touch_buttons.append(run_button)
 	touch_buttons.append(interact_button)
 	touch_buttons.append(flashlight_button)
-	touch_buttons.append(use_button)
 	touch_buttons.append(pause_button)
 	touch_buttons.append(bag_button)
 	for button: Button in touch_buttons:
@@ -844,29 +929,108 @@ func _setup_mobile_controls() -> void:
 	get_viewport().size_changed.connect(_layout_touch_controls)
 	_layout_touch_controls()
 
-func _make_touch_button(text_value: String) -> Button:
+func _make_touch_button(icon_id: String) -> Button:
 	var button := Button.new()
-	button.text = text_value
+	button.text = ""
+	button.set_meta("touch_icon", icon_id)
 	button.focus_mode = Control.FOCUS_NONE
-	button.add_theme_font_size_override("font_size", 12)
-	button.add_theme_color_override("font_color", Color(0.96, 0.90, 0.82, 1.0))
-	button.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.95))
-	button.add_theme_constant_override("outline_size", 3)
+	var is_utility: bool = icon_id in ["pause", "bag"]
+
 	var normal := StyleBoxFlat.new()
-	normal.bg_color = Color(0.045, 0.018, 0.024, 0.76)
-	normal.border_color = Color(0.68, 0.14, 0.16, 0.88)
+	normal.bg_color = Color(HorrorTheme.SURFACE_LOW.r, HorrorTheme.SURFACE_LOW.g, HorrorTheme.SURFACE_LOW.b, 0.86) if is_utility else Color(HorrorTheme.SURFACE.r, HorrorTheme.SURFACE.g, HorrorTheme.SURFACE.b, 0.86)
+	normal.border_color = HorrorTheme.OUTLINE if is_utility else HorrorTheme.ACCENT
 	normal.set_border_width_all(2)
-	normal.set_corner_radius_all(36)
-	normal.shadow_color = Color(0.0, 0.0, 0.0, 0.55)
-	normal.shadow_size = 4
+	normal.set_corner_radius_all(4)
+	normal.shadow_color = Color(HorrorTheme.SCRIM.r, HorrorTheme.SCRIM.g, HorrorTheme.SCRIM.b, 0.65)
+	normal.shadow_size = 5
+
 	var pressed := normal.duplicate() as StyleBoxFlat
-	pressed.bg_color = Color(0.48, 0.06, 0.08, 0.92)
-	pressed.border_color = Color(0.92, 0.72, 0.30, 0.96)
+	pressed.bg_color = Color(HorrorTheme.PRIMARY_CONTAINER.r, HorrorTheme.PRIMARY_CONTAINER.g, HorrorTheme.PRIMARY_CONTAINER.b, 0.96)
+	pressed.border_color = HorrorTheme.PRIMARY
 	button.add_theme_stylebox_override("normal", normal)
 	button.add_theme_stylebox_override("hover", pressed)
 	button.add_theme_stylebox_override("pressed", pressed)
 	button.add_theme_stylebox_override("focus", normal)
+	HorrorTheme.attach_corner_ornaments(
+		button,
+		HorrorTheme.ON_SURFACE_VARIANT if is_utility else HorrorTheme.PRIMARY,
+		6.0,
+		1.4,
+		3.0,
+		false
+	)
+	button.draw.connect(_draw_touch_button_icon.bind(button, icon_id))
 	return button
+
+func _draw_touch_button_icon(btn: Button, icon_id: String) -> void:
+	if not is_instance_valid(btn):
+		return
+	var s: Vector2 = btn.size
+	var c: Vector2 = s * 0.5
+	var u: float = minf(s.x, s.y)
+	var col: Color = HorrorTheme.ON_PRIMARY_CONTAINER if btn.button_pressed else HorrorTheme.ON_SURFACE
+	var accent_col: Color = HorrorTheme.PRIMARY
+	var w: float = maxf(2.0, u * 0.045)
+
+	match icon_id:
+		"run":
+			# Ikon siluet pelari + garis kecepatan (tanpa huruf/emoji)
+			btn.draw_circle(c + Vector2(u * 0.09, -u * 0.22), u * 0.065, col)
+			btn.draw_line(c + Vector2(u * 0.06, -u * 0.14), c + Vector2(-u * 0.05, u * 0.05), col, w * 1.15)
+			btn.draw_line(c + Vector2(u * 0.03, -u * 0.11), c + Vector2(u * 0.19, -u * 0.05), col, w)
+			btn.draw_line(c + Vector2(u * 0.19, -u * 0.05), c + Vector2(u * 0.24, -u * 0.15), col, w)
+			btn.draw_line(c + Vector2(u * 0.03, -u * 0.11), c + Vector2(-u * 0.15, -u * 0.07), col, w)
+			btn.draw_line(c + Vector2(-u * 0.05, u * 0.05), c + Vector2(u * 0.14, u * 0.12), col, w * 1.1)
+			btn.draw_line(c + Vector2(u * 0.14, u * 0.12), c + Vector2(u * 0.09, u * 0.26), col, w)
+			btn.draw_line(c + Vector2(-u * 0.05, u * 0.05), c + Vector2(-u * 0.20, u * 0.21), col, w * 1.1)
+			btn.draw_line(c + Vector2(-u * 0.28, -u * 0.16), c + Vector2(-u * 0.14, -u * 0.16), accent_col, w * 0.85)
+			btn.draw_line(c + Vector2(-u * 0.30, -u * 0.02), c + Vector2(-u * 0.18, -u * 0.02), accent_col, w * 0.85)
+		"interact":
+			# Ikon telapak tangan meraih / interaksi
+			var palm := Rect2(c + Vector2(-u * 0.13, -u * 0.02), Vector2(u * 0.26, u * 0.22))
+			btn.draw_rect(palm, col, true)
+			for i: int in range(4):
+				var fx: float = -u * 0.11 + float(i) * (u * 0.072)
+				var fh: float = u * (0.19 if (i == 1 or i == 2) else 0.15)
+				btn.draw_line(c + Vector2(fx, -u * 0.02), c + Vector2(fx, -u * 0.02 - fh), col, w * 1.1)
+			btn.draw_line(c + Vector2(-u * 0.13, u * 0.08), c + Vector2(-u * 0.23, -u * 0.02), col, w * 1.15)
+			btn.draw_arc(c, u * 0.33, -0.45, 0.45, 10, accent_col, w * 0.8, true)
+			btn.draw_arc(c, u * 0.33, PI - 0.45, PI + 0.45, 10, accent_col, w * 0.8, true)
+		"flashlight":
+			# Ikon senter + berkas sorot cahaya
+			var handle := Rect2(c + Vector2(-u * 0.28, -u * 0.07), Vector2(u * 0.22, u * 0.14))
+			btn.draw_rect(handle, col, true)
+			var head_poly := PackedVector2Array([
+				c + Vector2(-u * 0.06, -u * 0.07),
+				c + Vector2(u * 0.05, -u * 0.14),
+				c + Vector2(u * 0.05, u * 0.14),
+				c + Vector2(-u * 0.06, u * 0.07)
+			])
+			btn.draw_colored_polygon(head_poly, col)
+			btn.draw_line(c + Vector2(u * 0.10, -u * 0.10), c + Vector2(u * 0.28, -u * 0.20), accent_col, w)
+			btn.draw_line(c + Vector2(u * 0.11, 0.0), c + Vector2(u * 0.30, 0.0), accent_col, w)
+			btn.draw_line(c + Vector2(u * 0.10, u * 0.10), c + Vector2(u * 0.28, u * 0.20), accent_col, w)
+		"pause":
+			# Ikon dua bilah jeda geometris
+			var bar_w: float = u * 0.10
+			var bar_h: float = u * 0.38
+			btn.draw_rect(Rect2(c.x - u * 0.14, c.y - bar_h * 0.5, bar_w, bar_h), col, true)
+			btn.draw_rect(Rect2(c.x + u * 0.04, c.y - bar_h * 0.5, bar_w, bar_h), col, true)
+		"bag":
+			# Ikon tas bekal (satchel) dengan tutup & gesper
+			var bag_rect := Rect2(c + Vector2(-u * 0.22, -u * 0.12), Vector2(u * 0.44, u * 0.34))
+			btn.draw_rect(bag_rect, col, false, w)
+			btn.draw_arc(c + Vector2(0.0, -u * 0.12), u * 0.11, PI, TAU, 12, col, w, true)
+			btn.draw_line(c + Vector2(-u * 0.22, u * 0.01), c + Vector2(u * 0.22, u * 0.01), col, w * 0.9)
+			btn.draw_rect(Rect2(c + Vector2(-u * 0.05, -u * 0.03), Vector2(u * 0.10, u * 0.10)), accent_col, true)
+		"done":
+			# Ikon centang selesai
+			var pts := PackedVector2Array([
+				c + Vector2(-u * 0.20, u * 0.02),
+				c + Vector2(-u * 0.05, u * 0.17),
+				c + Vector2(u * 0.22, -u * 0.15)
+			])
+			btn.draw_polyline(pts, col, w * 1.4, true)
 
 func _layout_touch_controls() -> void:
 	if not touch_controls_enabled or not joystick_base:
@@ -895,18 +1059,17 @@ func _layout_touch_controls() -> void:
 	var bag_x: float = view_size.x - stats_width - 26.0 - util_size
 	var pause_x: float = bag_x - util_size - 14.0
 	var defaults: Array[Vector2] = [
-		Vector2(x_left, y_top),
-		Vector2(x_right, y_top),
-		Vector2(x_left, y_bottom),
-		Vector2(x_right, y_bottom),
-		Vector2(pause_x, 16.0),
-		Vector2(bag_x, 16.0)
+		Vector2(x_right, y_top),     # 0: run
+		Vector2(x_right, y_bottom),  # 1: interact
+		Vector2(x_left, y_bottom),   # 2: flashlight
+		Vector2(pause_x, 16.0),      # 3: pause
+		Vector2(bag_x, 16.0)         # 4: bag
 	]
 	var stats_forbidden := Rect2(view_size.x - stats_width - 18.0, 8.0, stats_width + 18.0, 94.0)
 	var saved_positions: Array = SettingsManager.mobile_button_positions
 	for i: int in range(touch_buttons.size()):
 		var button: Button = touch_buttons[i]
-		var target_size: Vector2 = Vector2(util_size, util_size) if i >= 4 else Vector2(button_size, button_size)
+		var target_size: Vector2 = Vector2(util_size, util_size) if i >= 3 else Vector2(button_size, button_size)
 		button.size = target_size
 		var button_position: Vector2 = defaults[i]
 		if saved_positions.size() == touch_buttons.size() and saved_positions[i] is Vector2:
@@ -918,6 +1081,7 @@ func _layout_touch_controls() -> void:
 			clampf(button_position.x, 8.0, maxf(8.0, view_size.x - button.size.x - 8.0)),
 			clampf(button_position.y, 8.0, maxf(8.0, view_size.y - button.size.y - 8.0))
 		)
+		button.queue_redraw()
 
 	for i: int in range(touch_buttons.size()):
 		var rect_i := Rect2(touch_buttons[i].position - Vector2(4.0, 4.0), touch_buttons[i].size + Vector2(8.0, 8.0))
@@ -1004,23 +1168,98 @@ func _apply_mobile_hud_layout() -> void:
 		dialog_label.add_theme_font_size_override("font_size", 16)
 
 func _build_desktop_hints() -> void:
-	return
+	if _is_touch_device():
+		return
+	desktop_hint_panel = PanelContainer.new()
+	desktop_hint_panel.name = "DesktopHintPanel"
+	desktop_hint_panel.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	desktop_hint_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	desktop_hint_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	desktop_hint_panel.offset_right = -24.0
+	desktop_hint_panel.offset_bottom = -16.0
+	desktop_hint_panel.offset_left = -390.0
+	desktop_hint_panel.offset_top = -68.0
+	desktop_hint_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	desktop_hint_panel.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+	add_child(desktop_hint_panel)
+
+	var vbox := VBoxContainer.new()
+	vbox.alignment = BoxContainer.ALIGNMENT_END
+	vbox.add_theme_constant_override("separation", 6)
+	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	desktop_hint_panel.add_child(vbox)
+
+	var row1 := HBoxContainer.new()
+	row1.alignment = BoxContainer.ALIGNMENT_END
+	row1.add_theme_constant_override("separation", 12)
+	row1.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vbox.add_child(row1)
+	_add_gta_key_hint(row1, "WASD", "GERAK", false)
+	_add_gta_key_hint(row1, "SHIFT", "LARI", false)
+	_add_gta_key_hint(row1, "E", "INTERAKSI", true)
+	_add_gta_key_hint(row1, "F", "SENTER", true)
+
+	var row2 := HBoxContainer.new()
+	row2.alignment = BoxContainer.ALIGNMENT_END
+	row2.add_theme_constant_override("separation", 12)
+	row2.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vbox.add_child(row2)
+	_add_gta_key_hint(row2, "1-5", "SLOT", false)
+	_add_gta_key_hint(row2, "TAB", "TAS", true)
+	_add_gta_key_hint(row2, "G", "BUANG", false)
+	_add_gta_key_hint(row2, "ESC", "JEDA", false)
+
+func _add_gta_key_hint(parent_row: HBoxContainer, key_text: String, action_text: String, is_accent: bool) -> void:
+	var item := HBoxContainer.new()
+	item.alignment = BoxContainer.ALIGNMENT_CENTER
+	item.add_theme_constant_override("separation", 5)
+	item.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	parent_row.add_child(item)
+
+	var badge := PanelContainer.new()
+	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var b_style := StyleBoxFlat.new()
+	b_style.bg_color = Color(HorrorTheme.PRIMARY_CONTAINER.r, HorrorTheme.PRIMARY_CONTAINER.g, HorrorTheme.PRIMARY_CONTAINER.b, 0.92) if is_accent else Color(HorrorTheme.SURFACE_HIGH.r, HorrorTheme.SURFACE_HIGH.g, HorrorTheme.SURFACE_HIGH.b, 0.90)
+	b_style.border_color = HorrorTheme.ACCENT if is_accent else HorrorTheme.OUTLINE
+	b_style.set_border_width_all(1)
+	b_style.set_corner_radius_all(3)
+	b_style.content_margin_left = 6.0
+	b_style.content_margin_right = 6.0
+	b_style.content_margin_top = 1.0
+	b_style.content_margin_bottom = 1.0
+	badge.add_theme_stylebox_override("panel", b_style)
+	item.add_child(badge)
+
+	var key_lbl := Label.new()
+	key_lbl.text = key_text
+	key_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	key_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	HorrorTheme.style_label(key_lbl, "mono-sm", HorrorTheme.ON_PRIMARY_CONTAINER if is_accent else HorrorTheme.PRIMARY, 10)
+	badge.add_child(key_lbl)
+
+	var act_lbl := Label.new()
+	act_lbl.text = action_text
+	act_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	HorrorTheme.style_label(act_lbl, "label-sm", HorrorTheme.ON_SURFACE, 10)
+	act_lbl.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.95))
+	act_lbl.add_theme_constant_override("outline_size", 3)
+	item.add_child(act_lbl)
 
 func _draw_virtual_joystick() -> void:
 	if not joystick_base:
 		return
 	var center: Vector2 = joystick_base.size * 0.5
 	var radius: float = joystick_base.size.x * 0.43
-	joystick_base.draw_circle(center, radius, Color(0.025, 0.010, 0.014, 0.58))
-	joystick_base.draw_arc(center, radius, 0.0, TAU, 48, Color(0.66, 0.14, 0.16, 0.78), 2.2, true)
-	joystick_base.draw_arc(center, radius * 0.74, 0.0, TAU, 36, Color(0.84, 0.66, 0.30, 0.26), 1.2, true)
+	joystick_base.draw_circle(center, radius, Color(HorrorTheme.SURFACE_LOWEST.r, HorrorTheme.SURFACE_LOWEST.g, HorrorTheme.SURFACE_LOWEST.b, 0.72))
+	joystick_base.draw_arc(center, radius, 0.0, TAU, 48, Color(HorrorTheme.ACCENT.r, HorrorTheme.ACCENT.g, HorrorTheme.ACCENT.b, 0.85), 2.0, true)
+	joystick_base.draw_arc(center, radius * 0.74, 0.0, TAU, 8, Color(HorrorTheme.OUTLINE_VARIANT.r, HorrorTheme.OUTLINE_VARIANT.g, HorrorTheme.OUTLINE_VARIANT.b, 0.65), 1.4, true)
 	for i: int in range(4):
 		var a: float = float(i) * PI * 0.5
 		var dir := Vector2(cos(a), sin(a))
-		joystick_base.draw_line(center + dir * (radius * 0.78), center + dir * (radius * 0.96), Color(0.84, 0.66, 0.30, 0.45), 2.0)
+		joystick_base.draw_line(center + dir * (radius * 0.76), center + dir * (radius * 0.96), Color(HorrorTheme.PRIMARY.r, HorrorTheme.PRIMARY.g, HorrorTheme.PRIMARY.b, 0.55), 2.0)
 	var knob_center: Vector2 = center + joystick_vector * radius * 0.68
-	joystick_base.draw_circle(knob_center, radius * 0.36, Color(0.48, 0.06, 0.08, 0.86))
-	joystick_base.draw_arc(knob_center, radius * 0.36, 0.0, TAU, 36, Color(0.92, 0.72, 0.38, 0.85), 2.0, true)
+	joystick_base.draw_circle(knob_center, radius * 0.36, Color(HorrorTheme.SECONDARY_CONTAINER.r, HorrorTheme.SECONDARY_CONTAINER.g, HorrorTheme.SECONDARY_CONTAINER.b, 0.92))
+	joystick_base.draw_arc(knob_center, radius * 0.36, 0.0, TAU, 36, Color(HorrorTheme.PRIMARY.r, HorrorTheme.PRIMARY.g, HorrorTheme.PRIMARY.b, 0.92), 2.0, true)
 
 func _input(event: InputEvent) -> void:
 	if mobile_editor_active:
@@ -1162,13 +1401,12 @@ func _start_mobile_editor() -> void:
 	editor_hint_label.offset_right = -150.0
 	editor_hint_label.offset_bottom = 48.0
 	editor_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	editor_hint_label.add_theme_font_size_override("font_size", 12)
-	editor_hint_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.78, 1.0))
+	HorrorTheme.style_label(editor_hint_label, "label-lg", HorrorTheme.PRIMARY, 12)
 	editor_hint_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	touch_root.add_child(editor_hint_label)
-	editor_done_button = _make_touch_button("SELESAI")
-	editor_done_button.position = Vector2(get_viewport().get_visible_rect().size.x - 142.0, 86.0)
-	editor_done_button.size = Vector2(128.0, 48.0)
+	editor_done_button = _make_touch_button("done")
+	editor_done_button.position = Vector2(get_viewport().get_visible_rect().size.x - 94.0, 86.0)
+	editor_done_button.size = Vector2(64.0, 52.0)
 	editor_done_button.mouse_filter = Control.MOUSE_FILTER_STOP
 	editor_done_button.pressed.connect(_finish_mobile_editor)
 	touch_root.add_child(editor_done_button)
@@ -1347,6 +1585,8 @@ func _play_lampor_descent_cutscene() -> void:
 		mission_panel.visible = false
 	if touch_root:
 		touch_root.visible = false
+	if desktop_hint_panel:
+		desktop_hint_panel.visible = false
 	if hud_bag_button:
 		hud_bag_button.visible = false
 	stare_warning.visible = false
@@ -1451,6 +1691,8 @@ func _play_lampor_descent_cutscene() -> void:
 			crosshair.visible = true
 		if touch_root and _is_touch_device() and not get_tree().paused:
 			touch_root.visible = true
+		if desktop_hint_panel and not _is_touch_device() and not get_tree().paused:
+			desktop_hint_panel.visible = true
 		if hud_bag_button:
 			hud_bag_button.visible = true
 		if is_instance_valid(cutscene_camera):
@@ -1522,17 +1764,22 @@ func _on_objective_updated(id: String, text: String, current: int, required: int
 
 func _on_inventory_updated(slots: Array) -> void:
 	cached_inventory_slots = slots
+	var player: PlayerController = GameManager.player_character as PlayerController
+	var active_slot_idx: int = player.inventory_system.active_slot if (player and player.inventory_system) else 0
 	for i in range(min(slots.size(), slots_container.get_child_count())):
 		var slot_panel: PanelContainer = slots_container.get_child(i) as PanelContainer
 		var label: Label = slot_panel.get_node("VBox/ItemName") as Label
 		var qty_label: Label = slot_panel.get_node("VBox/Qty") as Label
+		var is_active: bool = (i == active_slot_idx)
 		
 		var item: Dictionary = slots[i]
 		if item.is_empty():
 			label.text = "[Kosong]"
+			label.add_theme_color_override("font_color", Color(HorrorTheme.OUTLINE.r, HorrorTheme.OUTLINE.g, HorrorTheme.OUTLINE.b, 0.72))
 			qty_label.text = ""
 		else:
 			label.text = item.get("name", "")
+			label.add_theme_color_override("font_color", HorrorTheme.ON_PRIMARY_CONTAINER if is_active else HorrorTheme.ON_SURFACE)
 			if item.get("id", "") == "flashlight":
 				qty_label.text = "%d%%" % int(round(float(item.get("battery", 0.0))))
 			elif item.has("quantity") and item["quantity"] > 1:
@@ -1644,7 +1891,7 @@ func _build_hud_bag_button() -> void:
 func _build_inventory_overlay() -> void:
 	inventory_overlay = ColorRect.new()
 	inventory_overlay.name = "InventoryOverlay"
-	inventory_overlay.color = Color(0.0, 0.0, 0.0, 0.75)
+	inventory_overlay.color = Color(HorrorTheme.SCRIM.r, HorrorTheme.SCRIM.g, HorrorTheme.SCRIM.b, 0.62)
 	inventory_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	inventory_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	inventory_overlay.z_index = 25
@@ -1658,39 +1905,57 @@ func _build_inventory_overlay() -> void:
 
 	inventory_modal_panel = PanelContainer.new()
 	inventory_modal_panel.name = "InventoryModalPanel"
-	inventory_modal_panel.custom_minimum_size = Vector2(510.0, 440.0)
-	inventory_modal_panel.add_theme_stylebox_override("panel", _make_overlay_style(0.96, 20.0, 16.0))
+	inventory_modal_panel.custom_minimum_size = Vector2(410.0, 0.0)
+	inventory_modal_panel.add_theme_stylebox_override(
+		"panel",
+		HorrorTheme.make_panel_style(
+			Color(HorrorTheme.SURFACE.r, HorrorTheme.SURFACE.g, HorrorTheme.SURFACE.b, 0.94),
+			HorrorTheme.OUTLINE_VARIANT,
+			4,
+			2,
+			16,
+			12
+		)
+	)
+	HorrorTheme.attach_corner_ornaments(inventory_modal_panel, HorrorTheme.ACCENT, 12.0, 1.8, 5.0, true)
 	center.add_child(inventory_modal_panel)
 
 	var main_vbox := VBoxContainer.new()
-	main_vbox.add_theme_constant_override("separation", 10)
+	main_vbox.add_theme_constant_override("separation", 7)
 	inventory_modal_panel.add_child(main_vbox)
 
+	var header_strip := PanelContainer.new()
+	header_strip.add_theme_stylebox_override(
+		"panel",
+		HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOWEST, HorrorTheme.OUTLINE_VARIANT, 3, 12, 6)
+	)
+	main_vbox.add_child(header_strip)
+
 	var header := HBoxContainer.new()
-	main_vbox.add_child(header)
+	header.add_theme_constant_override("separation", 10)
+	header_strip.add_child(header)
 
 	var title_lbl := Label.new()
-	title_lbl.text = "INVENTARIS"
+	title_lbl.text = "◆  TAS BEKAL & INVENTARIS"
 	title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	title_lbl.add_theme_font_override("font", HORROR_TITLE_FONT)
-	title_lbl.add_theme_font_size_override("font_size", 17)
-	title_lbl.add_theme_color_override("font_color", Color(0.95, 0.82, 0.45, 1.0))
+	HorrorTheme.style_label(title_lbl, "headline-md", HorrorTheme.ON_SURFACE, 16)
 	header.add_child(title_lbl)
 
 	var close_btn := Button.new()
-	close_btn.text = "Tutup [Tab]"
-	close_btn.custom_minimum_size = Vector2(110.0, 32.0)
+	close_btn.text = "TUTUP [TAB]"
+	close_btn.custom_minimum_size = Vector2(114.0, 32.0)
+	HorrorTheme.style_button(close_btn, "secondary", 11, true)
 	close_btn.pressed.connect(toggle_inventory)
 	header.add_child(close_btn)
 
 	var storage_lbl := Label.new()
-	storage_lbl.text = "PENYIMPANAN TAS (15 Slot)"
-	storage_lbl.add_theme_font_size_override("font_size", 13)
-	storage_lbl.add_theme_color_override("font_color", Color(0.85, 0.75, 0.65, 1.0))
+	storage_lbl.text = "PENYIMPANAN TAS  ·  15 SLOT"
+	HorrorTheme.style_label(storage_lbl, "label-lg", HorrorTheme.PRIMARY, 11)
 	main_vbox.add_child(storage_lbl)
 
 	var storage_grid := GridContainer.new()
 	storage_grid.columns = 5
+	storage_grid.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	storage_grid.add_theme_constant_override("h_separation", 6)
 	storage_grid.add_theme_constant_override("v_separation", 6)
 	main_vbox.add_child(storage_grid)
@@ -1705,17 +1970,16 @@ func _build_inventory_overlay() -> void:
 		storage_grid.add_child(slot_ui)
 		inventory_storage_slots.append(slot_ui)
 
-	var sep := HSeparator.new()
-	main_vbox.add_child(sep)
+	main_vbox.add_child(HorrorTheme.create_ritual_divider("◆", HorrorTheme.PRIMARY_CONTAINER))
 
 	var hotbar_lbl := Label.new()
-	hotbar_lbl.text = "HOTBAR (5 Slot)"
-	hotbar_lbl.add_theme_font_size_override("font_size", 13)
-	hotbar_lbl.add_theme_color_override("font_color", Color(0.85, 0.75, 0.65, 1.0))
+	hotbar_lbl.text = "HOTBAR CEPAT  ·  5 SLOT"
+	HorrorTheme.style_label(hotbar_lbl, "label-lg", HorrorTheme.SECONDARY, 11)
 	main_vbox.add_child(hotbar_lbl)
 
 	var hotbar_grid := GridContainer.new()
 	hotbar_grid.columns = 5
+	hotbar_grid.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	hotbar_grid.add_theme_constant_override("h_separation", 6)
 	hotbar_grid.add_theme_constant_override("v_separation", 6)
 	main_vbox.add_child(hotbar_grid)
@@ -1729,12 +1993,19 @@ func _build_inventory_overlay() -> void:
 		hotbar_grid.add_child(slot_ui)
 		inventory_hotbar_slots.append(slot_ui)
 
+	var hint_chip := PanelContainer.new()
+	hint_chip.add_theme_stylebox_override(
+		"panel",
+		HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOW, HorrorTheme.OUTLINE_VARIANT, 3, 10, 6)
+	)
+	main_vbox.add_child(hint_chip)
+
 	var hint_lbl := Label.new()
-	hint_lbl.text = "Tarik & taruh (drag & drop) barang ke hotbar/tas. Jika slot sudah ada isinya, posisi barang akan ditukar."
+	hint_lbl.text = "Tarik & taruh (atau ketuk dua slot) untuk menukar barang antara tas dan hotbar."
+	hint_lbl.custom_minimum_size.x = 340.0
 	hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint_lbl.add_theme_font_size_override("font_size", 11)
-	hint_lbl.add_theme_color_override("font_color", Color(0.75, 0.72, 0.68, 0.9))
-	main_vbox.add_child(hint_lbl)
+	HorrorTheme.style_label(hint_lbl, "label-sm", HorrorTheme.ON_SURFACE_VARIANT, 10)
+	hint_chip.add_child(hint_lbl)
 
 func toggle_inventory() -> void:
 	if descent_cutscene_overlay and is_instance_valid(descent_cutscene_overlay) and descent_cutscene_overlay.visible:
@@ -1753,6 +2024,7 @@ func toggle_inventory() -> void:
 	var player: PlayerController = GameManager.player_character as PlayerController
 	if is_open:
 		_refresh_inventory_ui()
+		HorrorTheme.animate_surface_enter(inventory_modal_panel)
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		if player:
 			player.is_inventory_open = true

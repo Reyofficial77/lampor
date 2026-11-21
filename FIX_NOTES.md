@@ -1,4 +1,26 @@
-# LAMPOR v1.2.5
+# LAMPOR v1.2.6
+
+## v1.2.6
+
+- **Desain Ulang Antarmuka Horor (`DESIGN.md`) & Penyempurnaan Victory Screen**:
+  - Merombak tampilan Menu Utama (beserta modal Peringatan, Tingkat Kesulitan, Toko Bekal, Pengaturan, Catatan Pembaruan, Hak Cipta, dan Pembaruan), Layar Game Over, Menu Jeda, Pengaturan Jeda, Konfirmasi Keluar, serta Konfirmasi Barikade dengan palet horor obsidian hangus (`#170B0A`), merah darah kering (`#9E1B1B` / `#D4433C`), bingkai besi tua (`#59413E`), dan perkamen tulang (`#F7DDDA`) lengkap dengan latar ritual beranimasi serta ornamen siku sudut.
+  - Memperbaiki margin kanan tombol `KELUAR PERMAINAN` di Menu Utama agar proporsional dan tidak menempel ke tepi layar.
+  - Mempertahankan estetika fajar keemasan terbuka pada `VictoryScreen` (`FAJAR TELAH MENYINGSING`) dengan polesan pendar cahaya pagi, partikel bara emas, bingkai sudut tipis, dan lencana hadiah koin.
+- **Pembaruan Slot Hotbar, Modal Tas Tanpa Scroll, Ikon Vektor Mobile, & Petunjuk Kontrol Desktop**:
+  - Memperbarui desain visual 5 slot hotbar dan 15 slot tas (`5x3`) menjadi tablet relik persegi `1:1` dengan indikator status aktif, terpilih, dan kosong yang tegas, serta menghapus scrollbar pada modal Tas agar seluruh slot langsung terlihat ringkas.
+  - Mengganti seluruh teks/huruf pada tombol sentuh mobile dengan ikon geometris vektor khusus (Berlari, Interaksi, Senter, Tas, dan Jeda) tanpa huruf maupun emoji.
+  - Menambahkan baris petunjuk kontrol desktop bergaya minimalis (`[E] Interaksi / Pakai`, `[F] Senter`, `[Shift] Lari`, `[1-5] Slot`, `[Tab] Tas`, `[G] Buang`, `[Esc] Jeda`) di sudut kanan bawah HUD.
+- **Penyatuan Interaksi & Penggunaan Barang ke Tombol `[E]`**:
+  - Menghapus tombol `"PAKAI"` di mobile serta penggunaan item via `Enter`/`Space` di desktop; seluruh interaksi dunia (mengambil barang, menyalakan obor, membuka/membarikade pintu, bersembunyi di lemari, membakar di tungku) sekaligus penggunaan barang habis pakai di tangan (`Jamu Tolak Bala` & `Baterai Senter`) kini terpusat pada tombol **`[E]`** (desktop) dan tombol **Ikon Tangan** (mobile).
+- **Model Karakter 3D Baru (`ordinaryMan.fbx`) & Animasi Pergerakan Lebih Realistis**:
+  - Mengintegrasikan model karakter manusia 3D baru (`ordinaryMan.fbx`) lengkap dengan tekstur resolusi tinggi dan pemetaan kerangka tulang penuh.
+  - Memperhalus animasi `idle` (napas & tumpuan berat badan alami), `walk`, dan `sprint` menggunakan interpolasi kubik multi-keyframe, inersia ayunan tangan saat menoleh, transisi mengangkat barang saat berganti slot hotbar, serta gerakan anatomis kedua lengan baik saat memegang barang maupun tangan kosong.
+- **Konsekuensi Batas Waktu Pukul `05.00 WIB` & Penyesuaian Kecepatan Membakar per Mode**:
+  - Ketika waktu mencapai pukul **05.00 WIB** pada tingkat kesulitan apa pun (`Easy`, `Normal`, `Hard`, maupun `Nightmare`) sebelum ritual pembakaran selesai, Keranda Lampor akan langsung melahap pemain secara otomatis (melewati nyawa cadangan) dan memicu Game Over.
+  - Menyesuaikan durasi pembakaran benda ritual di Tungku Balai Desa secara proporsional dengan kecepatan waktu tiap mode (`Easy: 60 detik`, `Normal: 45 detik`, `Hard: 15 detik`, `Nightmare: 8 detik`) serta mempertahankan sisa waktu Babak II saat memasuki Babak III agar pemain di mode cepat tetap memiliki waktu yang adil sebelum pukul `05.00 WIB`.
+- **Fitur Tutorial Interaktif untuk Pemain Baru (Mode Easy) & Batas Aman Koin**:
+  - Menambahkan sistem tutorial langkah-demi-langkah (7 tahap) pada mode `Easy` bagi pemain yang baru pertama kali bermain (dan dapat diakses kapan saja melalui menu pilihan tingkat kesulitan), mencakup latihan pergerakan & senter, pengambilan bekal, penyalaan obor, barikade pintu, larangan menatap Lampor, pengumpulan 4 benda ritual, hingga pembakaran di Tungku Balai Desa dengan panel ringkas yang dapat diperkecil (`[–]`).
+  - Menambahkan batas maksimum penyimpanan koin (`999.999.999`) untuk mencegah *integer overflow* (nilai koin menjadi negatif) saat menerima hadiah kemenangan atau kekalahan.
 
 ## v1.2.5
 

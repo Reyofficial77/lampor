@@ -13,18 +13,21 @@ func _ready() -> void:
 	fire_light.visible = false
 	fire_mesh.visible = false
 
+const LocScript = preload("res://scripts/systems/Loc.gd")
+
 func get_interaction_prompt(_player: Node) -> String:
+	var k: String = SettingsManager.get_action_key_text("interact")
 	if GameManager.furnace_burning:
-		return "Tungku Membara! Bertahanlah: %d detik tersisa!" % int(GameManager.furnace_time_left)
+		return LocScript.pick("Tungku Membara! Bertahanlah: %d detik tersisa!" % int(GameManager.furnace_time_left), "Furnace Burning! Hold out: %d seconds left!" % int(GameManager.furnace_time_left))
 
 	if GameManager.current_act == GameManager.Act.BABAK_1:
-		return "Tungku Balai Desa (Selesaikan pertahanan obor & barikade terlebih dahulu)"
+		return LocScript.pick("Tungku Balai Desa (Selesaikan pertahanan obor & barikade terlebih dahulu)", "Village Hall Furnace (Finish torches & barricades first)")
 
 	var count: int = GameManager.get_ritual_item_count()
 	if count < GameManager.TOTAL_RITUAL_ITEMS:
-		return "Tungku Balai Desa (Kumpulkan 4 Benda Ritual dulu: %d/%d)" % [count, GameManager.TOTAL_RITUAL_ITEMS]
+		return LocScript.pick("Tungku Balai Desa (Kumpulkan 4 Benda Ritual dulu: %d/%d)" % [count, GameManager.TOTAL_RITUAL_ITEMS], "Village Hall Furnace (Gather 4 Ritual Relics first: %d/%d)" % [count, GameManager.TOTAL_RITUAL_ITEMS])
 
-	return "[E] Bakar Benda Ritual & Mulai Upacara Pemutus Kutukan!"
+	return LocScript.pick("[%s] Bakar Benda Ritual & Mulai Upacara Pemutus Kutukan!" % k, "[%s] Burn Ritual Relics & Start the Ritual!" % k)
 
 func interact(player: Node) -> void:
 	if GameManager.furnace_burning:

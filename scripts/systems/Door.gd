@@ -48,28 +48,32 @@ func is_doorway_occupied() -> bool:
 			return true
 	return false
 
+const LocScript = preload("res://scripts/systems/Loc.gd")
+
 func get_interaction_prompt(player: Node) -> String:
+	var key_interact: String = SettingsManager.get_action_key_text("interact")
 	if is_barricaded:
 		if is_player_inside(player):
-			return "[E] Bongkar Palang (dari dalam)"
-		return "Pintu Kayu (Sudah Dipalang Kokoh)"
+			return LocScript.pick("[%s] Bongkar Palang (dari dalam)" % key_interact, "[%s] Dismantle Barricade (from inside)" % key_interact)
+		return LocScript.pick("Pintu Kayu (Sudah Dipalang Kokoh)", "Wooden Door (Firmly Barricaded)")
 
 	if is_open:
 		if is_doorway_occupied():
-			return "Menyingkir dari ambang pintu untuk menutupnya"
-		return "[E] Tutup Pintu"
+			return LocScript.pick("Menyingkir dari ambang pintu untuk menutupnya", "Step clear of the doorway to close the door")
+		return LocScript.pick("[%s] Tutup Pintu" % key_interact, "[%s] Close Door" % key_interact)
 
 	var inv: InventorySystem = player.get_node_or_null("InventorySystem")
 	if inv:
 		var equipped: Dictionary = inv.get_equipped_item()
 		if equipped.get("id") == "papan_paku":
 			if is_player_inside(player):
-				return "[E] Palang Pintu (PERINGATAN: Kamu di dalam rumah!)"
-			return "[E] Palang Pintu dengan Papan & Paku"
+				return LocScript.pick("[%s] Palang Pintu (PERINGATAN: Kamu di dalam rumah!)" % key_interact, "[%s] Barricade Door (WARNING: You are inside!)" % key_interact)
+			return LocScript.pick("[%s] Palang Pintu dengan Papan & Paku" % key_interact, "[%s] Barricade Door with Planks & Nails" % key_interact)
 		elif inv.has_item_id("papan_paku"):
-			return "[E] Buka Pintu | Pilih Slot Papan [1-5] untuk Memalang"
+			var slot_keys: String = "%s-%s" % [SettingsManager.get_action_key_text("slot_1"), SettingsManager.get_action_key_text("slot_5")]
+			return LocScript.pick("[%s] Buka Pintu | Pilih Slot Papan [%s] untuk Memalang" % [key_interact, slot_keys], "[%s] Open Door | Select Planks [%s] to Barricade" % [key_interact, slot_keys])
 
-	return "[E] Buka Pintu"
+	return LocScript.pick("[%s] Buka Pintu" % key_interact, "[%s] Open Door" % key_interact)
 
 func interact(player: Node) -> void:
 	# Pintu terpalang: dari luar tidak bisa dibuka, dari dalam bisa dibongkar (anti-terkurung)

@@ -1,4 +1,22 @@
-# LAMPOR v1.2.8
+# LAMPOR v1.2.9
+
+## v1.2.9
+
+- **Pengaturan Keybinds Kontrol Desktop**:
+  - Menambahkan pengaturan kustomisasi tombol (**Keybinds**) di Pengaturan Menu Utama maupun Pengaturan Menu Jeda (`Maju`, `Mundur`, `Kiri`, `Kanan`, `Lari`, `Interaksi`, `Senter`, `Tas`, `Buang Item`, serta `Slot 1-5`) lengkap dengan penukaran konflik otomatis dan tombol **RESET TOMBOL BAWAAN**.
+  - Petunjuk kontrol HUD (`DesktopHintPanel`), prompt interaksi, dan panduan otomatis menampilkan tombol terbaru hasil kustomisasi.
+- **Pengaturan Bahasa (`Indonesia (ID)` / `English (EN-US)`)**:
+  - Menambahkan pilihan bahasa (`ID` dan `EN-US`) di Pengaturan Menu Utama serta Menu Jeda yang tersimpan permanen dan langsung menerjemahkan antarmuka, misi, toko, tutorial, layar menang/kalah, prompt, serta dialog.
+- **Dialog Kewarasan Rendah, Stamina Rendah, & Dialog Situasional Baru**:
+  - Menambahkan dialog kontekstual bervariasi ketika **Kewarasan (Sanity)** menurun drastis (`<= 55%`, `<= 35%`, `<= 18%`), ketika **Stamina** menipis atau habis saat berlari (`<= 20%` / `<= 5%`), serta dialog tambahan untuk baterai senter lemah/habis, masuk ke rumah, bersembunyi di lemari, zona aman obor, kemunculan Lampor, dan progres jam malam (`02:00` & `03:00 WIB`).
+- **Kode Redeem Baru: `FOREVERYONE` & `LAMPORLOVER`**:
+  - Menambahkan kode redeem `FOREVERYONE` (`5.000 Koin`) dan `LAMPORLOVER` (`10.000 Koin`).
+- **Perbaikan Koin Reset Setiap Kali Update**:
+  - Memperkuat penyimpanan `lampor_save.json` dan `lampor_settings.cfg` menggunakan penulisan atomik (`.tmp` + `.bak` permanen), nomor urut simpan (`save_seq`), perlindungan agar file bermasalah tidak tertimpa koin `0`, serta sinkronisasi `IDBFS` & cadangan `localStorage` pada ekspor Web.
+- **Perbaikan Sprint/Lari Tetap Aktif Saat `Shift` Dilepas (Desktop)**:
+  - Memperbaiki kondisi karakter terus berlari setelah `Shift` dilepas akibat fokus jendela hilang, buka tas/jeda, atau tombol sentuh pada laptop berlayar sentuh melalui sinkronisasi status tombol fisik dan reset input otomatis.
+- **Pembaruan Ikon Game Baru (`180x180` & `.ico`)**:
+  - Memperbarui ikon aplikasi untuk Android/Web (`180x180`) dan desktop Windows (`.ico` multi-resolusi) menggunakan desain ikon terbaru.
 
 ## v1.2.8
 

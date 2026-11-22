@@ -22,7 +22,7 @@ Jalankan `Mainkan_Lampor.bat` dari folder proyek. Jika Godot tidak ditemukan, ta
 
 ## Ikon aplikasi
 
-- Android / ikon proyek: `assets/icons/lampor_android_192x192.png` (192×192 piksel).
+- Android / ikon proyek: `assets/icons/lampor_android_180x180.png` (180×180 piksel).
 - Windows native icon: `assets/icons/lampor_windows.ico` (multi-resolusi 16–256 piksel).
 - Kedua ikon sudah ditautkan melalui `application/config/icon` dan `application/config/windows_native_icon` di `project.godot`. Jika preset Android mengisi `launcher_icons/main_192x192` secara manual, kosongkan opsi tersebut agar Godot memakai ikon proyek sebagai fallback.
 

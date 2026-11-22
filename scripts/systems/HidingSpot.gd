@@ -27,8 +27,11 @@ func _ready() -> void:
 func get_hide_global_position() -> Vector3:
 	return to_global(HIDE_LOCAL_POS)
 
+const LocScript = preload("res://scripts/systems/Loc.gd")
+
 func get_interaction_prompt(_player: Node) -> String:
-	return "[E] Masuk & Sembunyi di Lemari" if not is_occupied else "[E] Keluar dari Lemari"
+	var k: String = SettingsManager.get_action_key_text("interact")
+	return LocScript.pick("[%s] Masuk & Sembunyi di Lemari" % k, "[%s] Hide Inside Closet" % k) if not is_occupied else LocScript.pick("[%s] Keluar dari Lemari" % k, "[%s] Exit Closet" % k)
 
 func interact(player: Node) -> void:
 	var pc: PlayerController = player as PlayerController

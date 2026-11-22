@@ -101,27 +101,31 @@ func _process(delta: float) -> void:
 	if visual_node:
 		visual_node.rotate_y(delta * 1.5)
 
+const LocScript = preload("res://scripts/systems/Loc.gd")
+
 func get_interaction_prompt(player: Node) -> String:
 	if is_picked_up:
 		return ""
+	var k: String = SettingsManager.get_action_key_text("interact")
 
 	if is_ritual_item:
 		if GameManager.current_act == GameManager.Act.BABAK_1:
 			return ""
-		var r_name: String = ritual_display_name if ritual_display_name != "" else item_name
-		return "[E] Ambil Benda Ritual: " + r_name
+		var r_name: String = LocScript.item_name(item_id, ritual_display_name if ritual_display_name != "" else item_name)
+		return LocScript.pick("[%s] Ambil Benda Ritual: " % k + r_name, "[%s] Pick Up Ritual Relic: " % k + r_name)
 
+	var localized_name: String = LocScript.item_name(item_id, item_name)
 	var inv: InventorySystem = player.get_node_or_null("InventorySystem")
 	if inv:
 		if not inv.can_add_item(item_id):
 			var max_stack: int = inv.STACK_LIMITS.get(item_id, 1)
 			var current_qty: int = inv.get_item_quantity(item_id)
 			if current_qty >= max_stack:
-				return item_name + " (Kapasitas Penuh: %d)" % max_stack
+				return LocScript.pick("%s (Kapasitas Penuh: %d)" % [localized_name, max_stack], "%s (Full Capacity: %d)" % [localized_name, max_stack])
 			else:
-				return item_name + " (Tas Penuh!)"
+				return LocScript.pick("%s (Tas Penuh!)" % localized_name, "%s (Bag Full!)" % localized_name)
 
-	return "[E] Ambil " + item_name
+	return LocScript.pick("[%s] Ambil %s" % [k, localized_name], "[%s] Pick Up %s" % [k, localized_name])
 
 func interact(player: Node) -> void:
 	if is_picked_up:

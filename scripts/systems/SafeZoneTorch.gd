@@ -19,15 +19,18 @@ func _update_visuals() -> void:
 	light.visible = is_lit
 	flame_mesh.visible = is_lit
 
+const LocScript = preload("res://scripts/systems/Loc.gd")
+
 func get_interaction_prompt(player: Node) -> String:
+	var k: String = SettingsManager.get_action_key_text("interact")
 	if is_lit:
-		return "Obor Penolak Bala (Menyala & Melindungi)"
+		return LocScript.pick("Obor Penolak Bala (Menyala & Melindungi)", "Repellent Torch (Lit & Protecting)")
 		
 	var inv: InventorySystem = player.get_node_or_null("InventorySystem")
 	if inv and inv.has_item_id("minyak_tanah"):
-		return "[E] Nyalakan Obor Penolak Bala (Gunakan Minyak Tanah)"
+		return LocScript.pick("[%s] Nyalakan Obor Penolak Bala (Gunakan Minyak Tanah)" % k, "[%s] Light Repellent Torch (Use Kerosene)" % k)
 	else:
-		return "Obor Padam (Butuh Minyak Tanah & Korek Api)"
+		return LocScript.pick("Obor Padam (Butuh Minyak Tanah & Korek Api)", "Unlit Torch (Requires Kerosene & Matches)")
 
 func interact(player: Node) -> void:
 	if is_lit:

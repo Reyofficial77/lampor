@@ -1,6 +1,8 @@
 class_name SanitySystem
 extends Node
 
+const LocScript = preload("res://scripts/systems/Loc.gd")
+
 var max_sanity: float = 100.0
 var current_sanity: float = 100.0
 
@@ -23,6 +25,11 @@ var stare_drain: float = 28.0
 var safe_zone_regen: float = 12.0
 var house_dark_factor: float = 1.0
 
+var _sanity_tier: int = 0
+var _sanity_dialog_cooldown: float = 0.0
+var _safezone_relief_cooldown: float = 0.0
+var _was_low_sanity_before_safezone: bool = false
+
 func _ready() -> void:
 	var cfg: Dictionary = GameManager.get_sanity_settings_for_difficulty(GameManager.selected_difficulty)
 	dark_drain_light = cfg.get("dark_light", 1.0)
@@ -42,9 +49,17 @@ func set_safe_source(source: Object, active: bool) -> void:
 	else:
 		safe_sources.erase(source)
 
+func _pick_random_dialog(category: String) -> String:
+	var pool: Array[String] = LocScript.dialogue_pool(category)
+	if pool.is_empty():
+		return ""
+	return pool[randi() % pool.size()]
+
 func _process(delta: float) -> void:
 	if GameManager.current_state != GameManager.GameState.PLAYING or get_tree().paused:
 		return
+	_sanity_dialog_cooldown = maxf(0.0, _sanity_dialog_cooldown - delta)
+	_safezone_relief_cooldown = maxf(0.0, _safezone_relief_cooldown - delta)
 	if "admin_god_mode" in GameManager and bool(GameManager.get("admin_god_mode")):
 		if current_sanity < max_sanity:
 			current_sanity = max_sanity
@@ -57,6 +72,12 @@ func _process(delta: float) -> void:
 
 	if in_safe_zone:
 		delta_sanity += safe_zone_regen * delta
+		if _was_low_sanity_before_safezone and _safezone_relief_cooldown <= 0.0:
+			_was_low_sanity_before_safezone = false
+			_safezone_relief_cooldown = 32.0
+			var relief_line: String = _pick_random_dialog("safezone_relief")
+			if not relief_line.is_empty():
+				SignalBus.dialog_requested.emit(relief_line, 3.0)
 	else:
 		# Darkness drain
 		var darkness_drain: float = dark_drain_light if flashlight_is_on else dark_drain_dark
@@ -77,13 +98,41 @@ func _process(delta: float) -> void:
 	current_sanity = clamp(current_sanity + delta_sanity, 0.0, max_sanity)
 	SignalBus.player_sanity_changed.emit(current_sanity, max_sanity)
 
+	if current_sanity < 50.0:
+		_was_low_sanity_before_safezone = true
+	elif current_sanity >= 72.0:
+		_was_low_sanity_before_safezone = false
+		_sanity_tier = 0
+
+	if not in_safe_zone and current_sanity > 0.0:
+		var target_tier: int = 0
+		var cat: String = ""
+		if current_sanity <= 18.0:
+			target_tier = 3
+			cat = "sanity_critical"
+		elif current_sanity <= 35.0:
+			target_tier = 2
+			cat = "sanity_low"
+		elif current_sanity <= 55.0:
+			target_tier = 1
+			cat = "sanity_mid"
+		if target_tier > 0 and ((target_tier > _sanity_tier and _sanity_dialog_cooldown <= 4.0) or (target_tier >= 2 and _sanity_dialog_cooldown <= 0.0)):
+			_sanity_tier = maxi(_sanity_tier, target_tier)
+			_sanity_dialog_cooldown = 18.0
+			var sanity_line: String = _pick_random_dialog(cat)
+			if not sanity_line.is_empty():
+				SignalBus.dialog_requested.emit(sanity_line, 3.4)
+
 	# Update audio tension
 	var fear_ratio: float = 1.0 - (current_sanity / max_sanity)
 	AudioManager.set_heartbeat_intensity(fear_ratio if fear_ratio > 0.4 else 0.0)
 	AudioManager.set_whisper_intensity(fear_ratio if fear_ratio > 0.55 else 0.0)
 
 	if current_sanity <= 0.0:
-		SignalBus.player_death_requested.emit("Kewarasanmu hancur total karena menatap Lampor!")
+		SignalBus.player_death_requested.emit(LocScript.pick(
+			"Kewarasanmu hancur total karena menatap Lampor!",
+			"Your sanity shattered completely from staring at Lampor!"
+		))
 
 func _on_lampor_nearby(dist: float) -> void:
 	lampor_distance = dist
@@ -94,3 +143,5 @@ func _on_lampor_stare(intensity: float) -> void:
 func restore_sanity(amount: float) -> void:
 	current_sanity = clamp(current_sanity + amount, 0.0, max_sanity)
 	SignalBus.player_sanity_changed.emit(current_sanity, max_sanity)
+	if current_sanity >= 65.0:
+		_sanity_tier = 0

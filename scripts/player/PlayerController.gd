@@ -3,6 +3,7 @@ extends CharacterBody3D
 
 const PLAYER_MODEL_SCENE: PackedScene = preload("res://assets/models/player/ordinaryMan.fbx")
 const PLAYER_TEXTURE_1024: Texture2D = preload("res://assets/models/player/OrdinaryManTexture_1024x1024.png")
+const LocScript = preload("res://scripts/systems/Loc.gd")
 
 @export var walk_speed: float = 4.2
 @export var sprint_speed: float = 7.0
@@ -31,6 +32,13 @@ const ENERGY_DRINK_DURATION: float = 3.0
 const ENERGY_DRINK_COOLDOWN: float = 6.0
 var energy_drink_timer: float = 0.0
 var energy_drink_cooldown: float = 0.0
+var _sprint_from_event: bool = false
+var _stamina_dialog_cooldown: float = 0.0
+var _low_battery_warned: bool = false
+var _empty_battery_warned: bool = false
+var _was_inside_house: bool = false
+var _house_refuge_cooldown: float = 0.0
+var _ambient_dialog_cooldown: float = 0.0
 
 # Head Bobbing & Natural Motion
 var bob_freq: float = 2.4
@@ -180,6 +188,39 @@ func _process(_delta: float) -> void:
 		camera.position = initial_camera_pos
 		camera.rotation.z = 0.0
 
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_WINDOW_FOCUS_OUT or what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_PAUSED:
+		release_all_held_inputs()
+
+func release_held_sprint() -> void:
+	_sprint_from_event = false
+	virtual_sprint_pressed = false
+	is_sprinting = false
+	if Input.is_action_pressed("sprint"):
+		Input.action_release("sprint")
+
+func release_all_held_inputs() -> void:
+	release_held_sprint()
+	virtual_move_input = Vector2.ZERO
+	for action: String in ["move_forward", "move_backward", "move_left", "move_right"]:
+		if Input.is_action_pressed(action):
+			Input.action_release(action)
+
+func _input(event: InputEvent) -> void:
+	if event.is_action_pressed("sprint", true):
+		if event is InputEventKey or event is InputEventMouseButton or event is InputEventJoypadButton:
+			_sprint_from_event = true
+	elif event.is_action_released("sprint"):
+		_sprint_from_event = false
+		if Input.is_action_pressed("sprint"):
+			Input.action_release("sprint")
+
+func _emit_random_ambient_dialog(category: String, duration: float = 3.0) -> void:
+	var pool: Array[String] = LocScript.dialogue_pool(category)
+	if pool.is_empty():
+		return
+	SignalBus.dialog_requested.emit(pool[randi() % pool.size()], duration)
+
 func _unhandled_input(event: InputEvent) -> void:
 	if GameManager.current_state != GameManager.GameState.PLAYING:
 		return
@@ -243,13 +284,18 @@ func _perform_interact_or_use() -> void:
 
 func _physics_process(delta: float) -> void:
 	if GameManager.current_state != GameManager.GameState.PLAYING:
+		release_held_sprint()
 		return
+	_stamina_dialog_cooldown = maxf(0.0, _stamina_dialog_cooldown - delta)
+	_house_refuge_cooldown = maxf(0.0, _house_refuge_cooldown - delta)
+	_ambient_dialog_cooldown = maxf(0.0, _ambient_dialog_cooldown - delta)
 	if in_cutscene:
 		in_cutscene = false
 		_sync_hand_prop_visibility()
 		_sync_flashlight_state(true)
 
 	if is_hiding or is_inventory_open or (get_viewport().gui_get_focus_owner() is LineEdit):
+		release_held_sprint()
 		current_noise_level = 0.0
 		velocity = Vector3.ZERO
 		_update_fpp_camera_and_arm(delta, false)
@@ -270,8 +316,17 @@ func _physics_process(delta: float) -> void:
 
 	var unlimited_stamina: bool = god_mode or (energy_drink_timer > 0.0)
 
+	# Sync hardware Shift/sprint state so releasing Shift never leaves player stuck running on desktop
+	var is_real_desktop: bool = OS.has_feature("pc") and not DisplayServer.get_name().containsn("headless")
+	if (_sprint_from_event or is_real_desktop) and Input.is_action_pressed("sprint"):
+		if not SettingsManager.is_action_hardware_pressed("sprint"):
+			Input.action_release("sprint")
+			_sprint_from_event = false
+
 	# Sprinting & Stamina
-	var wants_sprint: bool = (Input.is_action_pressed("sprint") or virtual_sprint_pressed) and is_on_floor() and (current_stamina > 5.0 or unlimited_stamina)
+	var grounded: bool = is_on_floor() or was_on_floor or absf(velocity.y) < 2.5
+	var sprint_held: bool = Input.is_action_pressed("sprint") or virtual_sprint_pressed
+	var wants_sprint: bool = sprint_held and grounded and (current_stamina > 5.0 or unlimited_stamina)
 	var input_dir: Vector2 = Input.get_vector("move_left", "move_right", "move_forward", "move_backward")
 	if virtual_move_input.length_squared() > 0.01:
 		input_dir = virtual_move_input
@@ -289,6 +344,22 @@ func _physics_process(delta: float) -> void:
 			current_stamina = max_stamina
 		else:
 			current_stamina = min(max_stamina, current_stamina + stamina_recovery_rate * delta)
+
+	if not unlimited_stamina and is_moving and _stamina_dialog_cooldown <= 0.0:
+		if sprint_held and grounded and current_stamina <= 5.0:
+			_stamina_dialog_cooldown = 14.0
+			_emit_random_ambient_dialog("stamina_exhausted", 2.8)
+		elif is_sprinting and current_stamina <= 20.0:
+			_stamina_dialog_cooldown = 16.0
+			_emit_random_ambient_dialog("stamina_low", 2.8)
+
+	if is_inside_house and not _was_inside_house and _house_refuge_cooldown <= 0.0:
+		_house_refuge_cooldown = 45.0
+		SignalBus.dialog_requested.emit(LocScript.pick(
+			"Rumah ini sedikit melindungiku dari udara dingin di luar, tapi aku tetap harus waspada.",
+			"This house offers a brief shelter from the cold outside, though I still need to stay sharp."
+		), 3.0)
+	_was_inside_house = is_inside_house
 
 	SignalBus.player_stamina_changed.emit(current_stamina, max_stamina)
 
@@ -340,7 +411,17 @@ func _physics_process(delta: float) -> void:
 		else:
 			flashlight_battery = 100.0
 		SignalBus.flashlight_battery_changed.emit(flashlight_battery, 100.0)
+		if flashlight_battery >= 35.0:
+			_low_battery_warned = false
+		if flashlight_battery > 5.0:
+			_empty_battery_warned = false
+		if flashlight_battery > 0.0 and flashlight_battery <= 20.0 and not _low_battery_warned:
+			_low_battery_warned = true
+			_emit_random_ambient_dialog("battery_low", 3.0)
 		if flashlight_battery <= 0.0:
+			if not _empty_battery_warned:
+				_empty_battery_warned = true
+				_emit_random_ambient_dialog("battery_empty", 3.2)
 			toggle_flashlight(false)
 
 func _is_touch_device() -> bool:
@@ -456,6 +537,7 @@ func _sync_flashlight_state(emit_signal: bool = true) -> void:
 		SignalBus.flashlight_toggled.emit(flashlight_on)
 
 func enter_hiding(spot: Node) -> void:
+	release_all_held_inputs()
 	is_hiding = true
 	hiding_spot = spot
 	velocity = Vector3.ZERO
@@ -468,6 +550,9 @@ func enter_hiding(spot: Node) -> void:
 	rotation.y = hide_yaw_center
 	head.rotation.x = 0.0
 	SignalBus.player_entered_hiding.emit(true)
+	if _ambient_dialog_cooldown <= 0.0:
+		_ambient_dialog_cooldown = 14.0
+		_emit_random_ambient_dialog("hiding_enter", 2.6)
 
 func _request_exit_hiding() -> void:
 	if hiding_spot and is_instance_valid(hiding_spot) and hiding_spot.has_method("interact"):
@@ -490,6 +575,9 @@ func exit_hiding() -> void:
 			hiding_spot.occupying_player = null
 	hiding_spot = null
 	SignalBus.player_entered_hiding.emit(false)
+	if _ambient_dialog_cooldown <= 0.0:
+		_ambient_dialog_cooldown = 14.0
+		_emit_random_ambient_dialog("hiding_exit", 2.4)
 
 func _try_use_equipped_item() -> bool:
 	var item: Dictionary = inventory_system.get_equipped_item()
@@ -497,6 +585,7 @@ func _try_use_equipped_item() -> bool:
 		return false
 
 	if item.get("id") == "jamu":
+		var was_shaken: bool = sanity_system and sanity_system.current_sanity < 50.0
 		sanity_system.restore_sanity(45.0)
 		current_stamina = max_stamina
 		SignalBus.player_stamina_changed.emit(current_stamina, max_stamina)
@@ -504,14 +593,21 @@ func _try_use_equipped_item() -> bool:
 		trigger_action_animation("pick-up", 0.5)
 		AudioManager.play_sound("item_pickup", -4.0, 0.8)
 		SignalBus.item_used.emit(item)
+		if was_shaken:
+			SignalBus.dialog_requested.emit(LocScript.pick(
+				"Rasa hangat jamu ini langsung menjernihkan kepalaku...",
+				"The warm herbal elixir steadies my racing mind..."
+			), 2.8)
 		if interaction_ray:
 			interaction_ray._update_prompt()
 		return true
 	elif item.get("id") == "baterai":
 		if flashlight_battery >= 99.0:
-			SignalBus.dialog_requested.emit("Baterai senter masih penuh.", 2.0)
+			SignalBus.dialog_requested.emit(LocScript.pick("Baterai senter masih penuh.", "Flashlight battery is already full."), 2.0)
 			return true
 		flashlight_battery = minf(100.0, flashlight_battery + 50.0)
+		_low_battery_warned = false
+		_empty_battery_warned = false
 		SignalBus.flashlight_battery_changed.emit(flashlight_battery, 100.0)
 		inventory_system.consume_equipped_item()
 		trigger_action_animation("pick-up", 0.5)
@@ -522,10 +618,16 @@ func _try_use_equipped_item() -> bool:
 		return true
 	elif item.get("id") == "energy_drink":
 		if energy_drink_timer > 0.0:
-			SignalBus.dialog_requested.emit("Efek Energy Drink masih aktif (%.1f detik)! Tidak dapat di-spam." % energy_drink_timer, 1.8)
+			SignalBus.dialog_requested.emit(LocScript.pick(
+				"Efek Energy Drink masih aktif (%.1f detik)! Tidak dapat di-spam." % energy_drink_timer,
+				"Energy Drink effect is still active (%.1fs)! Cannot spam." % energy_drink_timer
+			), 1.8)
 			return true
 		if energy_drink_cooldown > 0.0:
-			SignalBus.dialog_requested.emit("Tunggu %.1f detik sebelum minum Energy Drink lagi." % energy_drink_cooldown, 1.8)
+			SignalBus.dialog_requested.emit(LocScript.pick(
+				"Tunggu %.1f detik sebelum minum Energy Drink lagi." % energy_drink_cooldown,
+				"Wait %.1fs before drinking another Energy Drink." % energy_drink_cooldown
+			), 1.8)
 			return true
 		energy_drink_timer = ENERGY_DRINK_DURATION
 		energy_drink_cooldown = ENERGY_DRINK_COOLDOWN
@@ -534,7 +636,10 @@ func _try_use_equipped_item() -> bool:
 		inventory_system.consume_equipped_item()
 		trigger_action_animation("drink", 0.65)
 		AudioManager.play_sound("energy_drink", 1.0)
-		SignalBus.dialog_requested.emit("Energy Drink diminum! Stamina penuh 100% selama 3 detik!", 3.0)
+		SignalBus.dialog_requested.emit(LocScript.pick(
+			"Energy Drink diminum! Stamina penuh 100% selama 3 detik!",
+			"Energy Drink consumed! Full 100% stamina for 3 seconds!"
+		), 3.0)
 		SignalBus.item_used.emit(item)
 		if interaction_ray:
 			interaction_ray._update_prompt()
@@ -546,12 +651,18 @@ func _try_use_equipped_item() -> bool:
 				if bool(lampor_node.call("repel_from_kentongan", 5.0)):
 					repelled_any = true
 		if not repelled_any:
-			SignalBus.dialog_requested.emit("Lampor belum turun ke desa. Simpan kentongan untuk nanti!", 2.5)
+			SignalBus.dialog_requested.emit(LocScript.pick(
+				"Lampor belum turun ke desa. Simpan kentongan untuk nanti!",
+				"Lampor hasn't descended into the village yet. Save your kentongan!"
+			), 2.5)
 			return true
 		inventory_system.consume_equipped_item()
 		trigger_action_animation("kentongan_hit", 0.55)
 		AudioManager.play_sound("kentongan", 2.0)
-		SignalBus.dialog_requested.emit("Kentongan dibunyikan! Lampor terusir selama 5 detik!", 3.0)
+		SignalBus.dialog_requested.emit(LocScript.pick(
+			"Kentongan dibunyikan! Lampor terusir selama 5 detik!",
+			"Kentongan struck! Lampor driven back for 5 seconds!"
+		), 3.0)
 		SignalBus.item_used.emit(item)
 		if interaction_ray:
 			interaction_ray._update_prompt()

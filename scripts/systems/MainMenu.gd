@@ -1,9 +1,12 @@
 class_name MainMenu
 extends Control
 
-const GAME_VERSION: String = "v1.2.8"
+const LocScript = preload("res://scripts/systems/Loc.gd")
+const GAME_VERSION: String = "v1.2.9"
 const FALLBACK_REDEEM_CODES: Dictionary = {
-	"LAMPORGIFT": {"type": "coins", "quantity": 2500, "description": "hadiah untuk kalian!"}
+	"LAMPORGIFT": {"type": "coins", "quantity": 2500, "description": "hadiah untuk kalian!"},
+	"FOREVERYONE": {"type": "coins", "quantity": 5000, "description": "Hadiah untuk semua pemain!", "description_en": "A gift for everyone!"},
+	"LAMPORLOVER": {"type": "coins", "quantity": 10000, "description": "Hadiah spesial pecinta Lampor!", "description_en": "Special gift for Lampor fans!"}
 }
 
 var horror_backdrop: Control
@@ -83,7 +86,11 @@ var camera_sensitivity_value: Label
 var brightness_value: Label
 var volume_value: Label
 var graphics_option: OptionButton
+var language_option: OptionButton
 var start_button: Button
+var guide_rich_text: RichTextLabel
+var _listening_keybind_action: String = ""
+var _keybind_buttons: Dictionary = {}
 
 func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -95,6 +102,7 @@ func _ready() -> void:
 	UpdateManager.update_failed.connect(_on_update_failed)
 	UpdateManager.up_to_date.connect(_on_update_up_to_date)
 	UpdateManager.fix_notes_updated.connect(_on_fix_notes_updated)
+	SettingsManager.keybinds_changed.connect(_on_settings_keybinds_changed)
 	get_viewport().size_changed.connect(_apply_layout)
 	if main_content:
 		main_content.minimum_size_changed.connect(_sync_menu_anchor_position)
@@ -167,34 +175,34 @@ func _build_menu() -> void:
 	main_content.add_child(menu_buttons)
 
 	var has_save: bool = GameManager.has_saved_run()
-	continue_button = _make_nav_button("LANJUTKAN MALAM", true)
+	continue_button = _make_nav_button(LocScript.pick("LANJUTKAN MALAM", "CONTINUE NIGHT"), true)
 	continue_button.visible = has_save
 	continue_button.pressed.connect(_on_continue_pressed)
 	menu_buttons.add_child(continue_button)
 
-	start_button = _make_nav_button("MULAI PERMAINAN", not has_save)
+	start_button = _make_nav_button(LocScript.pick("MULAI PERMAINAN", "START GAME"), not has_save)
 	start_button.pressed.connect(func() -> void: _open_modal(warning_overlay, warning_panel))
 	menu_buttons.add_child(start_button)
 
-	var shop_button := _make_nav_button("TOKO BEKAL")
+	var shop_button := _make_nav_button(LocScript.pick("TOKO BEKAL", "SUPPLY SHOP"))
 	shop_button.pressed.connect(func() -> void:
 		_refresh_shop_display()
 		_open_modal(shop_overlay, shop_panel)
 	)
 	menu_buttons.add_child(shop_button)
 
-	var settings_button := _make_nav_button("PENGATURAN & PANDUAN")
+	var settings_button := _make_nav_button(LocScript.pick("PENGATURAN & PANDUAN", "SETTINGS & GUIDE"))
 	settings_button.pressed.connect(func() -> void:
 		_select_settings_tab(0)
 		_open_modal(settings_overlay, settings_panel)
 	)
 	menu_buttons.add_child(settings_button)
 
-	fix_notes_button = _make_nav_button("CATATAN PEMBARUAN")
+	fix_notes_button = _make_nav_button(LocScript.pick("CATATAN PEMBARUAN", "PATCH NOTES"))
 	fix_notes_button.pressed.connect(_show_fix_notes)
 	menu_buttons.add_child(fix_notes_button)
 
-	var credits_button := _make_nav_button("HAK CIPTA")
+	var credits_button := _make_nav_button(LocScript.pick("HAK CIPTA", "CREDITS"))
 	credits_button.pressed.connect(func() -> void: _open_modal(credits_overlay, credits_panel))
 	menu_buttons.add_child(credits_button)
 
@@ -207,7 +215,7 @@ func _build_menu() -> void:
 	add_child(top_right_bar)
 
 	update_button = Button.new()
-	update_button.text = "UPDATE TERSEDIA"
+	update_button.text = LocScript.pick("UPDATE TERSEDIA", "UPDATE AVAILABLE")
 	update_button.visible = false
 	update_button.custom_minimum_size = Vector2(0.0, 36.0)
 	HorrorTheme.style_button(update_button, "primary", 11, true)
@@ -222,7 +230,7 @@ func _build_menu() -> void:
 	add_child(copyright_label)
 
 	exit_button = Button.new()
-	exit_button.text = "KELUAR"
+	exit_button.text = LocScript.pick("KELUAR", "QUIT")
 	HorrorTheme.style_button(exit_button, "ghost", 12, true)
 	exit_button.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
 	exit_button.grow_horizontal = Control.GROW_DIRECTION_BEGIN
@@ -251,6 +259,7 @@ func _open_modal(overlay: ColorRect, panel: PanelContainer) -> void:
 		first_btn.call_deferred("grab_focus")
 
 func _close_topmost_modal() -> bool:
+	_cancel_keybind_listening()
 	for i in range(modal_overlays.size() - 1, -1, -1):
 		var ov: ColorRect = modal_overlays[i]
 		if is_instance_valid(ov) and ov.visible:
@@ -272,13 +281,16 @@ func _find_first_focusable_button(root: Node) -> Button:
 	return null
 
 func _build_warning_modal() -> void:
-	var modal: Dictionary = _create_modal("PERINGATAN KONTEN")
+	var modal: Dictionary = _create_modal(LocScript.pick("PERINGATAN KONTEN", "CONTENT WARNING"))
 	warning_overlay = modal["overlay"] as ColorRect
 	warning_panel = modal["panel"] as PanelContainer
 	var body: VBoxContainer = modal["body"] as VBoxContainer
 
 	var warning := _make_label(
-		"Permainan ini mengandung jumpscare mendadak, suara keras, kilatan cahaya, dan visual horor.\n\nAtur volume pada tingkat yang nyaman dan hentikan permainan bila merasa tidak nyaman.",
+		LocScript.pick(
+			"Permainan ini mengandung jumpscare mendadak, suara keras, kilatan cahaya, dan visual horor.\n\nAtur volume pada tingkat yang nyaman dan hentikan permainan bila merasa tidak nyaman.",
+			"This game features sudden jumpscares, loud audio, flashing lights, and horror visuals.\n\nPlease set your volume comfortably and stop playing if you feel unwell."
+		),
 		15,
 		HorrorTheme.ON_SURFACE,
 		HORIZONTAL_ALIGNMENT_LEFT,
@@ -292,11 +304,11 @@ func _build_warning_modal() -> void:
 	buttons.alignment = BoxContainer.ALIGNMENT_END
 	body.add_child(buttons)
 
-	var back := _make_button("KEMBALI", false, "ghost")
+	var back := _make_button(LocScript.pick("KEMBALI", "BACK"), false, "ghost")
 	back.pressed.connect(func() -> void: warning_overlay.visible = false)
 	buttons.add_child(back)
 
-	var cont_btn := _make_button("SAYA MENGERTI", true)
+	var cont_btn := _make_button(LocScript.pick("SAYA MENGERTI", "I UNDERSTAND"), true)
 	cont_btn.pressed.connect(func() -> void:
 		warning_overlay.visible = false
 		_update_nightmare_status()
@@ -305,16 +317,22 @@ func _build_warning_modal() -> void:
 	buttons.add_child(cont_btn)
 
 func _build_difficulty_modal() -> void:
-	var modal: Dictionary = _create_modal("PILIH TINGKAT KESULITAN")
+	var modal: Dictionary = _create_modal(LocScript.pick("PILIH TINGKAT KESULITAN", "SELECT DIFFICULTY"))
 	difficulty_overlay = modal["overlay"] as ColorRect
 	difficulty_panel = modal["panel"] as PanelContainer
 	var body: VBoxContainer = modal["body"] as VBoxContainer
-	var hint := _make_label("Selesaikan ritual sebelum pukul 05.00 WIB. Tingkat lebih tinggi mempercepat malam dan perburuan Lampor.", 13, HorrorTheme.ON_SURFACE_VARIANT, HORIZONTAL_ALIGNMENT_LEFT, "body-md")
+	var hint := _make_label(
+		LocScript.pick(
+			"Selesaikan ritual sebelum pukul 05.00 WIB. Tingkat lebih tinggi mempercepat malam dan perburuan Lampor.",
+			"Finish the ritual before 05:00 WIB. Higher difficulties accelerate the night and Lampor's hunt."
+		),
+		13, HorrorTheme.ON_SURFACE_VARIANT, HORIZONTAL_ALIGNMENT_LEFT, "body-md"
+	)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_child(hint)
 	difficulty_buttons.clear()
 
-	var tutorial_btn := _make_button("TUTORIAL PEMULA  ·  Panduan Interaktif (Easy)", false, "ghost")
+	var tutorial_btn := _make_button(LocScript.pick("TUTORIAL PEMULA  ·  Panduan Interaktif (Easy)", "BEGINNER TUTORIAL  ·  Interactive Guide (Easy)"), false, "ghost")
 	tutorial_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	tutorial_btn.pressed.connect(func() -> void:
 		for overlay: ColorRect in modal_overlays:
@@ -329,25 +347,25 @@ func _build_difficulty_modal() -> void:
 
 	body.add_child(HorrorTheme.make_hairline_divider())
 
-	var easy := _make_button("EASY  ·  Malam Sunyi (1 mnt = 4,5 dtk)")
+	var easy := _make_button(LocScript.pick("EASY  ·  Malam Sunyi (1 mnt = 4,5 dtk)", "EASY  ·  Quiet Night (1 min = 4.5s)"))
 	easy.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	easy.pressed.connect(func() -> void: _start_with_difficulty(GameManager.Difficulty.EASY))
 	body.add_child(easy)
 	difficulty_buttons.append(easy)
 
-	var normal := _make_button("NORMAL  ·  Malam Keramat (1 mnt = 3 dtk)")
+	var normal := _make_button(LocScript.pick("NORMAL  ·  Malam Keramat (1 mnt = 3 dtk)", "NORMAL  ·  Sacred Night (1 min = 3s)"))
 	normal.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	normal.pressed.connect(func() -> void: _start_with_difficulty(GameManager.Difficulty.NORMAL))
 	body.add_child(normal)
 	difficulty_buttons.append(normal)
 
-	var hard := _make_button("HARD  ·  Malam Jahanam (1 mnt = 1 dtk)")
+	var hard := _make_button(LocScript.pick("HARD  ·  Malam Jahanam (1 mnt = 1 dtk)", "HARD  ·  Cursed Night (1 min = 1s)"))
 	hard.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	hard.pressed.connect(func() -> void: _start_with_difficulty(GameManager.Difficulty.HARD))
 	body.add_child(hard)
 	difficulty_buttons.append(hard)
 
-	nightmare_button = _make_button("NIGHTMARE  ·  Kutukan Keranda (1 mnt = 0,5 dtk)", true)
+	nightmare_button = _make_button(LocScript.pick("NIGHTMARE  ·  Kutukan Keranda (1 mnt = 0,5 dtk)", "NIGHTMARE  ·  Coffin Curse (1 min = 0.5s)"), true)
 	nightmare_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	nightmare_button.pressed.connect(func() -> void: _start_with_difficulty(GameManager.Difficulty.NIGHTMARE))
 	body.add_child(nightmare_button)
@@ -357,13 +375,13 @@ func _build_difficulty_modal() -> void:
 	nightmare_lock_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_child(nightmare_lock_label)
 
-	var back := _make_button("KEMBALI", false, "ghost")
+	var back := _make_button(LocScript.pick("KEMBALI", "BACK"), false, "ghost")
 	back.pressed.connect(func() -> void: difficulty_overlay.visible = false)
 	body.add_child(back)
 	difficulty_buttons.append(back)
 
 func _build_settings_modal() -> void:
-	var modal: Dictionary = _create_modal("PENGATURAN & PANDUAN")
+	var modal: Dictionary = _create_modal(LocScript.pick("PENGATURAN & PANDUAN", "SETTINGS & GUIDE"))
 	settings_overlay = modal["overlay"] as ColorRect
 	settings_panel = modal["panel"] as PanelContainer
 	var body: VBoxContainer = modal["body"] as VBoxContainer
@@ -372,12 +390,12 @@ func _build_settings_modal() -> void:
 	tab_row.add_theme_constant_override("separation", 8)
 	body.add_child(tab_row)
 
-	settings_tab_btn = _make_button("PENGATURAN", true)
+	settings_tab_btn = _make_button(LocScript.pick("PENGATURAN", "SETTINGS"), true)
 	settings_tab_btn.custom_minimum_size.y = 40.0
 	settings_tab_btn.pressed.connect(func() -> void: _select_settings_tab(0))
 	tab_row.add_child(settings_tab_btn)
 
-	guide_tab_btn = _make_button("PANDUAN BERMAIN", false, "ghost")
+	guide_tab_btn = _make_button(LocScript.pick("PANDUAN BERMAIN", "HOW TO PLAY"), false, "ghost")
 	guide_tab_btn.custom_minimum_size.y = 40.0
 	guide_tab_btn.pressed.connect(func() -> void: _select_settings_tab(1))
 	tab_row.add_child(guide_tab_btn)
@@ -406,26 +424,47 @@ func _build_settings_modal() -> void:
 	settings_tab_box.add_theme_constant_override("separation", 10)
 	tab_stack.add_child(settings_tab_box)
 
+	var lang_row := HBoxContainer.new()
+	var lang_label := _make_label(LocScript.pick("Bahasa / Language", "Language"), 13, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "body-md")
+	lang_label.custom_minimum_size.x = 132.0
+	lang_row.add_child(lang_label)
+	language_option = OptionButton.new()
+	language_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	language_option.custom_minimum_size.y = 40.0
+	language_option.add_item("Indonesia (ID)")
+	language_option.add_item("English (EN-US)")
+	language_option.select(1 if SettingsManager.is_en() else 0)
+	language_option.item_selected.connect(_on_language_selected)
+	HorrorTheme.style_option_button(language_option)
+	lang_row.add_child(language_option)
+	settings_tab_box.add_child(lang_row)
+
 	var initial_volume: float = clampf(db_to_linear(AudioServer.get_bus_volume_db(0)) * 100.0, 0.0, 100.0)
-	volume_slider = _add_slider_setting(settings_tab_box, "Volume", initial_volume, 0.0, 100.0, 1.0, _on_volume_changed)
-	mouse_sensitivity_slider = _add_slider_setting(settings_tab_box, "Sensitivitas Mouse", SettingsManager.mouse_sensitivity * 100.0, 25.0, 200.0, 5.0, _on_mouse_sensitivity_changed)
-	camera_sensitivity_slider = _add_slider_setting(settings_tab_box, "Sensitivitas Kamera", SettingsManager.camera_sensitivity * 100.0, 25.0, 200.0, 5.0, _on_camera_sensitivity_changed)
-	var sensitivity_note := _make_label("Mouse untuk desktop · Kamera untuk geser layar sentuh", 11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm")
+	volume_slider = _add_slider_setting(settings_tab_box, LocScript.pick("Volume", "Volume"), initial_volume, 0.0, 100.0, 1.0, _on_volume_changed)
+	mouse_sensitivity_slider = _add_slider_setting(settings_tab_box, LocScript.pick("Sensitivitas Mouse", "Mouse Sensitivity"), SettingsManager.mouse_sensitivity * 100.0, 25.0, 200.0, 5.0, _on_mouse_sensitivity_changed)
+	camera_sensitivity_slider = _add_slider_setting(settings_tab_box, LocScript.pick("Sensitivitas Kamera", "Camera Sensitivity"), SettingsManager.camera_sensitivity * 100.0, 25.0, 200.0, 5.0, _on_camera_sensitivity_changed)
+	var sensitivity_note := _make_label(
+		LocScript.pick("Mouse untuk desktop · Kamera untuk geser layar sentuh", "Mouse for desktop · Camera for touch swipe"),
+		11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm"
+	)
 	settings_tab_box.add_child(sensitivity_note)
-	brightness_slider = _add_slider_setting(settings_tab_box, "Kecerahan", SettingsManager.brightness * 100.0, 50.0, 150.0, 5.0, _on_brightness_changed)
+	brightness_slider = _add_slider_setting(settings_tab_box, LocScript.pick("Kecerahan", "Brightness"), SettingsManager.brightness * 100.0, 50.0, 150.0, 5.0, _on_brightness_changed)
 
 	var graphics_row := HBoxContainer.new()
-	var graphics_label := _make_label("Grafik", 13, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "body-md")
+	var graphics_label := _make_label(LocScript.pick("Grafik", "Graphics"), 13, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "body-md")
 	graphics_label.custom_minimum_size.x = 132.0
 	graphics_row.add_child(graphics_label)
 	graphics_option = OptionButton.new()
 	graphics_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	graphics_option.custom_minimum_size.y = 40.0
-	graphics_option.add_item("Otomatis (Perangkat)")
+	graphics_option.add_item(LocScript.pick("Otomatis (Perangkat)", "Auto (Device)"))
 	graphics_option.add_item("Low")
 	graphics_option.add_item("Medium")
 	graphics_option.add_item("High")
-	graphics_option.tooltip_text = "Otomatis menggunakan preset %s berdasarkan perangkat ini" % SettingsManager.recommended_graphics_quality.capitalize()
+	graphics_option.tooltip_text = LocScript.pick(
+		"Otomatis menggunakan preset %s berdasarkan perangkat ini" % SettingsManager.recommended_graphics_quality.capitalize(),
+		"Auto selects the %s preset for this device" % SettingsManager.recommended_graphics_quality.capitalize()
+	)
 	match SettingsManager.graphics_quality:
 		"auto": graphics_option.select(0)
 		"low": graphics_option.select(1)
@@ -437,53 +476,94 @@ func _build_settings_modal() -> void:
 	graphics_row.add_child(graphics_option)
 	settings_tab_box.add_child(graphics_row)
 
-	fullscreen_button = _make_button("GANTI MODE LAYAR")
+	fullscreen_button = _make_button(LocScript.pick("GANTI MODE LAYAR", "TOGGLE FULLSCREEN"))
 	fullscreen_button.pressed.connect(_toggle_fullscreen)
 	settings_tab_box.add_child(fullscreen_button)
 
 	settings_tab_box.add_child(HorrorTheme.make_hairline_divider())
 
+	var keybinds_title := _make_label(LocScript.pick("PENGATURAN TOMBOL (KEYBINDS)", "KEYBINDINGS"), 13, HorrorTheme.PRIMARY, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
+	settings_tab_box.add_child(keybinds_title)
+	var keybinds_hint := _make_label(
+		LocScript.pick("Klik tombol untuk mengganti tombol kontrol (Esc untuk batal).", "Click a binding to assign a new key or mouse button (Esc to cancel)."),
+		11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm"
+	)
+	keybinds_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	settings_tab_box.add_child(keybinds_hint)
+
+	_keybind_buttons.clear()
+	for action: String in SettingsManager.REBINDABLE_ACTIONS:
+		var k_row := HBoxContainer.new()
+		k_row.mouse_filter = Control.MOUSE_FILTER_PASS
+		k_row.add_theme_constant_override("separation", 8)
+		var k_lbl := _make_label(LocScript.action_label(action), 12, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "body-md")
+		k_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		k_row.add_child(k_lbl)
+		var k_btn := _make_button(SettingsManager.get_action_key_text(action), false, "secondary")
+		k_btn.custom_minimum_size = Vector2(118.0, 36.0)
+		k_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
+		k_btn.pressed.connect(func() -> void: _begin_keybind_listen(action))
+		k_row.add_child(k_btn)
+		settings_tab_box.add_child(k_row)
+		_keybind_buttons[action] = k_btn
+
+	var reset_kb_btn := _make_button(LocScript.pick("RESET TOMBOL BAWAAN", "RESET DEFAULT KEYBINDS"), false, "ghost")
+	reset_kb_btn.pressed.connect(func() -> void:
+		_cancel_keybind_listening()
+		SettingsManager.reset_keybinds()
+		_refresh_keybind_buttons()
+	)
+	settings_tab_box.add_child(reset_kb_btn)
+
+	settings_tab_box.add_child(HorrorTheme.make_hairline_divider())
+
 	auto_update_check = CheckButton.new()
-	auto_update_check.text = "Unduh & pasang update otomatis"
+	auto_update_check.text = LocScript.pick("Unduh & pasang update otomatis", "Auto-download & install updates")
 	auto_update_check.custom_minimum_size.y = 42.0
 	auto_update_check.button_pressed = SettingsManager.auto_update
 	auto_update_check.toggled.connect(SettingsManager.set_auto_update)
 	HorrorTheme.style_check_button(auto_update_check)
 	settings_tab_box.add_child(auto_update_check)
 
-	update_check_button = _make_button("PERIKSA PEMBARUAN GAME")
+	update_check_button = _make_button(LocScript.pick("PERIKSA PEMBARUAN GAME", "CHECK FOR UPDATES"))
 	update_check_button.pressed.connect(func() -> void:
-		update_check_button.text = "MEMERIKSA PEMBARUAN..."
-		update_status_label.text = "Menghubungi GitHub..."
+		update_check_button.text = LocScript.pick("MEMERIKSA PEMBARUAN...", "CHECKING FOR UPDATES...")
+		update_status_label.text = LocScript.pick("Menghubungi GitHub...", "Contacting GitHub...")
 		UpdateManager.check_for_updates(true)
 	)
 	settings_tab_box.add_child(update_check_button)
 
-	update_status_label = _make_label("Pembaruan diperiksa melalui branch main GitHub.", 11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm")
+	update_status_label = _make_label(
+		LocScript.pick("Pembaruan diperiksa melalui branch main GitHub.", "Updates are checked from the GitHub main branch."),
+		11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm"
+	)
 	update_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	settings_tab_box.add_child(update_status_label)
 
 	settings_tab_box.add_child(HorrorTheme.make_hairline_divider())
 
-	var redeem_title := _make_label("KODE REDEEM", 13, HorrorTheme.PRIMARY, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
+	var redeem_title := _make_label(LocScript.pick("KODE REDEEM", "REDEEM CODE"), 13, HorrorTheme.PRIMARY, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
 	settings_tab_box.add_child(redeem_title)
 	var redeem_row := HBoxContainer.new()
 	redeem_row.add_theme_constant_override("separation", 8)
 	redeem_input = LineEdit.new()
-	redeem_input.placeholder_text = "Masukkan kode redeem"
+	redeem_input.placeholder_text = LocScript.pick("Masukkan kode redeem", "Enter redeem code")
 	redeem_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	redeem_input.custom_minimum_size.y = 44.0
 	redeem_input.max_length = 32
 	HorrorTheme.style_line_edit(redeem_input)
 	redeem_row.add_child(redeem_input)
-	var redeem_button := _make_button("TUKAR", true)
+	var redeem_button := _make_button(LocScript.pick("TUKAR", "REDEEM"), true)
 	redeem_button.custom_minimum_size = Vector2(96.0, 44.0)
 	redeem_button.size_flags_horizontal = Control.SIZE_SHRINK_END
 	redeem_button.pressed.connect(_on_redeem_pressed)
 	redeem_row.add_child(redeem_button)
 	settings_tab_box.add_child(redeem_row)
 
-	redeem_result_label = _make_label("Setiap kode hanya dapat digunakan sekali pada save ini.", 11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm")
+	redeem_result_label = _make_label(
+		LocScript.pick("Setiap kode hanya dapat digunakan sekali pada save ini.", "Each code can only be redeemed once per save."),
+		11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm"
+	)
 	redeem_result_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	settings_tab_box.add_child(redeem_result_label)
 
@@ -494,6 +574,7 @@ func _build_settings_modal() -> void:
 	tab_stack.add_child(guide_tab_box)
 
 	var guide := RichTextLabel.new()
+	guide_rich_text = guide
 	guide.bbcode_enabled = true
 	guide.fit_content = true
 	guide.scroll_active = false
@@ -505,13 +586,76 @@ func _build_settings_modal() -> void:
 	guide.add_theme_font_size_override("normal_font_size", 14)
 	guide.add_theme_font_size_override("bold_font_size", 14)
 	guide.add_theme_constant_override("line_separation", 6)
-	guide.text = "[color=#ffb4ac][b]TUJUAN PERMAINAN[/b][/color]\nBertahan mulai pukul 01.00 WIB hingga ritual tuntas sebelum pukul 05.00 WIB. Nyalakan 5 obor, amankan 3 pintu rumah, kumpulkan 4 benda ritual, lalu bakar semuanya di tungku balai desa. Bila pukul 05.00 WIB tiba sebelum tuntas, Lampor akan langsung melahapmu.\n\n[color=#ffb4ac][b]KONTROL DESKTOP[/b][/color]\n• W, A, S, D: Bergerak\n• Mouse: Melihat ke sekitar\n• Shift: Berlari\n• E: Interaksi, nyalakan obor, palang pintu, sembunyi, & pakai Jamu/Baterai/Energy Drink/Kentongan\n• F: Senter\n• 1-5: Pilih slot hotbar\n• Tab / B: Buka tas inventori (15 slot)\n• G: Jatuhkan barang\n• Esc: Jeda permainan\n\n[color=#ffb4ac][b]KONTROL MOBILE[/b][/color]\nGunakan joystick kiri untuk bergerak, geser sisi kanan layar untuk menoleh, dan sentuh tombol aksi di layar untuk lari, interaksi (ikon Tangan), senter, tas, serta jeda.\n\n[color=#ffb4ac][b]MENGHADAPI LAMPOR[/b][/color]\n• Jangan menatap langsung keranda Lampor; segera palingkan pandangan.\n• Saat lonceng mendekat, matikan senter dan bersembunyilah di rumah atau lemari.\n• Pukul Kentongan [E] untuk mengusir kejaran Lampor selama 5 detik (hanya tersedia di Toko Bekal, 1x pakai, maks. 5).
-• Minum Energy Drink [E] untuk mengunci stamina 100% selama 3 detik (ada jeda anti-spam).\n• Area obor yang menyala membantu memulihkan kewarasan.\n• Mode Nightmare terbuka setelah 5 kemenangan."
+	guide.text = _build_guide_bbcode()
 	guide_tab_box.add_child(guide)
 
-	var close := _make_button("TUTUP", false, "ghost")
-	close.pressed.connect(func() -> void: settings_overlay.visible = false)
+	var close := _make_button(LocScript.pick("TUTUP", "CLOSE"), false, "ghost")
+	close.pressed.connect(func() -> void:
+		_cancel_keybind_listening()
+		settings_overlay.visible = false
+	)
 	body.add_child(close)
+
+func _build_guide_bbcode() -> String:
+	var move_k: String = SettingsManager.get_move_keys_summary()
+	var sprint_k: String = SettingsManager.get_action_key_text("sprint")
+	var act_k: String = SettingsManager.get_action_key_text("interact")
+	var flash_k: String = SettingsManager.get_action_key_text("flashlight")
+	var bag_k: String = SettingsManager.get_action_key_text("toggle_inventory")
+	var drop_k: String = SettingsManager.get_action_key_text("drop_item")
+	var slot_k: String = "%s-%s" % [SettingsManager.get_action_key_text("slot_1"), SettingsManager.get_action_key_text("slot_5")]
+	if LocScript.is_en():
+		return "[color=#ffb4ac][b]OBJECTIVE[/b][/color]\nSurvive from 01:00 WIB until the ritual completes before 05:00 WIB. Light 5 torches, barricade 3 house doors, collect 4 ritual relics, and burn them all at the Village Hall furnace. If 05:00 WIB strikes before completion, Lampor devours your soul.\n\n[color=#ffb4ac][b]DESKTOP CONTROLS[/b][/color]\n• %s: Move\n• Mouse: Look around\n• %s: Sprint (Hold)\n• %s: Interact, light torches, barricade doors, hide, & use Herbal Elixir / Battery / Energy Drink / Kentongan\n• %s: Flashlight\n• %s: Select hotbar slot\n• %s: Toggle inventory bag (15 slots)\n• %s: Drop item\n• Esc: Pause game\n\n[color=#ffb4ac][b]MOBILE CONTROLS[/b][/color]\nUse the left joystick to move, swipe the right half to look, and tap action buttons to run, interact (Hand icon), toggle flashlight, open bag, or pause.\n\n[color=#ffb4ac][b]SURVIVING LAMPOR[/b][/color]\n• Never stare directly at Lampor's green coffin; look away immediately.\n• When bells chime nearby, kill your flashlight and hide inside houses or closets.\n• Strike Kentongan [%s] to repel Lampor's chase for 5 seconds (Supply Shop only, 1-time use, max 5).\n• Drink Energy Drink [%s] to lock 100%% stamina for 3 seconds (anti-spam cooldown).\n• Lit torch areas steadily restore your Sanity.\n• Nightmare mode unlocks after 5 victories." % [move_k, sprint_k, act_k, flash_k, slot_k, bag_k, drop_k, act_k, act_k]
+	return "[color=#ffb4ac][b]TUJUAN PERMAINAN[/b][/color]\nBertahan mulai pukul 01.00 WIB hingga ritual tuntas sebelum pukul 05.00 WIB. Nyalakan 5 obor, amankan 3 pintu rumah, kumpulkan 4 benda ritual, lalu bakar semuanya di tungku balai desa. Bila pukul 05.00 WIB tiba sebelum tuntas, Lampor akan langsung melahapmu.\n\n[color=#ffb4ac][b]KONTROL DESKTOP[/b][/color]\n• %s: Bergerak\n• Mouse: Melihat ke sekitar\n• %s: Berlari (Tahan)\n• %s: Interaksi, nyalakan obor, palang pintu, sembunyi, & pakai Jamu/Baterai/Energy Drink/Kentongan\n• %s: Senter\n• %s: Pilih slot hotbar\n• %s: Buka tas inventori (15 slot)\n• %s: Jatuhkan barang\n• Esc: Jeda permainan\n\n[color=#ffb4ac][b]KONTROL MOBILE[/b][/color]\nGunakan joystick kiri untuk bergerak, geser sisi kanan layar untuk menoleh, dan sentuh tombol aksi di layar untuk lari, interaksi (ikon Tangan), senter, tas, serta jeda.\n\n[color=#ffb4ac][b]MENGHADAPI LAMPOR[/b][/color]\n• Jangan menatap langsung keranda Lampor; segera palingkan pandangan.\n• Saat lonceng mendekat, matikan senter dan bersembunyilah di rumah atau lemari.\n• Pukul Kentongan [%s] untuk mengusir kejaran Lampor selama 5 detik (hanya tersedia di Toko Bekal, 1x pakai, maks. 5).\n• Minum Energy Drink [%s] untuk mengunci stamina 100%% selama 3 detik (ada jeda anti-spam).\n• Area obor yang menyala membantu memulihkan kewarasan.\n• Mode Nightmare terbuka setelah 5 kemenangan." % [move_k, sprint_k, act_k, flash_k, slot_k, bag_k, drop_k, act_k, act_k]
+
+func _on_language_selected(index: int) -> void:
+	var target_lang: String = "en_US" if index == 1 else "id"
+	if target_lang != SettingsManager.language:
+		SettingsManager.set_language(target_lang)
+		_rebuild_for_language_change()
+
+func _rebuild_for_language_change() -> void:
+	_listening_keybind_action = ""
+	_keybind_buttons.clear()
+	modal_overlays.clear()
+	modal_panels.clear()
+	difficulty_buttons.clear()
+	for child: Node in get_children():
+		remove_child(child)
+		child.queue_free()
+	_build_menu()
+	_apply_layout()
+	_select_settings_tab(0)
+	_open_modal(settings_overlay, settings_panel)
+
+func _begin_keybind_listen(action: String) -> void:
+	_listening_keybind_action = action
+	_refresh_keybind_buttons()
+
+func _cancel_keybind_listening() -> void:
+	if _listening_keybind_action.is_empty():
+		return
+	_listening_keybind_action = ""
+	_refresh_keybind_buttons()
+
+func _on_settings_keybinds_changed() -> void:
+	_refresh_keybind_buttons()
+	if guide_rich_text:
+		guide_rich_text.text = _build_guide_bbcode()
+
+func _refresh_keybind_buttons() -> void:
+	for action: String in _keybind_buttons.keys():
+		var btn: Button = _keybind_buttons[action] as Button
+		if not is_instance_valid(btn):
+			continue
+		if action == _listening_keybind_action:
+			btn.text = LocScript.pick("TEKAN TOMBOL...", "PRESS KEY...")
+			HorrorTheme.style_button(btn, "primary", 11, true)
+		else:
+			btn.text = SettingsManager.get_action_key_text(action)
+			HorrorTheme.style_button(btn, "secondary", 11, true)
+	if guide_rich_text:
+		guide_rich_text.text = _build_guide_bbcode()
 
 func _select_settings_tab(tab_idx: int) -> void:
 	var show_settings: bool = (tab_idx == 0)
@@ -548,22 +692,22 @@ func _add_slider_setting(parent: VBoxContainer, title_text: String, initial_valu
 	parent.add_child(row)
 	if title_text == "Volume":
 		volume_value = value_label
-	elif title_text == "Sensitivitas Mouse":
+	elif title_text == "Sensitivitas Mouse" or title_text == "Mouse Sensitivity":
 		mouse_sensitivity_value = value_label
-	elif title_text == "Sensitivitas Kamera":
+	elif title_text == "Sensitivitas Kamera" or title_text == "Camera Sensitivity":
 		camera_sensitivity_value = value_label
-	elif title_text == "Kecerahan":
+	elif title_text == "Kecerahan" or title_text == "Brightness":
 		brightness_value = value_label
 	slider.value_changed.connect(callback)
 	return slider
 
 func _build_shop_modal() -> void:
-	var modal: Dictionary = _create_modal("TOKO BEKAL")
+	var modal: Dictionary = _create_modal(LocScript.pick("TOKO BEKAL", "SUPPLY SHOP"))
 	shop_overlay = modal["overlay"] as ColorRect
 	shop_panel = modal["panel"] as PanelContainer
 	var body: VBoxContainer = modal["body"] as VBoxContainer
 
-	shop_balance_label = _make_label("Koin Emas: %d" % GameManager.coins, 12, HorrorTheme.RELIC_BRASS, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm")
+	shop_balance_label = _make_label(LocScript.pick("Koin Emas: %d" % GameManager.coins, "Gold Coins: %d" % GameManager.coins), 12, HorrorTheme.RELIC_BRASS, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm")
 	shop_balance_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_child(shop_balance_label)
 
@@ -586,20 +730,21 @@ func _build_shop_modal() -> void:
 	offers.add_theme_constant_override("separation", 2)
 	shop_margin.add_child(offers)
 
-	_add_shop_offer(offers, "Jamu Tolak Bala x1", "Pulihkan 45 kewarasan dan seluruh stamina.", "30 Koin", "jamu", 1)
-	_add_shop_offer(offers, "Jamu Tolak Bala x3", "Persediaan jamu tiga kali pakai.", "90 Koin", "jamu", 3)
-	_add_shop_offer(offers, "Baterai Senter x1", "Isi ulang 50% daya senter.", "20 Koin", "baterai", 1)
-	_add_shop_offer(offers, "Energy Drink x1", "Stamina 100% penuh selama 3 detik (anti-spam).", "25 Koin", "energy_drink", 1)
-	_add_shop_offer(offers, "Kentongan x1", "Usir kejaran Lampor selama 5 detik (1x pakai).", "250 Koin", "kentongan", 1)
-	_add_shop_offer(offers, "Nyawa Tambahan x1", "Bangkit sekali di titik awal saat terbunuh.", "80 Koin", "extra_life", 1)
-	_add_shop_offer(offers, "Nyawa Tambahan x2", "Dua kesempatan bangkit tambahan.", "150 Koin", "extra_life", 2)
-	_add_shop_offer(offers, "Nyawa Tambahan x3", "Tiga kesempatan bangkit tambahan.", "210 Koin", "extra_life", 3)
+	var coin_unit: String = LocScript.pick("Koin", "Coins")
+	_add_shop_offer(offers, LocScript.pick("Jamu Tolak Bala x1", "Herbal Elixir x1"), LocScript.pick("Pulihkan 45 kewarasan dan seluruh stamina.", "Restore 45 sanity and full stamina."), "30 %s" % coin_unit, "jamu", 1)
+	_add_shop_offer(offers, LocScript.pick("Jamu Tolak Bala x3", "Herbal Elixir x3"), LocScript.pick("Persediaan jamu tiga kali pakai.", "Three-dose herbal supply."), "90 %s" % coin_unit, "jamu", 3)
+	_add_shop_offer(offers, LocScript.pick("Baterai Senter x1", "Flashlight Battery x1"), LocScript.pick("Isi ulang 50% daya senter.", "Recharge 50% flashlight power."), "20 %s" % coin_unit, "baterai", 1)
+	_add_shop_offer(offers, "Energy Drink x1", LocScript.pick("Stamina 100% penuh selama 3 detik (anti-spam).", "Locks 100% stamina for 3 seconds (anti-spam)."), "25 %s" % coin_unit, "energy_drink", 1)
+	_add_shop_offer(offers, "Kentongan x1", LocScript.pick("Usir kejaran Lampor selama 5 detik (1x pakai).", "Repels Lampor's pursuit for 5 seconds (1 use)."), "250 %s" % coin_unit, "kentongan", 1)
+	_add_shop_offer(offers, LocScript.pick("Nyawa Tambahan x1", "Extra Life x1"), LocScript.pick("Bangkit sekali di titik awal saat terbunuh.", "Revive once at village spawn when caught."), "80 %s" % coin_unit, "extra_life", 1)
+	_add_shop_offer(offers, LocScript.pick("Nyawa Tambahan x2", "Extra Life x2"), LocScript.pick("Dua kesempatan bangkit tambahan.", "Two extra revival chances."), "150 %s" % coin_unit, "extra_life", 2)
+	_add_shop_offer(offers, LocScript.pick("Nyawa Tambahan x3", "Extra Life x3"), LocScript.pick("Tiga kesempatan bangkit tambahan.", "Three extra revival chances."), "210 %s" % coin_unit, "extra_life", 3)
 
-	shop_result_label = _make_label("Batas simpan: maks. 5 item & 5 nyawa tambahan.", 11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm")
+	shop_result_label = _make_label(LocScript.pick("Batas simpan: maks. 5 item & 5 nyawa tambahan.", "Storage limit: max 5 per item & 5 extra lives."), 11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm")
 	shop_result_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_child(shop_result_label)
 
-	var close := _make_button("TUTUP", false, "ghost")
+	var close := _make_button(LocScript.pick("TUTUP", "CLOSE"), false, "ghost")
 	close.pressed.connect(func() -> void: shop_overlay.visible = false)
 	body.add_child(close)
 
@@ -644,27 +789,45 @@ func _add_shop_offer(parent: VBoxContainer, title_text: String, description: Str
 
 func _refresh_currency_display() -> void:
 	if stats_label:
-		stats_label.text = "%d Kemenangan  ·  %d Koin  ·  %d Nyawa" % [GameManager.total_wins, GameManager.coins, GameManager.extra_lives]
+		stats_label.text = LocScript.pick(
+			"%d Kemenangan  ·  %d Koin  ·  %d Nyawa" % [GameManager.total_wins, GameManager.coins, GameManager.extra_lives],
+			"%d Wins  ·  %d Coins  ·  %d Lives" % [GameManager.total_wins, GameManager.coins, GameManager.extra_lives]
+		)
 
 func _refresh_shop_display() -> void:
 	if shop_balance_label:
-		shop_balance_label.text = "Koin: %d  ·  Nyawa: %d/%d  ·  Jamu: %d/%d  ·  Baterai: %d/%d  ·  Energy: %d/%d  ·  Kentongan: %d/%d" % [
-			GameManager.coins,
-			GameManager.extra_lives,
-			GameManager.MAX_EXTRA_LIVES,
-			GameManager.item_stash.get("jamu", 0),
-			GameManager.MAX_SHOP_ITEM_QTY,
-			GameManager.item_stash.get("baterai", 0),
-			GameManager.MAX_SHOP_ITEM_QTY,
-			GameManager.item_stash.get("energy_drink", 0),
-			GameManager.MAX_SHOP_ITEM_QTY,
-			GameManager.item_stash.get("kentongan", 0),
-			GameManager.MAX_SHOP_ITEM_QTY
-		]
+		shop_balance_label.text = LocScript.pick(
+			"Koin: %d  ·  Nyawa: %d/%d  ·  Jamu: %d/%d  ·  Baterai: %d/%d  ·  Energy: %d/%d  ·  Kentongan: %d/%d" % [
+				GameManager.coins,
+				GameManager.extra_lives,
+				GameManager.MAX_EXTRA_LIVES,
+				GameManager.item_stash.get("jamu", 0),
+				GameManager.MAX_SHOP_ITEM_QTY,
+				GameManager.item_stash.get("baterai", 0),
+				GameManager.MAX_SHOP_ITEM_QTY,
+				GameManager.item_stash.get("energy_drink", 0),
+				GameManager.MAX_SHOP_ITEM_QTY,
+				GameManager.item_stash.get("kentongan", 0),
+				GameManager.MAX_SHOP_ITEM_QTY
+			],
+			"Coins: %d  ·  Lives: %d/%d  ·  Elixir: %d/%d  ·  Battery: %d/%d  ·  Energy: %d/%d  ·  Kentongan: %d/%d" % [
+				GameManager.coins,
+				GameManager.extra_lives,
+				GameManager.MAX_EXTRA_LIVES,
+				GameManager.item_stash.get("jamu", 0),
+				GameManager.MAX_SHOP_ITEM_QTY,
+				GameManager.item_stash.get("baterai", 0),
+				GameManager.MAX_SHOP_ITEM_QTY,
+				GameManager.item_stash.get("energy_drink", 0),
+				GameManager.MAX_SHOP_ITEM_QTY,
+				GameManager.item_stash.get("kentongan", 0),
+				GameManager.MAX_SHOP_ITEM_QTY
+			]
+		)
 
 func _purchase_shop_item(item_id: String, quantity: int) -> void:
 	var result: Dictionary = GameManager.purchase_shop_item(item_id, quantity)
-	shop_result_label.text = str(result.get("message", "Transaksi gagal."))
+	shop_result_label.text = str(result.get("message", LocScript.pick("Transaksi gagal.", "Transaction failed.")))
 	shop_result_label.add_theme_color_override("font_color", HorrorTheme.SUCCESS_SAGE if bool(result.get("success", false)) else HorrorTheme.ERROR)
 	_refresh_shop_display()
 	_refresh_currency_display()
@@ -704,8 +867,9 @@ func _on_redeem_pressed() -> void:
 			GameManager.apply_reward(reward)
 			GameManager.redeemed_codes.append(normalized)
 			GameManager.save_game_data()
-			result = {"success": true, "message": "Berhasil menukarkan kode: %s." % str(reward.get("description", "Hadiah diterima"))}
-	redeem_result_label.text = str(result.get("message", "Kode gagal diproses."))
+			var desc: String = str(reward.get("description_en", reward.get("description", "Reward claimed"))) if LocScript.is_en() else str(reward.get("description", "Hadiah diterima"))
+			result = {"success": true, "message": LocScript.pick("Berhasil menukarkan kode: %s." % desc, "Redeemed code: %s." % desc)}
+	redeem_result_label.text = str(result.get("message", LocScript.pick("Kode gagal diproses.", "Failed to process code.")))
 	redeem_result_label.add_theme_color_override("font_color", HorrorTheme.SUCCESS_SAGE if bool(result.get("success", false)) else HorrorTheme.ERROR)
 	if bool(result.get("success", false)):
 		redeem_input.clear()
@@ -726,55 +890,70 @@ func _check_for_game_updates() -> void:
 
 func _on_update_available(commit_sha: String, commit_message: String) -> void:
 	update_button.disabled = false
-	update_check_button.text = "PERIKSA PEMBARUAN GAME"
+	update_check_button.text = LocScript.pick("PERIKSA PEMBARUAN GAME", "CHECK FOR UPDATES")
 	if UpdateManager.is_git_working_copy():
 		update_button.visible = false
-		update_status_label.text = "Mode Developer (Git/Editor): Commit GitHub %s (%s). Gunakan git pull/push agar perubahan lokal tidak tertimpa." % [commit_sha.substr(0, 10), commit_message]
+		update_status_label.text = LocScript.pick(
+			"Mode Developer (Git/Editor): Commit GitHub %s (%s). Gunakan git pull/push agar perubahan lokal tidak tertimpa." % [commit_sha.substr(0, 10), commit_message],
+			"Developer Mode (Git/Editor): GitHub commit %s (%s). Use git pull/push so local edits aren't overwritten." % [commit_sha.substr(0, 10), commit_message]
+		)
 		return
 	update_button.visible = not UpdateManager.is_update_processed()
-	update_button.text = "PASANG PEMBARUAN"
+	update_button.text = LocScript.pick("PASANG PEMBARUAN", "INSTALL UPDATE")
 	update_button.tooltip_text = commit_message
 	if UpdateManager.is_update_processed():
-		update_status_label.text = "Commit %s sudah terpasang." % commit_sha.substr(0, 10)
+		update_status_label.text = LocScript.pick("Commit %s sudah terpasang." % commit_sha.substr(0, 10), "Commit %s is already installed." % commit_sha.substr(0, 10))
 	else:
-		update_status_label.text = "Commit terbaru %s: %s" % [commit_sha.substr(0, 10), commit_message]
+		update_status_label.text = LocScript.pick("Commit terbaru %s: %s" % [commit_sha.substr(0, 10), commit_message], "Latest commit %s: %s" % [commit_sha.substr(0, 10), commit_message])
 
 func _on_update_up_to_date(commit_sha: String) -> void:
-	update_check_button.text = "PERIKSA PEMBARUAN GAME"
-	update_status_label.text = "Game sudah sama dengan commit terbaru (%s)." % commit_sha.substr(0, 10)
+	update_check_button.text = LocScript.pick("PERIKSA PEMBARUAN GAME", "CHECK FOR UPDATES")
+	update_status_label.text = LocScript.pick("Game sudah sama dengan commit terbaru (%s)." % commit_sha.substr(0, 10), "Game is up to date (%s)." % commit_sha.substr(0, 10))
 	update_button.visible = false
 
 func _on_update_installed(destination_path: String, commit_sha: String, applied_to_project: bool) -> void:
 	update_button.disabled = false
 	update_button.visible = false
-	update_check_button.text = "PERIKSA PEMBARUAN GAME"
+	update_check_button.text = LocScript.pick("PERIKSA PEMBARUAN GAME", "CHECK FOR UPDATES")
 	if applied_to_project:
-		update_status_label.text = "Update %s berhasil diterapkan. Mulai ulang permainan agar seluruh perubahan dimuat." % commit_sha.substr(0, 10)
-		update_button.tooltip_text = "Proyek sudah sama dengan commit %s" % commit_sha.substr(0, 10)
+		update_status_label.text = LocScript.pick(
+			"Update %s berhasil diterapkan. Mulai ulang permainan agar seluruh perubahan dimuat." % commit_sha.substr(0, 10),
+			"Update %s applied. Restart the game to load all changes." % commit_sha.substr(0, 10)
+		)
+		update_button.tooltip_text = LocScript.pick("Proyek sudah sama dengan commit %s" % commit_sha.substr(0, 10), "Project matches commit %s" % commit_sha.substr(0, 10))
 		_show_update_restart_prompt(commit_sha)
 	else:
-		update_status_label.text = "Paket source %s sudah diekstrak ke penyimpanan aplikasi, tetapi belum dapat mengganti APK/PCK yang sedang berjalan." % commit_sha.substr(0, 10)
-		update_button.tooltip_text = "Source hasil ekstrak: %s" % destination_path
+		update_status_label.text = LocScript.pick(
+			"Paket source %s sudah diekstrak ke penyimpanan aplikasi, tetapi belum dapat mengganti APK/PCK yang sedang berjalan." % commit_sha.substr(0, 10),
+			"Source package %s was extracted, but cannot replace the running APK/PCK directly." % commit_sha.substr(0, 10)
+		)
+		update_button.tooltip_text = destination_path
 
 func _build_update_restart_modal() -> void:
-	var modal: Dictionary = _create_modal("PEMBARUAN SIAP")
+	var modal: Dictionary = _create_modal(LocScript.pick("PEMBARUAN SIAP", "UPDATE READY"))
 	update_restart_overlay = modal["overlay"] as ColorRect
 	update_restart_panel = modal["panel"] as PanelContainer
 	var body: VBoxContainer = modal["body"] as VBoxContainer
-	var explanation := _make_label("Semua perubahan terbaru sudah siap diterapkan. Mulai ulang permainan sekarang agar skrip, scene, dan aset terbaru dimuat. Progres disimpan otomatis.", 14, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "body-md")
+	var explanation := _make_label(
+		LocScript.pick(
+			"Semua perubahan terbaru sudah siap diterapkan. Mulai ulang permainan sekarang agar skrip, scene, dan aset terbaru dimuat. Progres disimpan otomatis.",
+			"All latest updates are ready. Restart now so new scripts, scenes, and assets load cleanly. Progress is saved automatically."
+		),
+		14, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "body-md"
+	)
 	explanation.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_child(explanation)
-	update_restart_status = _make_label("Disarankan: mulai ulang sekarang.", 12, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm")
+	update_restart_status = _make_label(LocScript.pick("Disarankan: mulai ulang sekarang.", "Recommended: restart now."), 12, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm")
 	update_restart_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_child(update_restart_status)
-	var restart_label: String = "MUAT ULANG HALAMAN" if OS.has_feature("web") else ("TUTUP GAME UNTUK MENERAPKAN" if OS.has_feature("android") else "MULAI ULANG SEKARANG")
+	var restart_label: String = LocScript.pick("MUAT ULANG HALAMAN", "RELOAD PAGE") if OS.has_feature("web") else (LocScript.pick("TUTUP GAME UNTUK MENERAPKAN", "CLOSE GAME TO APPLY") if OS.has_feature("android") else LocScript.pick("MULAI ULANG SEKARANG", "RESTART NOW"))
 	var restart := _make_button(restart_label, true)
 	restart.pressed.connect(_restart_after_update)
 	body.add_child(restart)
-	var later := _make_button("NANTI", false, "ghost")
+	var later := _make_button(LocScript.pick("NANTI", "LATER"), false, "ghost")
 	later.pressed.connect(func() -> void:
 		update_restart_overlay.visible = false
-		update_status_label.text = "Pembaruan siap. Muat ulang halaman untuk menerapkan." if OS.has_feature("web") else "Pembaruan siap. Tutup permainan lalu buka kembali Lampor."
+		update_status_label.text = LocScript.pick("Pembaruan siap. Muat ulang halaman untuk menerapkan.", "Update ready. Reload the page to apply.") if OS.has_feature("web") else LocScript.pick("Pembaruan siap. Tutup permainan lalu buka kembali Lampor.", "Update ready. Close and reopen Lampor.")
 	)
 	body.add_child(later)
 
@@ -782,16 +961,16 @@ func _show_update_restart_prompt(commit_sha: String) -> void:
 	if update_restart_overlay == null:
 		return
 	if OS.has_feature("web"):
-		update_restart_status.text = "Commit terpasang: %s · Muat ulang halaman untuk menerapkan." % commit_sha.substr(0, 10)
+		update_restart_status.text = LocScript.pick("Commit terpasang: %s · Muat ulang halaman untuk menerapkan." % commit_sha.substr(0, 10), "Installed commit: %s · Reload page to apply." % commit_sha.substr(0, 10))
 	elif OS.has_feature("android"):
-		update_restart_status.text = "Commit terpasang: %s · Tutup game lalu buka kembali." % commit_sha.substr(0, 10)
+		update_restart_status.text = LocScript.pick("Commit terpasang: %s · Tutup game lalu buka kembali." % commit_sha.substr(0, 10), "Installed commit: %s · Close and reopen the game." % commit_sha.substr(0, 10))
 	else:
-		update_restart_status.text = "Commit terpasang: %s · Mulai ulang disarankan." % commit_sha.substr(0, 10)
+		update_restart_status.text = LocScript.pick("Commit terpasang: %s · Mulai ulang disarankan." % commit_sha.substr(0, 10), "Installed commit: %s · Restart recommended." % commit_sha.substr(0, 10))
 	_open_modal(update_restart_overlay, update_restart_panel)
 
 func _restart_after_update() -> void:
 	if update_restart_status:
-		update_restart_status.text = "Menyimpan progres dan memulai ulang..."
+		update_restart_status.text = LocScript.pick("Menyimpan progres dan memulai ulang...", "Saving progress and restarting...")
 	GameManager.save_active_run()
 	GameManager.save_game_data()
 	if OS.has_feature("web"):
@@ -810,7 +989,7 @@ func _restart_after_update() -> void:
 	var process_id: int = OS.create_process(executable_path, args)
 	if process_id <= 0:
 		if update_restart_status:
-			update_restart_status.text = "Tidak dapat memulai ulang otomatis. Tutup lalu buka kembali Lampor secara manual."
+			update_restart_status.text = LocScript.pick("Tidak dapat memulai ulang otomatis. Tutup lalu buka kembali Lampor secara manual.", "Could not restart automatically. Please reopen Lampor manually.")
 		return
 	get_tree().quit()
 
@@ -818,25 +997,28 @@ func _on_update_failed(message: String) -> void:
 	if update_button:
 		update_button.disabled = false
 		update_button.visible = not UpdateManager.is_git_working_copy()
-		update_button.text = "COBA UPDATE LAGI"
+		update_button.text = LocScript.pick("COBA UPDATE LAGI", "RETRY UPDATE")
 		update_button.tooltip_text = message
 	if update_check_button:
-		update_check_button.text = "PERIKSA PEMBARUAN GAME"
+		update_check_button.text = LocScript.pick("PERIKSA PEMBARUAN GAME", "CHECK FOR UPDATES")
 	if update_status_label:
 		update_status_label.text = message
 
 func _on_update_button_pressed() -> void:
 	update_button.disabled = true
-	update_button.text = "MENGUNDUH..."
+	update_button.text = LocScript.pick("MENGUNDUH...", "DOWNLOADING...")
 	UpdateManager.download_update()
 
 func _build_fix_notes_modal() -> void:
 	_ensure_markdown_regexes()
-	var modal: Dictionary = _create_modal("CATATAN PEMBARUAN")
+	var modal: Dictionary = _create_modal(LocScript.pick("CATATAN PEMBARUAN", "PATCH NOTES"))
 	fix_notes_overlay = modal["overlay"] as ColorRect
 	fix_notes_panel = modal["panel"] as PanelContainer
 	var body: VBoxContainer = modal["body"] as VBoxContainer
-	fix_notes_hint_label = _make_label("Catatan perubahan dari FIX_NOTES.md pada versi game saat ini.", 12, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm")
+	fix_notes_hint_label = _make_label(
+		LocScript.pick("Catatan perubahan dari FIX_NOTES.md pada versi game saat ini.", "Release notes from FIX_NOTES.md for the current version."),
+		12, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm"
+	)
 	fix_notes_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_child(fix_notes_hint_label)
 
@@ -986,10 +1168,39 @@ func _is_scroll_drag_blocked_control(control: Control) -> bool:
 	return control is HSlider or control is VScrollBar or control is HScrollBar or control is LineEdit or control is TextEdit or control is OptionButton
 
 func _input(event: InputEvent) -> void:
+	if not _listening_keybind_action.is_empty():
+		if event is InputEventKey:
+			var kb_ke := event as InputEventKey
+			if kb_ke.pressed and not kb_ke.echo:
+				if kb_ke.keycode == KEY_ESCAPE:
+					_cancel_keybind_listening()
+				else:
+					var action_name: String = _listening_keybind_action
+					_listening_keybind_action = ""
+					SettingsManager.rebind_action(action_name, kb_ke)
+					_refresh_keybind_buttons()
+				get_viewport().set_input_as_handled()
+				return
+		elif event is InputEventMouseButton:
+			var kb_mb := event as InputEventMouseButton
+			if kb_mb.pressed:
+				if kb_mb.button_index in [MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_XBUTTON1, MOUSE_BUTTON_XBUTTON2]:
+					var action_name: String = _listening_keybind_action
+					_listening_keybind_action = ""
+					SettingsManager.rebind_action(action_name, kb_mb)
+					_refresh_keybind_buttons()
+					get_viewport().set_input_as_handled()
+					return
+				elif kb_mb.button_index == MOUSE_BUTTON_LEFT:
+					_cancel_keybind_listening()
+		return
+
 	if event is InputEventKey:
 		var ke := event as InputEventKey
 		if ke.pressed and not ke.echo and ke.keycode == KEY_ESCAPE:
 			if graphics_option and graphics_option.get_popup().visible:
+				return
+			if language_option and language_option.get_popup().visible:
 				return
 			if _close_topmost_modal():
 				get_viewport().set_input_as_handled()
@@ -1183,7 +1394,7 @@ func _markdown_inline(source: String) -> String:
 	return result
 
 func _build_credits_modal() -> void:
-	var modal: Dictionary = _create_modal("HAK CIPTA")
+	var modal: Dictionary = _create_modal(LocScript.pick("HAK CIPTA", "CREDITS"))
 	credits_overlay = modal["overlay"] as ColorRect
 	credits_panel = modal["panel"] as PanelContainer
 	var body: VBoxContainer = modal["body"] as VBoxContainer
@@ -1192,7 +1403,10 @@ func _build_credits_modal() -> void:
 	body.add_child(title_copy)
 
 	var copy := _make_label(
-		"© 2026 AstraDev. Seluruh hak cipta dilindungi.\nKarya fiksi survival horror yang terinspirasi dari folklor Indonesia.",
+		LocScript.pick(
+			"© 2026 AstraDev. Seluruh hak cipta dilindungi.\nKarya fiksi survival horror yang terinspirasi dari folklor Indonesia.",
+			"© 2026 AstraDev. All rights reserved.\nA survival horror work of fiction inspired by Indonesian folklore."
+		),
 		14,
 		HorrorTheme.ON_SURFACE_VARIANT,
 		HORIZONTAL_ALIGNMENT_LEFT,
@@ -1458,11 +1672,14 @@ func _update_nightmare_status() -> void:
 	nightmare_button.disabled = not unlocked
 	nightmare_button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if unlocked else Control.CURSOR_ARROW
 	if unlocked:
-		nightmare_lock_label.text = "Nightmare terbuka. Semoga beruntung."
+		nightmare_lock_label.text = LocScript.pick("Nightmare terbuka. Semoga beruntung.", "Nightmare unlocked. Good luck.")
 		nightmare_lock_label.add_theme_color_override("font_color", HorrorTheme.PRIMARY)
 	else:
 		var remaining: int = 5 - GameManager.total_wins
-		nightmare_lock_label.text = "Terkunci: butuh %d kemenangan lagi (%d/5)." % [remaining, GameManager.total_wins]
+		nightmare_lock_label.text = LocScript.pick(
+			"Terkunci: butuh %d kemenangan lagi (%d/5)." % [remaining, GameManager.total_wins],
+			"Locked: requires %d more wins (%d/5)." % [remaining, GameManager.total_wins]
+		)
 		nightmare_lock_label.add_theme_color_override("font_color", HorrorTheme.TEXT_MUTED)
 
 func _on_volume_changed(value: float) -> void:
@@ -1497,10 +1714,10 @@ func _toggle_fullscreen() -> void:
 	var mode = DisplayServer.window_get_mode()
 	if mode == DisplayServer.WINDOW_MODE_FULLSCREEN:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
-		fullscreen_button.text = "AKTIFKAN LAYAR PENUH"
+		fullscreen_button.text = LocScript.pick("AKTIFKAN LAYAR PENUH", "ENABLE FULLSCREEN")
 	else:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
-		fullscreen_button.text = "KEMBALI KE MODE JENDELA"
+		fullscreen_button.text = LocScript.pick("KEMBALI KE MODE JENDELA", "SWITCH TO WINDOWED")
 
 func _start_with_difficulty(diff: GameManager.Difficulty) -> void:
 	for overlay: ColorRect in modal_overlays:

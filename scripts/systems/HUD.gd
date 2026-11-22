@@ -4,6 +4,7 @@ extends CanvasLayer
 const INVENTORY_SLOT_UI_SCRIPT = preload("res://scripts/ui/InventorySlotUI.gd")
 const TUTORIAL_OVERLAY_SCRIPT = preload("res://scripts/systems/TutorialOverlay.gd")
 const HORROR_TITLE_FONT: Font = preload("res://assets/fonts/HorrorTitle.ttf")
+const LocScript = preload("res://scripts/systems/Loc.gd")
 
 @onready var interaction_label: Label = $CenterContainer/InteractionLabel
 @onready var act_banner: Label = $CenterContainer/ActBanner
@@ -100,6 +101,20 @@ var inventory_hotbar_slots: Array = []
 var selected_swap_slot: int = -1
 var cached_inventory_slots: Array = []
 var hud_bag_button: Button = null
+var touch_run_button: Button = null
+var _pause_settings_box: VBoxContainer = null
+var _pause_language_option: OptionButton = null
+var _pause_listening_keybind_action: String = ""
+var _pause_keybind_buttons: Dictionary = {}
+var _exit_confirm_title: Label = null
+var _exit_confirm_msg: Label = null
+var _exit_confirm_cancel: Button = null
+var _exit_confirm_ok: Button = null
+var _inv_title_lbl: Label = null
+var _inv_close_btn: Button = null
+var _inv_storage_lbl: Label = null
+var _inv_hotbar_lbl: Label = null
+var _inv_hint_lbl: Label = null
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -120,6 +135,8 @@ func _ready() -> void:
 	SignalBus.lampor_stare_detected.connect(_on_lampor_stare)
 	SignalBus.dialog_requested.connect(_on_dialog_requested)
 	SignalBus.request_barricade_warning.connect(_on_barricade_warning)
+	SettingsManager.keybinds_changed.connect(_on_settings_keybinds_changed)
+	SettingsManager.language_changed.connect(_on_language_changed)
 
 	interaction_label.text = ""
 	stare_warning.visible = false
@@ -136,6 +153,7 @@ func _ready() -> void:
 	if TUTORIAL_OVERLAY_SCRIPT:
 		add_child(TUTORIAL_OVERLAY_SCRIPT.new())
 	_initialize_objectives_immediate()
+	_refresh_localized_hud_texts()
 	SettingsManager.call_deferred("_apply_brightness_overlay")
 	if is_instance_valid(GameManager.player_character):
 		SignalBus.flashlight_battery_changed.emit(GameManager.player_character.flashlight_battery, 100.0)
@@ -356,15 +374,25 @@ func _on_inventory_slot_input(event: InputEvent, slot_index: int) -> void:
 func is_cutscene_active() -> bool:
 	return not active_cutscene_type.is_empty() or (is_instance_valid(descent_cutscene_overlay) and descent_cutscene_overlay.visible)
 
+func _is_key_bound_to_gameplay(event: InputEventKey) -> bool:
+	for action: String in SettingsManager.REBINDABLE_ACTIONS:
+		if action != "toggle_inventory" and event.is_action(action):
+			return true
+	return false
+
 func _unhandled_input(event: InputEvent) -> void:
 	if is_cutscene_active():
 		return
-	if event.is_action_pressed("toggle_inventory") or (event is InputEventKey and event.pressed and not event.echo and (event.keycode == KEY_TAB or event.keycode == KEY_B or event.keycode == KEY_I)):
+	var legacy_inv_key: bool = event is InputEventKey and (event as InputEventKey).pressed and not (event as InputEventKey).echo and ((event as InputEventKey).keycode == KEY_B or (event as InputEventKey).keycode == KEY_I) and not _is_key_bound_to_gameplay(event as InputEventKey)
+	if event.is_action_pressed("toggle_inventory") or legacy_inv_key:
 		if not pause_menu.visible and not barricade_dialog.visible and GameManager.current_state == GameManager.GameState.PLAYING:
 			toggle_inventory()
 			return
 
 	if event.is_action_pressed("pause"):
+		if not _pause_listening_keybind_action.is_empty():
+			_cancel_pause_keybind_listening()
+			return
 		if exit_confirm_overlay and exit_confirm_overlay.visible:
 			exit_confirm_overlay.visible = false
 			if pause_menu.visible:
@@ -385,6 +413,7 @@ func _unhandled_input(event: InputEvent) -> void:
 func toggle_pause() -> void:
 	if is_cutscene_active():
 		return
+	_cancel_pause_keybind_listening()
 	if mobile_editor_active:
 		_finish_mobile_editor()
 	if inventory_overlay and inventory_overlay.visible:
@@ -405,13 +434,12 @@ func toggle_pause() -> void:
 		desktop_hint_panel.visible = not is_paused
 	if touch_root:
 		touch_root.visible = not is_paused
+	var player: PlayerController = GameManager.player_character as PlayerController
+	if player:
+		player.release_all_held_inputs()
 	if is_paused:
 		GameManager.save_active_run()
 		joystick_vector = Vector2.ZERO
-		var player: PlayerController = GameManager.player_character as PlayerController
-		if player:
-			player.set_virtual_move(Vector2.ZERO)
-			player.set_virtual_sprint(false)
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		_apply_overlay_layouts()
 		var pause_panel: Control = pause_menu.get_node_or_null("Center/Panel") as Control
@@ -515,51 +543,116 @@ func _build_pause_settings_panel() -> void:
 	box.add_theme_constant_override("separation", 10)
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	pause_settings_scroll.add_child(box)
+	_pause_settings_box = box
+	_populate_pause_settings_box()
+
+func _populate_pause_settings_box() -> void:
+	if not is_instance_valid(_pause_settings_box):
+		return
+	_pause_listening_keybind_action = ""
+	_pause_keybind_buttons.clear()
+	for child: Node in _pause_settings_box.get_children():
+		_pause_settings_box.remove_child(child)
+		child.queue_free()
+	var box: VBoxContainer = _pause_settings_box
 	var title := Label.new()
-	title.text = "PENGATURAN"
+	title.text = LocScript.pick("PENGATURAN", "SETTINGS")
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	HorrorTheme.style_label(title, "headline-md", HorrorTheme.ON_SURFACE, 19)
 	box.add_child(title)
 	box.add_child(HorrorTheme.make_hairline_divider())
-	_add_pause_slider(box, "Sensitivitas Mouse", SettingsManager.mouse_sensitivity * 100.0, 25.0, 200.0, func(v: float) -> void: SettingsManager.set_mouse_sensitivity(v / 100.0))
-	_add_pause_slider(box, "Sensitivitas Kamera", SettingsManager.camera_sensitivity * 100.0, 25.0, 200.0, func(v: float) -> void: SettingsManager.set_camera_sensitivity(v / 100.0))
-	_add_pause_slider(box, "Kecerahan", SettingsManager.brightness * 100.0, 50.0, 150.0, func(v: float) -> void: SettingsManager.set_brightness(v / 100.0))
+
+	var lang_lbl := Label.new()
+	lang_lbl.text = LocScript.pick("Bahasa / Language", "Language")
+	HorrorTheme.style_label(lang_lbl, "label-sm", HorrorTheme.ON_SURFACE, 13)
+	box.add_child(lang_lbl)
+	var lang_opt := OptionButton.new()
+	_pause_language_option = lang_opt
+	lang_opt.custom_minimum_size.y = 42.0
+	lang_opt.add_item("Indonesia (ID)")
+	lang_opt.add_item("English (EN-US)")
+	lang_opt.select(1 if SettingsManager.is_en() else 0)
+	lang_opt.item_selected.connect(func(index: int) -> void:
+		SettingsManager.set_language("en_US" if index == 1 else "id")
+	)
+	HorrorTheme.style_option_button(lang_opt)
+	box.add_child(lang_opt)
+
+	_add_pause_slider(box, LocScript.pick("Sensitivitas Mouse", "Mouse Sensitivity"), SettingsManager.mouse_sensitivity * 100.0, 25.0, 200.0, func(v: float) -> void: SettingsManager.set_mouse_sensitivity(v / 100.0))
+	_add_pause_slider(box, LocScript.pick("Sensitivitas Kamera", "Camera Sensitivity"), SettingsManager.camera_sensitivity * 100.0, 25.0, 200.0, func(v: float) -> void: SettingsManager.set_camera_sensitivity(v / 100.0))
+	_add_pause_slider(box, LocScript.pick("Kecerahan", "Brightness"), SettingsManager.brightness * 100.0, 50.0, 150.0, func(v: float) -> void: SettingsManager.set_brightness(v / 100.0))
 	var quality := OptionButton.new()
 	pause_graphics_option = quality
 	quality.custom_minimum_size.y = 44.0
-	quality.add_item("Grafik: Otomatis (Perangkat)")
-	quality.add_item("Grafik: Low")
-	quality.add_item("Grafik: Medium")
-	quality.add_item("Grafik: High")
+	quality.add_item(LocScript.pick("Grafik: Otomatis (Perangkat)", "Graphics: Auto (Device)"))
+	quality.add_item(LocScript.pick("Grafik: Low", "Graphics: Low"))
+	quality.add_item(LocScript.pick("Grafik: Medium", "Graphics: Medium"))
+	quality.add_item(LocScript.pick("Grafik: High", "Graphics: High"))
 	quality.select({"auto": 0, "low": 1, "medium": 2, "high": 3}.get(SettingsManager.graphics_quality, 0))
-	quality.tooltip_text = "Otomatis menggunakan preset %s berdasarkan perangkat ini" % SettingsManager.recommended_graphics_quality.capitalize()
+	quality.tooltip_text = LocScript.pick(
+		"Otomatis menggunakan preset %s berdasarkan perangkat ini" % SettingsManager.recommended_graphics_quality.capitalize(),
+		"Auto uses %s preset based on this device" % SettingsManager.recommended_graphics_quality.capitalize()
+	)
 	quality.item_selected.connect(func(index: int) -> void: SettingsManager.set_graphics_quality(["auto", "low", "medium", "high"][index]))
 	HorrorTheme.style_option_button(quality)
 	box.add_child(quality)
 	var auto_update := CheckButton.new()
-	auto_update.text = "Unduh update otomatis"
+	auto_update.text = LocScript.pick("Unduh update otomatis", "Auto-download updates")
 	auto_update.custom_minimum_size.y = 44.0
 	auto_update.button_pressed = SettingsManager.auto_update
 	auto_update.toggled.connect(SettingsManager.set_auto_update)
 	HorrorTheme.style_check_button(auto_update)
 	box.add_child(auto_update)
+
+	box.add_child(HorrorTheme.make_hairline_divider())
+	var kb_title := Label.new()
+	kb_title.text = LocScript.pick("KEYBINDS (KLIK UNTUK UBAH)", "KEYBINDINGS (CLICK TO REBIND)")
+	HorrorTheme.style_label(kb_title, "label-sm", HorrorTheme.PRIMARY, 12)
+	box.add_child(kb_title)
+	for action: String in SettingsManager.REBINDABLE_ACTIONS:
+		var k_row := HBoxContainer.new()
+		k_row.add_theme_constant_override("separation", 8)
+		var k_lbl := Label.new()
+		k_lbl.text = LocScript.action_label(action)
+		k_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		HorrorTheme.style_label(k_lbl, "label-sm", HorrorTheme.ON_SURFACE, 12)
+		k_row.add_child(k_lbl)
+		var k_btn := Button.new()
+		k_btn.text = SettingsManager.get_action_key_text(action)
+		k_btn.custom_minimum_size = Vector2(108.0, 34.0)
+		HorrorTheme.style_button(k_btn, "secondary", 11, true)
+		k_btn.pressed.connect(func() -> void: _begin_pause_keybind_listen(action))
+		k_row.add_child(k_btn)
+		box.add_child(k_row)
+		_pause_keybind_buttons[action] = k_btn
+	var kb_reset := Button.new()
+	kb_reset.text = LocScript.pick("RESET TOMBOL BAWAAN", "RESET DEFAULT KEYBINDS")
+	kb_reset.custom_minimum_size.y = 38.0
+	HorrorTheme.style_button(kb_reset, "ghost", 11, true)
+	kb_reset.pressed.connect(func() -> void:
+		_cancel_pause_keybind_listening()
+		SettingsManager.reset_keybinds()
+		_refresh_pause_keybind_buttons()
+	)
+	box.add_child(kb_reset)
+
 	if _is_touch_device():
-		_add_pause_slider(box, "Ukuran tombol mobile", SettingsManager.mobile_button_scale * 100.0, 75.0, 150.0, func(v: float) -> void:
+		_add_pause_slider(box, LocScript.pick("Ukuran tombol mobile", "Mobile button size"), SettingsManager.mobile_button_scale * 100.0, 75.0, 150.0, func(v: float) -> void:
 			SettingsManager.set_mobile_button_scale(v / 100.0)
 			_layout_touch_controls()
 		)
-		_add_pause_slider(box, "Ukuran joystick", SettingsManager.mobile_joystick_scale * 100.0, 80.0, 140.0, func(v: float) -> void:
+		_add_pause_slider(box, LocScript.pick("Ukuran joystick", "Joystick size"), SettingsManager.mobile_joystick_scale * 100.0, 80.0, 140.0, func(v: float) -> void:
 			SettingsManager.set_mobile_joystick_scale(v / 100.0)
 			_layout_touch_controls()
 		)
 		var editor_button := Button.new()
-		editor_button.text = "EDITOR POSISI TOMBOL MOBILE"
+		editor_button.text = LocScript.pick("EDITOR POSISI TOMBOL MOBILE", "EDIT MOBILE BUTTON LAYOUT")
 		editor_button.custom_minimum_size.y = 44.0
 		HorrorTheme.style_button(editor_button, "secondary", 12, true)
 		editor_button.pressed.connect(_start_mobile_editor)
 		box.add_child(editor_button)
 		var reset_layout := Button.new()
-		reset_layout.text = "RESET TATA LETAK MOBILE"
+		reset_layout.text = LocScript.pick("RESET TATA LETAK MOBILE", "RESET MOBILE LAYOUT")
 		reset_layout.custom_minimum_size.y = 44.0
 		HorrorTheme.style_button(reset_layout, "ghost", 12, true)
 		reset_layout.pressed.connect(func() -> void:
@@ -568,16 +661,40 @@ func _build_pause_settings_panel() -> void:
 		)
 		box.add_child(reset_layout)
 	var close := Button.new()
-	close.text = "KEMBALI KE JEDA"
+	close.text = LocScript.pick("KEMBALI KE JEDA", "BACK TO PAUSE")
 	close.custom_minimum_size.y = 44.0
 	HorrorTheme.style_button(close, "primary", 13, true)
 	close.pressed.connect(func() -> void:
+		_cancel_pause_keybind_listening()
 		_pause_settings_container_hide()
 		pause_menu.get_node("Center").visible = true
 	)
 	box.add_child(close)
 
+func _begin_pause_keybind_listen(action: String) -> void:
+	_pause_listening_keybind_action = action
+	_refresh_pause_keybind_buttons()
+
+func _cancel_pause_keybind_listening() -> void:
+	if _pause_listening_keybind_action.is_empty():
+		return
+	_pause_listening_keybind_action = ""
+	_refresh_pause_keybind_buttons()
+
+func _refresh_pause_keybind_buttons() -> void:
+	for action: String in _pause_keybind_buttons.keys():
+		var btn: Button = _pause_keybind_buttons[action] as Button
+		if not is_instance_valid(btn):
+			continue
+		if action == _pause_listening_keybind_action:
+			btn.text = LocScript.pick("TEKAN TOMBOL...", "PRESS KEY...")
+			HorrorTheme.style_button(btn, "primary", 11, true)
+		else:
+			btn.text = SettingsManager.get_action_key_text(action)
+			HorrorTheme.style_button(btn, "secondary", 11, true)
+
 func _pause_settings_container_hide() -> void:
+	_cancel_pause_keybind_listening()
 	if pause_settings_container:
 		pause_settings_container.visible = false
 
@@ -848,13 +965,18 @@ func _build_exit_confirm() -> void:
 	box.add_theme_constant_override("separation", 14)
 	exit_panel.add_child(box)
 	var title := Label.new()
-	title.text = "KEMBALI KE MENU UTAMA?"
+	_exit_confirm_title = title
+	title.text = LocScript.pick("KEMBALI KE MENU UTAMA?", "RETURN TO MAIN MENU?")
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	HorrorTheme.style_label(title, "headline-md", HorrorTheme.ON_SURFACE, 18)
 	box.add_child(title)
 	box.add_child(HorrorTheme.make_hairline_divider())
 	var message := Label.new()
-	message.text = "Yakin ingin kembali ke menu utama?\nProgres tersimpan otomatis setiap 5 detik dan dapat dilanjutkan nanti."
+	_exit_confirm_msg = message
+	message.text = LocScript.pick(
+		"Yakin ingin kembali ke menu utama?\nProgres tersimpan otomatis setiap 5 detik dan dapat dilanjutkan nanti.",
+		"Return to the main menu?\nProgress autosaves every 5 seconds and can be resumed later."
+	)
 	message.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	message.custom_minimum_size.x = 360.0
 	message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -863,7 +985,8 @@ func _build_exit_confirm() -> void:
 	var buttons := HBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 10)
 	box.add_child(buttons)
-	var cancel := _make_exit_button("BATAL", false)
+	var cancel := _make_exit_button(LocScript.pick("BATAL", "CANCEL"), false)
+	_exit_confirm_cancel = cancel
 	cancel.pressed.connect(func() -> void:
 		exit_confirm_overlay.visible = false
 		if pause_menu.visible:
@@ -872,7 +995,8 @@ func _build_exit_confirm() -> void:
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _is_touch_device() else Input.MOUSE_MODE_CAPTURED
 	)
 	buttons.add_child(cancel)
-	var confirm := _make_exit_button("KE MENU UTAMA", true)
+	var confirm := _make_exit_button(LocScript.pick("KE MENU UTAMA", "MAIN MENU"), true)
+	_exit_confirm_ok = confirm
 	confirm.pressed.connect(_on_main_menu_pressed)
 	buttons.add_child(confirm)
 
@@ -948,8 +1072,11 @@ func _setup_mobile_controls() -> void:
 	touch_root.add_child(joystick_base)
 
 	var run_button := _make_touch_button("run")
+	touch_run_button = run_button
 	run_button.button_down.connect(_on_touch_run_down)
 	run_button.button_up.connect(_on_touch_run_up)
+	run_button.mouse_exited.connect(_on_touch_run_up)
+	run_button.focus_exited.connect(_on_touch_run_up)
 	var interact_button := _make_touch_button("interact")
 	interact_button.pressed.connect(_on_touch_interact)
 	var flashlight_button := _make_touch_button("flashlight")
@@ -1221,6 +1348,14 @@ func _build_desktop_hints() -> void:
 	desktop_hint_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	desktop_hint_panel.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 	add_child(desktop_hint_panel)
+	_populate_desktop_hints()
+
+func _populate_desktop_hints() -> void:
+	if not is_instance_valid(desktop_hint_panel):
+		return
+	for child: Node in desktop_hint_panel.get_children():
+		desktop_hint_panel.remove_child(child)
+		child.queue_free()
 
 	var vbox := VBoxContainer.new()
 	vbox.alignment = BoxContainer.ALIGNMENT_END
@@ -1228,25 +1363,117 @@ func _build_desktop_hints() -> void:
 	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	desktop_hint_panel.add_child(vbox)
 
+	var slot_range: String = "%s-%s" % [SettingsManager.get_action_key_text("slot_1"), SettingsManager.get_action_key_text("slot_5")]
+
 	var row1 := HBoxContainer.new()
 	row1.alignment = BoxContainer.ALIGNMENT_END
 	row1.add_theme_constant_override("separation", 12)
 	row1.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vbox.add_child(row1)
-	_add_gta_key_hint(row1, "WASD", "GERAK", false)
-	_add_gta_key_hint(row1, "SHIFT", "LARI", false)
-	_add_gta_key_hint(row1, "E", "INTERAKSI", true)
-	_add_gta_key_hint(row1, "F", "SENTER", true)
+	_add_gta_key_hint(row1, SettingsManager.get_move_keys_summary(), LocScript.pick("GERAK", "MOVE"), false)
+	_add_gta_key_hint(row1, SettingsManager.get_action_key_text("sprint"), LocScript.pick("LARI", "SPRINT"), false)
+	_add_gta_key_hint(row1, SettingsManager.get_action_key_text("interact"), LocScript.pick("INTERAKSI", "INTERACT"), true)
+	_add_gta_key_hint(row1, SettingsManager.get_action_key_text("flashlight"), LocScript.pick("SENTER", "LIGHT"), true)
 
 	var row2 := HBoxContainer.new()
 	row2.alignment = BoxContainer.ALIGNMENT_END
 	row2.add_theme_constant_override("separation", 12)
 	row2.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vbox.add_child(row2)
-	_add_gta_key_hint(row2, "1-5", "SLOT", false)
-	_add_gta_key_hint(row2, "TAB", "TAS", true)
-	_add_gta_key_hint(row2, "G", "BUANG", false)
-	_add_gta_key_hint(row2, "ESC", "JEDA", false)
+	_add_gta_key_hint(row2, slot_range, LocScript.pick("SLOT", "SLOTS"), false)
+	_add_gta_key_hint(row2, SettingsManager.get_action_key_text("toggle_inventory"), LocScript.pick("TAS", "BAG"), true)
+	_add_gta_key_hint(row2, SettingsManager.get_action_key_text("drop_item"), LocScript.pick("BUANG", "DROP"), false)
+	_add_gta_key_hint(row2, "ESC", LocScript.pick("JEDA", "PAUSE"), false)
+
+func _on_settings_keybinds_changed() -> void:
+	_populate_desktop_hints()
+	_refresh_pause_keybind_buttons()
+	if _inv_close_btn:
+		_inv_close_btn.text = LocScript.pick("TUTUP [%s]" % SettingsManager.get_action_key_text("toggle_inventory"), "CLOSE [%s]" % SettingsManager.get_action_key_text("toggle_inventory"))
+	var player: PlayerController = GameManager.player_character as PlayerController
+	if player and player.interaction_ray:
+		player.interaction_ray._update_prompt()
+
+func _on_language_changed(_new_lang: String) -> void:
+	_populate_pause_settings_box()
+	_refresh_localized_hud_texts()
+	_layout_pause_settings_panel()
+
+func _refresh_localized_hud_texts() -> void:
+	var stats_vbox: VBoxContainer = bottom_left.get_node_or_null("VBox") as VBoxContainer if bottom_left else null
+	if stats_vbox:
+		var s_lbl: Label = stats_vbox.get_node_or_null("SanityContainer").get_child(0) as Label if stats_vbox.has_node("SanityContainer") else null
+		var st_lbl: Label = stats_vbox.get_node_or_null("StaminaContainer").get_child(0) as Label if stats_vbox.has_node("StaminaContainer") else null
+		var b_lbl: Label = stats_vbox.get_node_or_null("BatteryContainer").get_child(0) as Label if stats_vbox.has_node("BatteryContainer") else null
+		if s_lbl:
+			s_lbl.text = LocScript.pick("Waras", "Sanity")
+		if st_lbl:
+			st_lbl.text = "Stamina"
+		if b_lbl:
+			b_lbl.text = LocScript.pick("Senter", "Light")
+	if bottom_right:
+		var br_lbl: Label = bottom_right.get_node_or_null("VBox/Label") as Label
+		if br_lbl:
+			br_lbl.text = LocScript.pick("Kebisingan Suara", "Noise Level")
+
+	var pause_title: Label = pause_menu.get_node_or_null("Center/Panel/VBox/Title") as Label if pause_menu else null
+	if pause_title:
+		pause_title.text = LocScript.pick("PERMAINAN DIJEDA", "GAME PAUSED")
+	if resume_button:
+		resume_button.text = LocScript.pick("LANJUTKAN [ESC]", "RESUME [ESC]")
+	if settings_button:
+		settings_button.text = LocScript.pick("PENGATURAN", "SETTINGS")
+	if exit_button:
+		exit_button.text = LocScript.pick("KEMBALI KE MENU UTAMA", "RETURN TO MAIN MENU")
+
+	if barricade_dialog:
+		var b_title: Label = barricade_dialog.get_node_or_null("Margin/VBox/Title") as Label
+		if b_title:
+			b_title.text = LocScript.pick("PERINGATAN: KAMU DI DALAM RUMAH!", "WARNING: YOU ARE INSIDE THE HOUSE!")
+		var b_msg: Label = barricade_dialog.get_node_or_null("Margin/VBox/Message") as Label
+		if b_msg:
+			b_msg.text = LocScript.pick(
+				"Kamu sedang berada di DALAM rumah kayu ini!\n\nPintu yang dipalang tidak bisa dibuka dari luar. Kamu masih bisa membongkar palang dari dalam rumah (papan dikembalikan ke inventaris), tapi suara palu akan menarik perhatian Lampor.\n\nApakah kamu yakin ingin tetap memalang pintu ini dari dalam?",
+				"You are currently INSIDE this wooden house!\n\nA barricaded door cannot be opened from outside. You can still dismantle it from inside (planks return to your bag), but hammering noises will alert Lampor.\n\nAre you sure you want to barricade this door from inside?"
+			)
+		if confirm_barricade_btn:
+			confirm_barricade_btn.text = LocScript.pick("TETAP PALANG PINTU", "BARRICADE ANYWAY")
+		if cancel_barricade_btn:
+			cancel_barricade_btn.text = LocScript.pick("BATAL", "CANCEL")
+
+	if _exit_confirm_title:
+		_exit_confirm_title.text = LocScript.pick("KEMBALI KE MENU UTAMA?", "RETURN TO MAIN MENU?")
+	if _exit_confirm_msg:
+		_exit_confirm_msg.text = LocScript.pick(
+			"Yakin ingin kembali ke menu utama?\nProgres tersimpan otomatis setiap 5 detik dan dapat dilanjutkan nanti.",
+			"Return to the main menu?\nProgress autosaves every 5 seconds and can be resumed later."
+		)
+	if _exit_confirm_cancel:
+		_exit_confirm_cancel.text = LocScript.pick("BATAL", "CANCEL")
+	if _exit_confirm_ok:
+		_exit_confirm_ok.text = LocScript.pick("KE MENU UTAMA", "MAIN MENU")
+
+	if _inv_title_lbl:
+		_inv_title_lbl.text = LocScript.pick("TAS BEKAL & INVENTARIS", "BACKPACK & INVENTORY")
+	if _inv_close_btn:
+		_inv_close_btn.text = LocScript.pick("TUTUP [%s]" % SettingsManager.get_action_key_text("toggle_inventory"), "CLOSE [%s]" % SettingsManager.get_action_key_text("toggle_inventory"))
+	if _inv_storage_lbl:
+		_inv_storage_lbl.text = LocScript.pick("TAS  ·  15 SLOT", "BAG  ·  15 SLOTS")
+	if _inv_hotbar_lbl:
+		_inv_hotbar_lbl.text = LocScript.pick("HOTBAR  ·  5 SLOT", "HOTBAR  ·  5 SLOTS")
+	if _inv_hint_lbl:
+		_inv_hint_lbl.text = LocScript.pick("Tarik atau ketuk dua slot untuk menukar barang.", "Drag or click two slots to swap items.")
+
+	if stare_warning and stare_warning.visible:
+		stare_warning.text = LocScript.pick("JANGAN MENATAP LANGSUNG! ALIHKAN PANDANGANMU!", "DO NOT STARE DIRECTLY! LOOK AWAY NOW!")
+
+	if act_label:
+		act_label.text = GameManager.get_current_act_title()
+	_populate_desktop_hints()
+	_on_inventory_updated(cached_inventory_slots)
+	var player: PlayerController = GameManager.player_character as PlayerController
+	if player and player.interaction_ray:
+		player.interaction_ray._update_prompt()
 
 func _add_gta_key_hint(parent_row: HBoxContainer, key_text: String, action_text: String, is_accent: bool) -> void:
 	var item := HBoxContainer.new()
@@ -1301,6 +1528,32 @@ func _draw_virtual_joystick() -> void:
 	joystick_base.draw_arc(knob_center, radius * 0.36, 0.0, TAU, 36, Color(HorrorTheme.PRIMARY.r, HorrorTheme.PRIMARY.g, HorrorTheme.PRIMARY.b, 0.92), 2.0, true)
 
 func _input(event: InputEvent) -> void:
+	if not _pause_listening_keybind_action.is_empty():
+		if event is InputEventKey:
+			var kb_ke := event as InputEventKey
+			if kb_ke.pressed and not kb_ke.echo:
+				if kb_ke.keycode == KEY_ESCAPE:
+					_cancel_pause_keybind_listening()
+				else:
+					var action_name: String = _pause_listening_keybind_action
+					_pause_listening_keybind_action = ""
+					SettingsManager.rebind_action(action_name, kb_ke)
+					_refresh_pause_keybind_buttons()
+				get_viewport().set_input_as_handled()
+				return
+		elif event is InputEventMouseButton:
+			var kb_mb := event as InputEventMouseButton
+			if kb_mb.pressed:
+				if kb_mb.button_index in [MOUSE_BUTTON_RIGHT, MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_XBUTTON1, MOUSE_BUTTON_XBUTTON2]:
+					var action_name: String = _pause_listening_keybind_action
+					_pause_listening_keybind_action = ""
+					SettingsManager.rebind_action(action_name, kb_mb)
+					_refresh_pause_keybind_buttons()
+					get_viewport().set_input_as_handled()
+					return
+				elif kb_mb.button_index == MOUSE_BUTTON_LEFT:
+					_cancel_pause_keybind_listening()
+		return
 	if is_cutscene_active():
 		if event is InputEventKey and event.pressed and not event.echo:
 			if event.keycode in [KEY_SPACE, KEY_ENTER, KEY_KP_ENTER, KEY_ESCAPE] and active_cutscene_elapsed >= 0.25:
@@ -1352,6 +1605,8 @@ func _handle_pause_settings_scroll_input(event: InputEvent) -> bool:
 		var mb := event as InputEventMouseButton
 		if (mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN) and mb.pressed:
 			if pause_graphics_option and pause_graphics_option.get_popup().visible:
+				return false
+			if _pause_language_option and _pause_language_option.get_popup().visible:
 				return false
 			if pause_settings_scroll.get_global_rect().has_point(mb.position):
 				var step: int = -48 if mb.button_index == MOUSE_BUTTON_WHEEL_UP else 48
@@ -1439,7 +1694,7 @@ func _start_mobile_editor() -> void:
 	for button: Button in touch_buttons:
 		button.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	editor_hint_label = Label.new()
-	editor_hint_label.text = "SERET JOYSTICK DAN TOMBOL KE POSISI YANG DIINGINKAN"
+	editor_hint_label.text = LocScript.pick("SERET JOYSTICK DAN TOMBOL KE POSISI YANG DIINGINKAN", "DRAG JOYSTICK AND BUTTONS TO PREFERRED POSITIONS")
 	editor_hint_label.set_anchors_preset(Control.PRESET_TOP_WIDE)
 	editor_hint_label.offset_left = 12.0
 	editor_hint_label.offset_top = 14.0
@@ -1542,6 +1797,10 @@ func _on_touch_use() -> void:
 func _process(delta: float) -> void:
 	if is_cutscene_active():
 		active_cutscene_elapsed += delta
+	var player: PlayerController = GameManager.player_character as PlayerController
+	if player and player.virtual_sprint_pressed:
+		if get_tree().paused or touch_root == null or not touch_root.visible or not is_instance_valid(touch_run_button) or not touch_run_button.button_pressed:
+			player.set_virtual_sprint(false)
 	if noise_bar.value > 0:
 		noise_bar.value = move_toward(noise_bar.value, 0.0, delta * 1.5)
 
@@ -1766,7 +2025,7 @@ func _begin_cutscene_ui(cutscene_type: String, overlay_name: String, title_text:
 	if not touch:
 		var skip_hint := Label.new()
 		skip_hint.name = "SkipHint"
-		skip_hint.text = "[SPASI / ESC]"
+		skip_hint.text = LocScript.pick("[SPASI / ESC]", "[SPACE / ESC]")
 		skip_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		HorrorTheme.style_label(skip_hint, "mono-sm", Color(0.82, 0.78, 0.72, 0.85), 11)
 		skip_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1774,7 +2033,7 @@ func _begin_cutscene_ui(cutscene_type: String, overlay_name: String, title_text:
 
 	var skip_btn := Button.new()
 	skip_btn.name = "SkipCutsceneButton"
-	skip_btn.text = "LEWATI >>"
+	skip_btn.text = LocScript.pick("LEWATI >>", "SKIP >>")
 	skip_btn.custom_minimum_size = Vector2(118.0, 40.0)
 	skip_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	HorrorTheme.style_button(skip_btn, "secondary", 12, true)
@@ -1853,9 +2112,9 @@ func _play_lampor_descent_cutscene() -> void:
 	var ctx: Dictionary = _begin_cutscene_ui(
 		"descent",
 		"DescentCutsceneOverlay",
-		"BABAK II: KERANDA LAMPOR TURUN KE DESA",
+		LocScript.pick("BABAK II: KERANDA LAMPOR TURUN KE DESA", "ACT II: LAMPOR'S COFFIN DESCENDS"),
 		Color(1.0, 0.25, 0.2, 1.0),
-		"Lampor mendarat dari langit malam... Bersiaplah, Lampor langsung mengejarmu!",
+		LocScript.pick("Lampor mendarat dari langit malam... Bersiaplah, Lampor langsung mengejarmu!", "Lampor lands from the night sky... Brace yourself, the hunt begins now!"),
 		false
 	)
 	var cutscene_camera: Camera3D = ctx["camera"]
@@ -1926,9 +2185,9 @@ func play_victory_cutscene_and_wait() -> void:
 	var ctx: Dictionary = _begin_cutscene_ui(
 		"victory",
 		"VictoryCutsceneOverlay",
-		"FAJAR MENYINGSING: KUTUKAN MUSNAH",
+		LocScript.pick("FAJAR MENYINGSING: KUTUKAN MUSNAH", "DAWN BREAKS: THE CURSE SHATTERS"),
 		Color(1.0, 0.86, 0.35, 1.0),
-		"Cahaya langit menyambar dan menarik Keranda Lampor ke atas hingga lenyap!",
+		LocScript.pick("Cahaya langit menyambar dan menarik Keranda Lampor ke atas hingga lenyap!", "Heavenly light strikes down, pulling Lampor's coffin skyward until it vanishes!"),
 		true
 	)
 	var cutscene_camera: Camera3D = ctx["camera"]
@@ -2110,9 +2369,9 @@ func play_death_cutscene_and_wait() -> void:
 	var ctx: Dictionary = _begin_cutscene_ui(
 		"death",
 		"DeathCutsceneOverlay",
-		"DITANGKAP KERANDA LAMPOR",
+		LocScript.pick("DITANGKAP KERANDA LAMPOR", "CLAIMED BY LAMPOR'S COFFIN"),
 		Color(1.0, 0.2, 0.18, 1.0),
-		"Lampor mengangkat tubuhmu dan membawamu pergi ke dalam kegelapan malam...",
+		LocScript.pick("Lampor mengangkat tubuhmu dan membawamu pergi ke dalam kegelapan malam...", "Lampor hoists you skyward and carries you into the pitch-black night..."),
 		true
 	)
 	var cutscene_camera: Camera3D = ctx["camera"]
@@ -2248,14 +2507,14 @@ func _show_act_banner(num: int, _title: String) -> void:
 	match num:
 		1:
 			act_banner.add_theme_color_override("font_color", Color(1.0, 0.9, 0.4))
-			act_banner.text = "BABAK I: PERTAHANAN AWAL (01.00 WIB)"
+			act_banner.text = LocScript.pick("BABAK I: PERTAHANAN AWAL (01.00 WIB)", "ACT I: EARLY DEFENSE (01:00 WIB)")
 		2:
 			act_banner.add_theme_color_override("font_color", Color(1.0, 0.25, 0.2))
-			act_banner.text = "BABAK II: LAMPOR TURUN KE DESA"
+			act_banner.text = LocScript.pick("BABAK II: LAMPOR TURUN KE DESA", "ACT II: LAMPOR DESCENDS ON THE VILLAGE")
 			AudioManager.play_sound("lampor_roar", 1.0)
 		3:
 			act_banner.add_theme_color_override("font_color", Color(1.0, 0.1, 0.1))
-			act_banner.text = "BABAK III: KLIMAKS PEMBAKARAN"
+			act_banner.text = LocScript.pick("BABAK III: KLIMAKS PEMBAKARAN", "ACT III: BURNING CLIMAX")
 			AudioManager.play_sound("lampor_roar", 2.0)
 
 	_show_mission_card(num, act_banner.text)
@@ -2277,7 +2536,7 @@ func _on_objective_updated(id: String, text: String, current: int, required: int
 		objectives_container.add_child(label)
 		objective_labels[id] = label
 		
-	var status_icon: String = "[Selesai]" if is_completed else "◆"
+	var status_icon: String = LocScript.pick("[Selesai]", "[Done]") if is_completed else "◆"
 	var progress_str: String = " (%d/%d)" % [current, required] if required > 1 else ""
 	label.text = "%s %s%s" % [status_icon, text, progress_str]
 	label.modulate = Color(0.6, 1.0, 0.6) if is_completed else Color(1.0, 1.0, 1.0)
@@ -2296,13 +2555,15 @@ func _on_inventory_updated(slots: Array) -> void:
 		
 		var item: Dictionary = slots[i]
 		if item.is_empty():
-			label.text = "[Kosong]"
+			label.text = LocScript.pick("[Kosong]", "[Empty]")
 			label.add_theme_color_override("font_color", Color(HorrorTheme.OUTLINE.r, HorrorTheme.OUTLINE.g, HorrorTheme.OUTLINE.b, 0.72))
 			qty_label.text = ""
 		else:
-			label.text = item.get("name", "")
+			var raw_id: String = str(item.get("id", ""))
+			var raw_name: String = str(item.get("name", ""))
+			label.text = LocScript.item_name(raw_id, raw_name) if not raw_id.is_empty() else raw_name
 			label.add_theme_color_override("font_color", HorrorTheme.ON_PRIMARY_CONTAINER if is_active else HorrorTheme.ON_SURFACE)
-			if item.get("id", "") == "flashlight":
+			if raw_id == "flashlight":
 				qty_label.text = "%d%%" % int(round(float(item.get("battery", 0.0))))
 			elif item.has("quantity") and item["quantity"] > 1:
 				qty_label.text = "x" + str(item["quantity"])
@@ -2323,7 +2584,7 @@ func _on_item_equipped(slot_index: int, _item: Dictionary) -> void:
 func _on_lampor_stare(intensity: float) -> void:
 	if intensity > 0.4:
 		stare_warning.visible = true
-		stare_warning.text = "JANGAN MENATAP LANGSUNG! ALIHKAN PANDANGANMU!"
+		stare_warning.text = LocScript.pick("JANGAN MENATAP LANGSUNG! ALIHKAN PANDANGANMU!", "DO NOT STARE DIRECTLY! LOOK AWAY NOW!")
 	else:
 		stare_warning.visible = false
 
@@ -2449,13 +2710,15 @@ func _build_inventory_overlay() -> void:
 	main_vbox.add_child(header)
 
 	var title_lbl := Label.new()
-	title_lbl.text = "TAS BEKAL & INVENTARIS"
+	_inv_title_lbl = title_lbl
+	title_lbl.text = LocScript.pick("TAS BEKAL & INVENTARIS", "BACKPACK & INVENTORY")
 	title_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	HorrorTheme.style_label(title_lbl, "headline-md", HorrorTheme.ON_SURFACE, 16)
 	header.add_child(title_lbl)
 
 	var close_btn := Button.new()
-	close_btn.text = "TUTUP [TAB]"
+	_inv_close_btn = close_btn
+	close_btn.text = LocScript.pick("TUTUP [%s]" % SettingsManager.get_action_key_text("toggle_inventory"), "CLOSE [%s]" % SettingsManager.get_action_key_text("toggle_inventory"))
 	close_btn.custom_minimum_size = Vector2(114.0, 44.0)
 	HorrorTheme.style_button(close_btn, "ghost", 11, true)
 	close_btn.pressed.connect(toggle_inventory)
@@ -2464,7 +2727,8 @@ func _build_inventory_overlay() -> void:
 	main_vbox.add_child(HorrorTheme.make_hairline_divider())
 
 	var storage_lbl := Label.new()
-	storage_lbl.text = "TAS  ·  15 SLOT"
+	_inv_storage_lbl = storage_lbl
+	storage_lbl.text = LocScript.pick("TAS  ·  15 SLOT", "BAG  ·  15 SLOTS")
 	HorrorTheme.style_label(storage_lbl, "label-lg", HorrorTheme.PRIMARY, 11)
 	main_vbox.add_child(storage_lbl)
 
@@ -2488,7 +2752,8 @@ func _build_inventory_overlay() -> void:
 	main_vbox.add_child(HorrorTheme.make_hairline_divider())
 
 	var hotbar_lbl := Label.new()
-	hotbar_lbl.text = "HOTBAR  ·  5 SLOT"
+	_inv_hotbar_lbl = hotbar_lbl
+	hotbar_lbl.text = LocScript.pick("HOTBAR  ·  5 SLOT", "HOTBAR  ·  5 SLOTS")
 	HorrorTheme.style_label(hotbar_lbl, "label-lg", HorrorTheme.SECONDARY, 11)
 	main_vbox.add_child(hotbar_lbl)
 
@@ -2509,7 +2774,8 @@ func _build_inventory_overlay() -> void:
 		inventory_hotbar_slots.append(slot_ui)
 
 	var hint_lbl := Label.new()
-	hint_lbl.text = "Tarik atau ketuk dua slot untuk menukar barang."
+	_inv_hint_lbl = hint_lbl
+	hint_lbl.text = LocScript.pick("Tarik atau ketuk dua slot untuk menukar barang.", "Drag or click two slots to swap items.")
 	hint_lbl.custom_minimum_size.x = 340.0
 	hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	HorrorTheme.style_label(hint_lbl, "label-sm", HorrorTheme.TEXT_MUTED, 11)
@@ -2536,8 +2802,7 @@ func toggle_inventory() -> void:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		if player:
 			player.is_inventory_open = true
-			player.set_virtual_move(Vector2.ZERO)
-			player.set_virtual_sprint(false)
+			player.release_all_held_inputs()
 	else:
 		if player:
 			player.is_inventory_open = false

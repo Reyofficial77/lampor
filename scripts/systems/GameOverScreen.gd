@@ -1,6 +1,8 @@
 class_name GameOverScreen
 extends Control
 
+const LocScript = preload("res://scripts/systems/Loc.gd")
+
 @onready var background: ColorRect = $Background
 @onready var retry_btn: Button = $VBoxContainer/RetryButton
 @onready var menu_btn: Button = $VBoxContainer/MenuButton
@@ -19,16 +21,16 @@ func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_build_horror_layout()
 
-	reason_label.text = GameManager.last_death_reason if GameManager.last_death_reason != "" else "Malam ini belum menjadi milikmu."
+	reason_label.text = GameManager.last_death_reason if GameManager.last_death_reason != "" else LocScript.pick("Malam ini belum menjadi milikmu.", "The night claimed you before dawn.")
 	var lower_reason: String = reason_label.text.to_lower()
-	if lower_reason.contains("keranda") or lower_reason.contains("ditarik"):
-		title_label.text = "DITELAN KERANDA LAMPOR"
-	elif lower_reason.contains("fajar"):
-		title_label.text = "FAJAR TAK MENYELAMATKANMU"
+	if lower_reason.contains("keranda") or lower_reason.contains("ditarik") or lower_reason.contains("coffin") or lower_reason.contains("dragged"):
+		title_label.text = LocScript.pick("DITELAN KERANDA LAMPOR", "SWALLOWED BY LAMPOR'S COFFIN")
+	elif lower_reason.contains("fajar") or lower_reason.contains("05.00") or lower_reason.contains("05:00") or lower_reason.contains("dawn"):
+		title_label.text = LocScript.pick("FAJAR TAK MENYELAMATKANMU", "DAWN DID NOT SAVE YOU")
 	else:
-		title_label.text = "JIWAMU TELAH HANCUR"
+		title_label.text = LocScript.pick("JIWAMU TELAH HANCUR", "YOUR SANITY SHATTERED")
 
-	reward_label.text = "+%d Koin Emas  ·  Total: %d" % [GameManager.last_run_coin_reward, GameManager.coins]
+	reward_label.text = LocScript.pick("+%d Koin Emas  ·  Total: %d" % [GameManager.last_run_coin_reward, GameManager.coins], "+%d Gold Coins  ·  Total: %d" % [GameManager.last_run_coin_reward, GameManager.coins])
 
 	retry_btn.pressed.connect(func() -> void: GameManager.start_new_game(GameManager.selected_difficulty))
 	menu_btn.pressed.connect(func() -> void: get_tree().change_scene_to_file("res://scenes/ui/MainMenu.tscn"))
@@ -94,10 +96,10 @@ func _build_horror_layout() -> void:
 	buttons_box.reparent(content_vbox)
 	buttons_box.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	buttons_box.add_theme_constant_override("separation", 10)
-	retry_btn.text = "COBA LAGI"
+	retry_btn.text = LocScript.pick("COBA LAGI", "TRY AGAIN")
 	retry_btn.custom_minimum_size = Vector2(240.0, 44.0)
 	HorrorTheme.style_button(retry_btn, "primary", 14, true)
-	menu_btn.text = "KEMBALI KE MENU"
+	menu_btn.text = LocScript.pick("KEMBALI KE MENU", "BACK TO MENU")
 	menu_btn.custom_minimum_size = Vector2(240.0, 44.0)
 	HorrorTheme.style_button(menu_btn, "ghost", 13, true)
 

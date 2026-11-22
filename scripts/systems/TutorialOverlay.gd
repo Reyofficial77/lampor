@@ -1,6 +1,8 @@
 class_name TutorialOverlay
 extends Control
 
+const LocScript = preload("res://scripts/systems/Loc.gd")
+
 var card: PanelContainer
 var content_box: VBoxContainer
 var step_badge: Label
@@ -30,6 +32,8 @@ func _ready() -> void:
 	SignalBus.torch_lit.connect(_on_torch_lit)
 	SignalBus.act_started.connect(_on_act_started)
 	SignalBus.ritual_item_collected.connect(_on_ritual_item_collected)
+	SettingsManager.language_changed.connect(func(_l: String) -> void: _refresh_step_content())
+	SettingsManager.keybinds_changed.connect(func() -> void: _refresh_step_content())
 	get_viewport().size_changed.connect(_apply_layout)
 	_refresh_step_content()
 
@@ -80,7 +84,7 @@ func _build_ui() -> void:
 	top_row.add_child(next_btn)
 
 	skip_btn = Button.new()
-	skip_btn.text = "TUTUP"
+	skip_btn.text = LocScript.pick("TUTUP", "CLOSE")
 	skip_btn.custom_minimum_size = Vector2(56.0, 30.0)
 	HorrorTheme.style_button(skip_btn, "ghost", 10, true)
 	skip_btn.pressed.connect(_on_skip_pressed)
@@ -268,36 +272,66 @@ func _refresh_step_content() -> void:
 	if not step_badge or not title_label or not body_label or not goal_label:
 		return
 	var touch: bool = _is_touch()
+	var move_k: String = SettingsManager.get_move_keys_summary()
+	var sprint_k: String = SettingsManager.get_action_key_text("sprint")
+	var flash_k: String = SettingsManager.get_action_key_text("flashlight")
+	var act_k: String = SettingsManager.get_action_key_text("interact")
+	var slot_k: String = "%s-%s" % [SettingsManager.get_action_key_text("slot_1"), SettingsManager.get_action_key_text("slot_5")]
+	if min_btn:
+		min_btn.tooltip_text = LocScript.pick("Perkecil / perbesar panduan", "Collapse / expand guide")
+	if skip_btn:
+		skip_btn.text = LocScript.pick("TUTUP", "CLOSE")
 	step_badge.text = "TUTORIAL · %d/%d" % [current_step, TOTAL_STEPS]
-	next_btn.text = "SELESAI" if current_step == TOTAL_STEPS else "LANJUT"
+	next_btn.text = LocScript.pick("SELESAI" if current_step == TOTAL_STEPS else "LANJUT", "FINISH" if current_step == TOTAL_STEPS else "NEXT")
 
 	match current_step:
 		1:
-			title_label.text = "1. Pergerakan & Senter"
-			body_label.text = "Joystick kiri untuk jalan, ikon Lari untuk sprint, dan ikon Senter untuk lampu." if touch else "[W/A/S/D] untuk jalan, [Shift] untuk lari, [Mouse] menoleh, dan [F] menyalakan Senter."
-			goal_label.text = "Target: Berjalanlah beberapa langkah di jalan desa."
+			title_label.text = LocScript.pick("1. Pergerakan & Senter", "1. Movement & Flashlight")
+			body_label.text = LocScript.pick(
+				"Joystick kiri untuk jalan, ikon Lari untuk sprint, dan ikon Senter untuk lampu." if touch else "[%s] untuk jalan, [%s] untuk lari, [Mouse] menoleh, dan [%s] menyalakan Senter." % [move_k, sprint_k, flash_k],
+				"Left joystick to walk, Sprint icon to run, and Flashlight icon for light." if touch else "[%s] to move, [%s] to sprint, [Mouse] to look around, and [%s] for Flashlight." % [move_k, sprint_k, flash_k]
+			)
+			goal_label.text = LocScript.pick("Target: Berjalanlah beberapa langkah di jalan desa.", "Goal: Take a few steps along the village road.")
 		2:
-			title_label.text = "2. Ambil & Pakai Barang [E]"
-			body_label.text = "Ketuk ikon Tangan untuk semua interaksi: ambil barang, buka pintu, sembunyi, atau minum Jamu yang dipilih di hotbar." if touch else "Tekan [E] untuk semua interaksi: ambil barang, buka pintu, sembunyi, atau minum Jamu/Baterai di hotbar [1-5]."
-			goal_label.text = "Target: Ambil 1 barang di sekitar desa (Minyak / Papan)."
+			title_label.text = LocScript.pick("2. Ambil & Pakai Barang [%s]" % act_k, "2. Pick Up & Use Items [%s]" % act_k)
+			body_label.text = LocScript.pick(
+				"Ketuk ikon Tangan untuk semua interaksi: ambil barang, buka pintu, sembunyi, atau minum Jamu yang dipilih di hotbar." if touch else "Tekan [%s] untuk semua interaksi: ambil barang, buka pintu, sembunyi, atau minum Jamu/Baterai di hotbar [%s]." % [act_k, slot_k],
+				"Tap the Hand icon for all interactions: loot items, open doors, hide, or drink elixirs from your hotbar." if touch else "Press [%s] to interact: pick up items, open doors, hide, or use Elixir/Battery on hotbar [%s]." % [act_k, slot_k]
+			)
+			goal_label.text = LocScript.pick("Target: Ambil 1 barang di sekitar desa (Minyak / Papan).", "Goal: Pick up 1 supply item around the village (Kerosene / Planks).")
 		3:
-			title_label.text = "3. Nyalakan 5 Obor Penolak Bala"
-			body_label.text = "Bawa Minyak Tanah & Korek, dekati obor padam di pinggir jalan, lalu tekan [E]. Cahaya obor memulihkan Waras."
-			goal_label.text = "Target: Nyalakan Obor Penolak Bala (%d/5)." % GameManager.torches_lit
+			title_label.text = LocScript.pick("3. Nyalakan 5 Obor Penolak Bala", "3. Light 5 Repellent Torches")
+			body_label.text = LocScript.pick(
+				"Bawa Minyak Tanah & Korek, dekati obor padam di pinggir jalan, lalu tekan [%s]. Cahaya obor memulihkan Waras." % act_k,
+				"Carry Kerosene & Matches, approach an unlit roadside torch, then press [%s]. Torchlight restores Sanity." % act_k
+			)
+			goal_label.text = LocScript.pick("Target: Nyalakan Obor Penolak Bala (%d/5)." % GameManager.torches_lit, "Goal: Light Repellent Torches (%d/5)." % GameManager.torches_lit)
 		4:
-			title_label.text = "4. Barikade 3 Pintu & Lemari Sembunyi"
-			body_label.text = "Pilih Papan & Paku di hotbar, berdiri di luar pintu rumah yang tertutup, lalu tekan [E]. Di dalam rumah ada Lemari untuk bersembunyi."
-			goal_label.text = "Target: Palang Pintu Rumah (%d/3)." % GameManager.doors_barricaded
+			title_label.text = LocScript.pick("4. Barikade 3 Pintu & Lemari Sembunyi", "4. Barricade 3 Doors & Closet Hiding")
+			body_label.text = LocScript.pick(
+				"Pilih Papan & Paku di hotbar, berdiri di luar pintu rumah yang tertutup, lalu tekan [%s]. Di dalam rumah ada Lemari untuk bersembunyi." % act_k,
+				"Equip Planks & Nails, stand outside a closed house door, and press [%s]. Inside houses you can hide in closets." % act_k
+			)
+			goal_label.text = LocScript.pick("Target: Palang Pintu Rumah (%d/3)." % GameManager.doors_barricaded, "Goal: Barricade House Doors (%d/3)." % GameManager.doors_barricaded)
 		5:
-			title_label.text = "5. Selesaikan Pertahanan Babak I"
-			body_label.text = "Selesaikan 5 Obor dan 3 Barikade Pintu sebelum 02.30 WIB untuk memulai Babak II."
-			goal_label.text = "Target: Obor %d/5  ·  Barikade Pintu %d/3." % [GameManager.torches_lit, GameManager.doors_barricaded]
+			title_label.text = LocScript.pick("5. Selesaikan Pertahanan Babak I", "5. Finish Act I Defense")
+			body_label.text = LocScript.pick(
+				"Selesaikan 5 Obor dan 3 Barikade Pintu sebelum 02.30 WIB untuk memulai Babak II.",
+				"Complete 5 Torches and 3 Barricaded Doors before 02:30 WIB to begin Act II."
+			)
+			goal_label.text = LocScript.pick("Target: Obor %d/5  ·  Barikade Pintu %d/3." % [GameManager.torches_lit, GameManager.doors_barricaded], "Goal: Torches %d/5  ·  Door Barricades %d/3." % [GameManager.torches_lit, GameManager.doors_barricaded])
 		6:
-			title_label.text = "6. Jangan Menatap Lampor"
-			body_label.text = "Dilarang menatap Keranda Hijau Lampor. Saat lonceng dekat, palingkan pandangan, matikan senter [F], dan sembunyi sambil mencari 4 Benda Ritual."
-			goal_label.text = "Target: Kumpulkan 4 Benda Ritual (%d/4) tanpa menatap Lampor." % GameManager.get_ritual_item_count()
+			title_label.text = LocScript.pick("6. Jangan Menatap Lampor", "6. Never Stare at Lampor")
+			body_label.text = LocScript.pick(
+				"Dilarang menatap Keranda Hijau Lampor. Saat lonceng dekat, palingkan pandangan, matikan senter [%s], dan sembunyi sambil mencari 4 Benda Ritual." % flash_k,
+				"Never look directly at Lampor's green coffin. When bells ring close, look away, turn off flashlight [%s], and hide while seeking 4 Ritual Relics." % flash_k
+			)
+			goal_label.text = LocScript.pick("Target: Kumpulkan 4 Benda Ritual (%d/4) tanpa menatap Lampor." % GameManager.get_ritual_item_count(), "Goal: Collect 4 Ritual Relics (%d/4) safely." % GameManager.get_ritual_item_count())
 		7:
-			title_label.text = "7. Bakar di Tungku Sebelum 05.00 WIB"
-			body_label.text = "Bakar 4 Benda Ritual di Tungku Balai Desa [E] dan bertahan %d detik sebelum pukul 05.00 WIB tiba." % int(GameManager.furnace_total_time)
-			goal_label.text = "Target: Bakar Benda Ritual di Tungku Balai Desa dengan [E]."
+			title_label.text = LocScript.pick("7. Bakar di Tungku Sebelum 05.00 WIB", "7. Burn at Furnace Before 05:00 WIB")
+			body_label.text = LocScript.pick(
+				"Bakar 4 Benda Ritual di Tungku Balai Desa [%s] dan bertahan %d detik sebelum pukul 05.00 WIB tiba." % [act_k, int(GameManager.furnace_total_time)],
+				"Burn 4 Ritual Relics in the Village Hall Furnace [%s] and survive %d seconds before 05:00 WIB." % [act_k, int(GameManager.furnace_total_time)]
+			)
+			goal_label.text = LocScript.pick("Target: Bakar Benda Ritual di Tungku Balai Desa dengan [%s]." % act_k, "Goal: Burn the Ritual Relics at the Village Hall Furnace with [%s]." % act_k)
 	_apply_layout()

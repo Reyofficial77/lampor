@@ -1,6 +1,8 @@
 class_name InteractionRay
 extends RayCast3D
 
+const LocScript = preload("res://scripts/systems/Loc.gd")
+
 var current_target: Node = null
 var prompt_text: String = ""
 
@@ -26,14 +28,15 @@ func _get_held_item_prompt(player: Node) -> String:
 		return ""
 	var eq: Dictionary = inv.get_equipped_item()
 	var item_id: String = str(eq.get("id", ""))
+	var k: String = SettingsManager.get_action_key_text("interact")
 	if item_id == "jamu":
-		return "[E] Minum Jamu Tolak Bala"
+		return LocScript.pick("[%s] Minum Jamu Tolak Bala" % k, "[%s] Drink Herbal Elixir" % k)
 	elif item_id == "baterai":
-		return "[E] Isi Ulang Baterai Senter"
+		return LocScript.pick("[%s] Isi Ulang Baterai Senter" % k, "[%s] Recharge Flashlight Battery" % k)
 	elif item_id == "energy_drink":
-		return "[E] Minum Energy Drink (Stamina 100% 3 dtk)"
+		return LocScript.pick("[%s] Minum Energy Drink (Stamina 100%% 3 dtk)" % k, "[%s] Drink Energy Drink (100%% Stamina 3s)" % k)
 	elif item_id == "kentongan":
-		return "[E] Pukul Kentongan (Usir Lampor 5 dtk)"
+		return LocScript.pick("[%s] Pukul Kentongan (Usir Lampor 5 dtk)" % k, "[%s] Strike Kentongan (Repel Lampor 5s)" % k)
 	return ""
 
 func _is_target_actionable(target: Node, player: Node) -> bool:

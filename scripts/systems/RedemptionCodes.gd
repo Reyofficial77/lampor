@@ -17,7 +17,9 @@ const CODES: Dictionary = {
 	"BOOL5": {"type": "coins", "quantity": 5555, "description": "BOOL5!"},
 	"LORDREYID": {"type": "coins", "quantity": 6767676767, "description": "Hadiah dari owner!"},
 	"FOKUSCRYPTO": {"type": "coins", "quantity": 99999, "description": "BITCOIN LU ADA BERAPA BOS!?"},
-	"LAMPORGIFT": {"type": "coins", "quantity": 2500, "description": "hadiah untuk kalian!"}
+	"LAMPORGIFT": {"type": "coins", "quantity": 2500, "description": "hadiah untuk kalian!"},
+	"FOREVERYONE": {"type": "coins", "quantity": 5000, "description": "Hadiah untuk semua pemain!", "description_en": "A gift for everyone!"},
+	"LAMPORLOVER": {"type": "coins", "quantity": 10000, "description": "Hadiah spesial pecinta Lampor!", "description_en": "Special gift for Lampor fans!"}
 }
 
 static func normalize_code(raw_code: String) -> String:

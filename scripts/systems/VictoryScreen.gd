@@ -2,6 +2,7 @@ class_name VictoryScreen
 extends Control
 
 const HORROR_TITLE_FONT: Font = preload("res://assets/fonts/HorrorTitle.ttf")
+const LocScript = preload("res://scripts/systems/Loc.gd")
 
 @onready var background: ColorRect = $Background
 @onready var replay_btn: Button = $VBoxContainer/ReplayButton
@@ -55,6 +56,7 @@ func _ready() -> void:
 	title_box.move_child(time_label, 0)
 
 	if title_label:
+		title_label.text = LocScript.pick("KUTUKAN TELAH BERAKHIR", "THE CURSE IS BROKEN")
 		title_label.add_theme_font_override("font", HORROR_TITLE_FONT)
 		title_label.add_theme_color_override("font_color", Color("f5d67a"))
 		title_label.add_theme_color_override("font_outline_color", Color("241806"))
@@ -70,13 +72,14 @@ func _ready() -> void:
 	title_box.move_child(rule_line, 2)
 
 	if subtitle_label:
+		subtitle_label.text = LocScript.pick("Fajar menyingsing. Benda keramat musnah dan Lampor pun lenyap.", "Dawn breaks at last. The cursed relics are burned and Lampor is banished.")
 		HorrorTheme.style_label(subtitle_label, "body-lg", Color("efe6d5"), 16)
 		subtitle_label.add_theme_color_override("font_outline_color", Color("120c05"))
 		subtitle_label.add_theme_constant_override("outline_size", 2)
 		subtitle_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 
 	reward_label = Label.new()
-	reward_label.text = "+%d Koin Emas  ·  Total: %d" % [GameManager.last_run_coin_reward, GameManager.coins]
+	reward_label.text = LocScript.pick("+%d Koin Emas  ·  Total: %d" % [GameManager.last_run_coin_reward, GameManager.coins], "+%d Gold Coins  ·  Total: %d" % [GameManager.last_run_coin_reward, GameManager.coins])
 	reward_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	reward_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	HorrorTheme.style_label(reward_label, "mono-sm", Color("f5d67a"), 13)
@@ -85,6 +88,10 @@ func _ready() -> void:
 	buttons_box.reparent(content_vbox)
 	buttons_box.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	buttons_box.add_theme_constant_override("separation", 10)
+	if replay_btn:
+		replay_btn.text = LocScript.pick("MAIN LAGI", "PLAY AGAIN")
+	if menu_btn:
+		menu_btn.text = LocScript.pick("MENU UTAMA", "MAIN MENU")
 	_style_dawn_button(replay_btn, true)
 	_style_dawn_button(menu_btn, false)
 	replay_btn.pressed.connect(func() -> void:

@@ -1,6 +1,8 @@
 class_name InventorySlotUI
 extends PanelContainer
 
+const LocScript = preload("res://scripts/systems/Loc.gd")
+
 signal slot_drag_started(slot_index: int)
 signal slot_dropped(from_index: int, to_index: int)
 signal slot_clicked(slot_index: int)
@@ -74,10 +76,12 @@ func update_slot(data: Dictionary, equipped: bool = false) -> void:
 		return
 
 	if item_data.is_empty():
-		name_label.text = "[Kosong]"
+		name_label.text = LocScript.pick("[Kosong]", "[Empty]")
 		qty_label.text = ""
 	else:
-		name_label.text = str(item_data.get("name", ""))
+		var raw_id: String = str(item_data.get("id", ""))
+		var raw_name: String = str(item_data.get("name", ""))
+		name_label.text = LocScript.item_name(raw_id, raw_name) if not raw_id.is_empty() else raw_name
 		if item_data.has("quantity") and int(item_data["quantity"]) > 1:
 			qty_label.text = "x" + str(item_data["quantity"])
 		elif item_data.has("battery"):
@@ -165,7 +169,9 @@ func _get_drag_data(_at_position: Vector2) -> Variant:
 	pvbox.alignment = BoxContainer.ALIGNMENT_CENTER
 	pvbox.add_theme_constant_override("separation", 2)
 	var plabel := Label.new()
-	plabel.text = str(item_data.get("name", ""))
+	var drag_id: String = str(item_data.get("id", ""))
+	var drag_name: String = str(item_data.get("name", ""))
+	plabel.text = LocScript.item_name(drag_id, drag_name) if not drag_id.is_empty() else drag_name
 	plabel.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	HorrorTheme.style_label(plabel, "label-sm", HorrorTheme.ON_PRIMARY_CONTAINER, 11)
 	pvbox.add_child(plabel)

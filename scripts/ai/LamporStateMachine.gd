@@ -1,6 +1,8 @@
 class_name LamporStateMachine
 extends CharacterBody3D
 
+const LocScript = preload("res://scripts/systems/Loc.gd")
+
 enum State { DORMANT_SKY, DESCENDING, PATROL, INVESTIGATE, STARE_PUNISHMENT, CHASE, BANISHED, REPELLED }
 var current_state: State = State.DORMANT_SKY
 
@@ -33,6 +35,7 @@ const MAX_CHASE_TIME: float = 18.0
 const LOST_SIGHT_GIVE_UP: float = 5.0
 const CHASE_COOLDOWN_TIME: float = 10.0
 const REPEL_DURATION: float = 5.0
+var _near_dialog_cooldown: float = 0.0
 var chase_timer: float = 0.0
 var lost_sight_timer: float = 0.0
 var chase_cooldown: float = 0.0
@@ -589,7 +592,7 @@ func _start_catch() -> void:
 	red_light.light_color = Color(1.0, 0.05, 0.05)
 	SignalBus.lampor_screamer_triggered.emit()
 	await get_tree().create_timer(1.0).timeout
-	SignalBus.player_death_requested.emit("Kamu ditarik ke dalam keranda Lampor!")
+	SignalBus.player_death_requested.emit(LocScript.pick("Kamu ditarik ke dalam keranda Lampor!", "You were dragged into Lampor's coffin!"))
 
 
 func repel_from_kentongan(duration: float = REPEL_DURATION) -> bool:
@@ -628,7 +631,7 @@ func _process_repelled(delta: float, hover_bob: float) -> void:
 		lost_sight_timer = 0.0
 		_set_state(State.CHASE)
 		SignalBus.lampor_state_changed.emit("CHASE")
-		SignalBus.dialog_requested.emit("Efek kentongan habis — Lampor kembali mengejar!", 2.5)
+		SignalBus.dialog_requested.emit(LocScript.pick("Efek kentongan habis — Lampor kembali mengejar!", "Kentongan effect wore off — Lampor is hunting again!"), 2.5)
 
 func reset_after_player_revive() -> void:
 	is_catching = false
@@ -672,10 +675,17 @@ func _on_player_noise(level: float, noise_pos: Vector3) -> void:
 		_set_state(State.INVESTIGATE)
 
 func _set_state(new_state: State) -> void:
+	var prev_state: State = current_state
 	current_state = new_state
 	if new_state == State.CHASE:
 		chase_timer = 0.0
 		lost_sight_timer = 0.0
+	var now_sec: float = float(Time.get_ticks_msec()) * 0.001
+	if new_state == State.CHASE and prev_state != State.CHASE and prev_state != State.REPELLED and (now_sec - _near_dialog_cooldown) >= 28.0:
+		_near_dialog_cooldown = now_sec
+		var pool: Array[String] = LocScript.dialogue_pool("lampor_near")
+		if not pool.is_empty():
+			SignalBus.dialog_requested.emit(pool[randi() % pool.size()], 2.6)
 	match new_state:
 		State.PATROL:
 			red_light.light_energy = 2.0

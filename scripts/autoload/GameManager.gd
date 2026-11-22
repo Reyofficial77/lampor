@@ -2,6 +2,7 @@ extends Node
 
 const REDEMPTION_CODES = preload("res://scripts/systems/RedemptionCodes.gd")
 const ADMIN_PANEL_SCRIPT = preload("res://scripts/ui/AdminPanel.gd")
+const LocScript = preload("res://scripts/systems/Loc.gd")
 
 # Game Manager Singleton
 
@@ -63,6 +64,9 @@ var last_run_coin_reward: int = 0
 const WIN_COIN_REWARD: int = 120
 const LOSS_COIN_REWARD: int = 25
 const SAVE_PATH: String = "user://lampor_save.json"
+const SAVE_TEMP_PATH: String = "user://lampor_save.json.tmp"
+const SAVE_BACKUP_PATH: String = "user://lampor_save.json.bak"
+const WEB_SAVE_STORAGE_KEY: String = "lampor_save_v1"
 const SETTINGS_CONFIG_PATH: String = "user://lampor_settings.cfg"
 const RUN_SAVE_PATH: String = "user://lampor_run.json"
 const RUN_SAVE_TEMP_PATH: String = "user://lampor_run.json.tmp"
@@ -79,6 +83,9 @@ var tutorial_origin_version: String = ""
 var tutorial_origin_commit: String = ""
 var admin_god_mode: bool = false
 var admin_panel: CanvasLayer = null
+var save_seq: int = 0
+var _save_load_failed: bool = false
+var _web_save_sync_pending: bool = false
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -87,12 +94,124 @@ func _ready() -> void:
 	SignalBus.torch_lit.connect(_on_torch_lit)
 	SignalBus.ritual_item_collected.connect(_on_ritual_item_collected)
 	SignalBus.player_death_requested.connect(_on_player_death_requested)
+	SettingsManager.language_changed.connect(_on_language_changed)
 	call_deferred("_setup_admin_panel")
+	if OS.has_feature("web"):
+		call_deferred("_schedule_web_save_reconcile")
+
+func _on_language_changed(_lang: String) -> void:
+	if current_state == GameState.PLAYING or current_state == GameState.PAUSED:
+		SignalBus.act_started.emit(get_current_act_number(), get_current_act_title())
+		broadcast_all_objectives()
 
 func _setup_admin_panel() -> void:
 	if admin_panel == null and ADMIN_PANEL_SCRIPT != null:
 		admin_panel = ADMIN_PANEL_SCRIPT.new()
 		add_child(admin_panel)
+
+func _read_save_dict_from_file(path: String) -> Dictionary:
+	if not FileAccess.file_exists(path):
+		return {}
+	var file: FileAccess = FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return {}
+	var raw: String = file.get_as_text()
+	file.close()
+	return _parse_save_dict_text(raw)
+
+func _parse_save_dict_text(raw: String) -> Dictionary:
+	if raw.strip_edges().is_empty():
+		return {}
+	var json := JSON.new()
+	if json.parse(raw) != OK or not (json.data is Dictionary):
+		return {}
+	return json.data as Dictionary
+
+func _read_save_dict_from_web_storage() -> Dictionary:
+	if not OS.has_feature("web"):
+		return {}
+	var js_code: String = """(function(){
+		try {
+			var v = window.localStorage.getItem('%s');
+			if (!v) return '';
+			var bytes = new TextEncoder().encode(v);
+			var bin = '';
+			for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+			return btoa(bin);
+		} catch (e) { return ''; }
+	})()""" % WEB_SAVE_STORAGE_KEY
+	var b64: Variant = JavaScriptBridge.eval(js_code)
+	if not (b64 is String) or (b64 as String).is_empty():
+		return {}
+	return _parse_save_dict_text(Marshalls.base64_to_utf8(b64 as String))
+
+func _mirror_save_to_web_storage(json_text: String) -> void:
+	if not OS.has_feature("web") or json_text.is_empty():
+		return
+	var b64: String = Marshalls.utf8_to_base64(json_text)
+	var js_code: String = """(function(){
+		try {
+			var bin = atob('%s');
+			var bytes = new Uint8Array(bin.length);
+			for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+			var txt = new TextDecoder('utf-8').decode(bytes);
+			window.localStorage.setItem('%s', txt);
+		} catch (e) {}
+	})()""" % [b64, WEB_SAVE_STORAGE_KEY]
+	JavaScriptBridge.eval(js_code)
+
+func _sync_web_save_idbfs() -> void:
+	if not OS.has_feature("web") or _web_save_sync_pending:
+		return
+	_web_save_sync_pending = true
+	JavaScriptBridge.eval("""(function(){
+		try {
+			if (typeof FS !== 'undefined' && typeof FS.syncfs === 'function') {
+				FS.syncfs(false, function(err){});
+			}
+		} catch (e) {}
+	})()""")
+	get_tree().create_timer(0.25, true, false, true).timeout.connect(func() -> void:
+		_web_save_sync_pending = false
+	)
+
+func _pick_best_save_candidate() -> Dictionary:
+	var candidates: Array[Dictionary] = []
+	var primary: Dictionary = _read_save_dict_from_file(SAVE_PATH)
+	var backup: Dictionary = _read_save_dict_from_file(SAVE_BACKUP_PATH)
+	var web_data: Dictionary = _read_save_dict_from_web_storage()
+	for cand: Dictionary in [primary, backup, web_data]:
+		if not cand.is_empty():
+			candidates.append(cand)
+	if candidates.is_empty():
+		return {}
+	var best: Dictionary = candidates[0]
+	var best_seq: int = int(best.get("save_seq", 0))
+	var best_score: int = int(best.get("coins", 0)) + int(best.get("total_wins", 0)) * 1000 + int(best.get("extra_lives", 0)) * 100
+	for i: int in range(1, candidates.size()):
+		var c: Dictionary = candidates[i]
+		var c_seq: int = int(c.get("save_seq", 0))
+		var c_score: int = int(c.get("coins", 0)) + int(c.get("total_wins", 0)) * 1000 + int(c.get("extra_lives", 0)) * 100
+		if c_seq > best_seq or (c_seq == best_seq and c_score > best_score):
+			best = c
+			best_seq = c_seq
+			best_score = c_score
+	return best
+
+func _schedule_web_save_reconcile() -> void:
+	if not OS.has_feature("web"):
+		return
+	await get_tree().create_timer(0.75, true, false, true).timeout
+	var disk_cand: Dictionary = _read_save_dict_from_file(SAVE_PATH)
+	if disk_cand.is_empty():
+		disk_cand = _read_save_dict_from_file(SAVE_BACKUP_PATH)
+	if disk_cand.is_empty():
+		return
+	var disk_seq: int = int(disk_cand.get("save_seq", 0))
+	var disk_coins: int = clampi(int(disk_cand.get("coins", 0)), 0, MAX_COINS)
+	if disk_seq > save_seq or (save_seq <= 1 and coins == 0 and disk_coins > 0):
+		load_save_data()
+		SignalBus.coins_changed.emit(coins)
 
 func load_save_data() -> void:
 	var current_version: String = str(ProjectSettings.get_setting("application/config/version", ""))
@@ -101,12 +220,24 @@ func load_save_data() -> void:
 		or UpdateManager.updated_on_this_boot \
 		or UpdateManager.pck_loaded_this_session \
 		or FileAccess.file_exists(SETTINGS_CONFIG_PATH) \
+		or FileAccess.file_exists(SAVE_BACKUP_PATH) \
 		or not _read_run_snapshot().is_empty()
 
-	if not FileAccess.file_exists(SAVE_PATH):
+	_save_load_failed = false
+	var primary_exists: bool = FileAccess.file_exists(SAVE_PATH)
+	var data: Dictionary = _pick_best_save_candidate()
+	if data.is_empty():
+		if primary_exists:
+			# Primary save existed on disk but could not be opened/parsed cleanly: do not overwrite with 0 coins!
+			_save_load_failed = true
+			tutorial_completed = true
+			install_tutorial_state = "skipped_on_update"
+			push_warning("[GameManager] Save utama tidak dapat dibaca; menunda penimpaan agar koin tidak ter-reset.")
+			return
 		total_wins = 0
 		coins = 0
 		extra_lives = 0
+		save_seq = 0
 		if has_prior_footprint:
 			tutorial_completed = true
 			install_tutorial_state = "skipped_on_update"
@@ -117,17 +248,8 @@ func load_save_data() -> void:
 			tutorial_origin_commit = current_commit
 		save_game_data()
 		return
-	var file: FileAccess = FileAccess.open(SAVE_PATH, FileAccess.READ)
-	if not file:
-		tutorial_completed = true
-		install_tutorial_state = "skipped_on_update"
-		return
-	var json: JSON = JSON.new()
-	if json.parse(file.get_as_text()) != OK or not json.data is Dictionary:
-		tutorial_completed = true
-		install_tutorial_state = "skipped_on_update"
-		return
-	var data: Dictionary = json.data
+
+	save_seq = maxi(save_seq, int(data.get("save_seq", 0)))
 	total_wins = maxi(0, int(data.get("total_wins", 0)))
 	var raw_coins: int = int(data.get("coins", 0))
 	if raw_coins < 0 or raw_coins > MAX_COINS:
@@ -152,12 +274,11 @@ func load_save_data() -> void:
 	tutorial_origin_version = str(data.get("tutorial_origin_version", ""))
 	tutorial_origin_commit = str(data.get("tutorial_origin_commit", ""))
 
-	var needs_migration_save: bool = false
+	var needs_migration_save: bool = not primary_exists
 	if saved_tutorial_state == "admin_forced":
 		tutorial_completed = saved_tutorial_done
 		install_tutorial_state = "admin_forced"
 	elif saved_tutorial_state.is_empty():
-		# Save berasal dari versi sebelumnya (sebelum pelacakan fresh install): bukan fresh install.
 		tutorial_completed = true
 		install_tutorial_state = "completed" if saved_tutorial_done else "skipped_on_update"
 		needs_migration_save = true
@@ -186,10 +307,18 @@ func load_save_data() -> void:
 
 func save_game_data() -> void:
 	coins = clampi(coins, 0, MAX_COINS)
-	var file: FileAccess = FileAccess.open(SAVE_PATH, FileAccess.WRITE)
-	if not file:
-		return
+	var disk_best: Dictionary = _pick_best_save_candidate()
+	if not disk_best.is_empty():
+		var disk_seq: int = int(disk_best.get("save_seq", 0))
+		if _save_load_failed and coins == 0 and int(disk_best.get("coins", 0)) > 0:
+			push_warning("[GameManager] Mencegah save kosong menimpa data koin yang tersimpan.")
+			return
+		save_seq = maxi(save_seq, disk_seq)
+	_save_load_failed = false
+	save_seq += 1
 	var data: Dictionary = {
+		"save_version": 2,
+		"save_seq": save_seq,
 		"total_wins": total_wins,
 		"coins": coins,
 		"extra_lives": extra_lives,
@@ -200,8 +329,41 @@ func save_game_data() -> void:
 		"item_stash": item_stash,
 		"redeemed_codes": redeemed_codes
 	}
-	file.store_string(JSON.stringify(data))
-	file.flush()
+	var json_text: String = JSON.stringify(data)
+	var temp_file: FileAccess = FileAccess.open(SAVE_TEMP_PATH, FileAccess.WRITE)
+	if temp_file == null:
+		push_warning("[GameManager] Gagal membuka file save sementara: %s" % FileAccess.get_open_error())
+		return
+	temp_file.store_string(json_text)
+	temp_file.flush()
+	temp_file.close()
+
+	var save_abs: String = ProjectSettings.globalize_path(SAVE_PATH)
+	var temp_abs: String = ProjectSettings.globalize_path(SAVE_TEMP_PATH)
+	var backup_abs: String = ProjectSettings.globalize_path(SAVE_BACKUP_PATH)
+	if FileAccess.file_exists(SAVE_PATH):
+		if FileAccess.file_exists(SAVE_BACKUP_PATH):
+			DirAccess.remove_absolute(backup_abs)
+		var backup_err: Error = DirAccess.rename_absolute(save_abs, backup_abs)
+		if backup_err != OK:
+			push_warning("[GameManager] Gagal memindahkan cadangan save: %d" % backup_err)
+			return
+	var commit_err: Error = DirAccess.rename_absolute(temp_abs, save_abs)
+	if commit_err != OK:
+		if FileAccess.file_exists(SAVE_BACKUP_PATH) and not FileAccess.file_exists(SAVE_PATH):
+			DirAccess.rename_absolute(backup_abs, save_abs)
+		push_warning("[GameManager] Gagal memasang save baru: %d" % commit_err)
+		return
+	if not FileAccess.file_exists(SAVE_BACKUP_PATH):
+		var bak_file: FileAccess = FileAccess.open(SAVE_BACKUP_PATH, FileAccess.WRITE)
+		if bak_file != null:
+			bak_file.store_string(json_text)
+			bak_file.flush()
+			bak_file.close()
+
+	if OS.has_feature("web"):
+		_mirror_save_to_web_storage(json_text)
+		_sync_web_save_idbfs()
 
 func mark_tutorial_completed() -> void:
 	if not tutorial_completed or install_tutorial_state != "completed":
@@ -618,14 +780,14 @@ func get_current_act_number() -> int:
 func get_current_act_title() -> String:
 	match current_act:
 		Act.BABAK_1:
-			return "Babak I: Pertahanan Awal (01.00 - 02.30)"
+			return LocScript.pick("Babak I: Pertahanan Awal (01.00 - 02.30)", "Act I: Early Defense (01:00 - 02:30)")
 		Act.BABAK_2:
 			if current_hour >= 4:
-				return "Babak II: Ritual Pemutus Kutukan (02.30 - 05.00)"
-			return "Babak II: Ritual Pemutus Kutukan (02.30 - 04.00)"
+				return LocScript.pick("Babak II: Ritual Pemutus Kutukan (02.30 - 05.00)", "Act II: Curse-Breaking Ritual (02:30 - 05:00)")
+			return LocScript.pick("Babak II: Ritual Pemutus Kutukan (02.30 - 04.00)", "Act II: Curse-Breaking Ritual (02:30 - 04:00)")
 		Act.BABAK_3:
-			return "Babak III: Klimaks Pembakaran (04.00 - 05.00)"
-	return "Babak I: Pertahanan Awal (01.00 - 02.30)"
+			return LocScript.pick("Babak III: Klimaks Pembakaran (04.00 - 05.00)", "Act III: Burning Climax (04:00 - 05:00)")
+	return LocScript.pick("Babak I: Pertahanan Awal (01.00 - 02.30)", "Act I: Early Defense (01:00 - 02:30)")
 
 func get_current_objectives_data() -> Array[Dictionary]:
 	var list: Array[Dictionary] = []
@@ -633,14 +795,14 @@ func get_current_objectives_data() -> Array[Dictionary]:
 		Act.BABAK_1:
 			list.append({
 				"id": "torches",
-				"text": "Nyalakan 5 Obor Penolak Bala",
+				"text": LocScript.pick("Nyalakan 5 Obor Penolak Bala", "Light 5 Repellent Torches"),
 				"current": torches_lit,
 				"required": REQUIRED_TORCHES,
 				"completed": torches_lit >= REQUIRED_TORCHES
 			})
 			list.append({
 				"id": "barricades",
-				"text": "Barikade 3 Pintu Rumah dengan Papan & Paku",
+				"text": LocScript.pick("Barikade 3 Pintu Rumah dengan Papan & Paku", "Barricade 3 House Doors with Planks & Nails"),
 				"current": doors_barricaded,
 				"required": REQUIRED_BARRICADES,
 				"completed": doors_barricaded >= REQUIRED_BARRICADES
@@ -649,14 +811,14 @@ func get_current_objectives_data() -> Array[Dictionary]:
 			var ritual_count: int = get_ritual_item_count()
 			list.append({
 				"id": "ritual_items",
-				"text": "Kumpulkan 4 Benda Ritual (Kemenyan, Bunga 7 Rupa, Keris, Tanah)",
+				"text": LocScript.pick("Kumpulkan 4 Benda Ritual (Kemenyan, Bunga 7 Rupa, Keris, Tanah)", "Collect 4 Ritual Relics (Incense, Flowers, Keris, Soil)"),
 				"current": ritual_count,
 				"required": TOTAL_RITUAL_ITEMS,
 				"completed": ritual_count >= TOTAL_RITUAL_ITEMS
 			})
 			list.append({
 				"id": "beware_lampor",
-				"text": "Hati-hati: Lampor berpatroli! Dilarang menatap langsung!",
+				"text": LocScript.pick("Hati-hati: Lampor berpatroli! Dilarang menatap langsung!", "Beware: Lampor is patrolling! Never stare directly!"),
 				"current": 0,
 				"required": 1,
 				"completed": false
@@ -665,14 +827,14 @@ func get_current_objectives_data() -> Array[Dictionary]:
 			var survive_elapsed: int = clampi(int(furnace_total_time - furnace_time_left), 0, int(furnace_total_time)) if furnace_burning else 0
 			list.append({
 				"id": "burn_ritual",
-				"text": "Bakar semua benda ritual di Tungku Balai Desa",
+				"text": LocScript.pick("Bakar semua benda ritual di Tungku Balai Desa", "Burn all ritual relics at the Village Hall Furnace"),
 				"current": 1 if furnace_burning else 0,
 				"required": 1,
 				"completed": furnace_burning
 			})
 			list.append({
 				"id": "survive_furnace",
-				"text": "Bertahan hidup dari amukan Lampor hingga ritual selesai",
+				"text": LocScript.pick("Bertahan hidup dari amukan Lampor hingga ritual selesai", "Survive Lampor's fury until the ritual finishes"),
 				"current": survive_elapsed,
 				"required": int(furnace_total_time),
 				"completed": furnace_burning and furnace_time_left <= 0.0
@@ -713,39 +875,31 @@ func purchase_shop_item(item_id: String, quantity: int = 1) -> Dictionary:
 		"extra_life":
 			price = 80 if safe_quantity == 1 else (150 if safe_quantity == 2 else 210)
 		_:
-			return {"success": false, "message": "Item tidak tersedia di toko."}
+			return {"success": false, "message": LocScript.pick("Item tidak tersedia di toko.", "Item is not available in the shop.")}
 
 	# Periksa batas maksimal kuantitas (maksimal 5 per item dan nyawa)
 	if item_id == "extra_life":
 		if extra_lives >= MAX_EXTRA_LIVES:
-			return {"success": false, "message": "Batas maksimal nyawa tambahan (%d) sudah tercapai." % MAX_EXTRA_LIVES}
+			return {"success": false, "message": LocScript.pick("Batas maksimal nyawa tambahan (%d) sudah tercapai." % MAX_EXTRA_LIVES, "Maximum extra lives limit (%d) reached." % MAX_EXTRA_LIVES)}
 		if extra_lives + safe_quantity > MAX_EXTRA_LIVES:
-			return {"success": false, "message": "Pembelian melebihi batas maksimal %d nyawa (saat ini: %d)." % [MAX_EXTRA_LIVES, extra_lives]}
+			return {"success": false, "message": LocScript.pick("Pembelian melebihi batas maksimal %d nyawa (saat ini: %d)." % [MAX_EXTRA_LIVES, extra_lives], "Purchase exceeds maximum %d lives (current: %d)." % [MAX_EXTRA_LIVES, extra_lives])}
 	else:
 		var current_qty: int = int(item_stash.get(item_id, 0))
 		if current_qty >= MAX_SHOP_ITEM_QTY:
-			return {"success": false, "message": "Batas maksimal persediaan (%d) untuk item ini sudah tercapai." % MAX_SHOP_ITEM_QTY}
+			return {"success": false, "message": LocScript.pick("Batas maksimal persediaan (%d) untuk item ini sudah tercapai." % MAX_SHOP_ITEM_QTY, "Maximum stock (%d) for this item already reached." % MAX_SHOP_ITEM_QTY)}
 		if current_qty + safe_quantity > MAX_SHOP_ITEM_QTY:
-			return {"success": false, "message": "Pembelian melebihi batas maksimal %d untuk item ini (saat ini: %d)." % [MAX_SHOP_ITEM_QTY, current_qty]}
+			return {"success": false, "message": LocScript.pick("Pembelian melebihi batas maksimal %d untuk item ini (saat ini: %d)." % [MAX_SHOP_ITEM_QTY, current_qty], "Purchase exceeds maximum %d for this item (current: %d)." % [MAX_SHOP_ITEM_QTY, current_qty])}
 
 	if coins < price:
-		return {"success": false, "message": "Koin tidak cukup. Dibutuhkan %d koin." % price}
+		return {"success": false, "message": LocScript.pick("Koin tidak cukup. Dibutuhkan %d koin." % price, "Not enough coins. Requires %d coins." % price)}
 	coins -= price
 	if item_id == "extra_life":
 		extra_lives += safe_quantity
 	else:
 		item_stash[item_id] = maxi(0, int(item_stash.get(item_id, 0))) + safe_quantity
 	save_game_data()
-	var item_label: String = "Nyawa tambahan"
-	if item_id == "jamu":
-		item_label = "Jamu Tolak Bala"
-	elif item_id == "baterai":
-		item_label = "Baterai Senter"
-	elif item_id == "energy_drink":
-		item_label = "Energy Drink"
-	elif item_id == "kentongan":
-		item_label = "Kentongan"
-	return {"success": true, "message": "%s x%d berhasil dibeli." % [item_label, safe_quantity], "price": price}
+	var item_label: String = LocScript.item_name(item_id, item_id)
+	return {"success": true, "message": LocScript.pick("%s x%d berhasil dibeli." % [item_label, safe_quantity], "%s x%d purchased." % [item_label, safe_quantity]), "price": price}
 
 func redeem_code(raw_code: String) -> Dictionary:
 	var codes_script: Variant = ResourceLoader.load("res://scripts/systems/RedemptionCodes.gd", "", ResourceLoader.CACHE_MODE_IGNORE)
@@ -753,16 +907,17 @@ func redeem_code(raw_code: String) -> Dictionary:
 		codes_script = REDEMPTION_CODES
 	var normalized: String = codes_script.normalize_code(raw_code)
 	if normalized.is_empty():
-		return {"success": false, "message": "Masukkan kode redeem terlebih dahulu."}
+		return {"success": false, "message": LocScript.pick("Masukkan kode redeem terlebih dahulu.", "Enter a redeem code first.")}
 	if redeemed_codes.has(normalized):
-		return {"success": false, "message": "Kode ini sudah pernah digunakan."}
+		return {"success": false, "message": LocScript.pick("Kode ini sudah pernah digunakan.", "This code has already been redeemed.")}
 	var reward: Dictionary = codes_script.get_reward(normalized)
 	if reward.is_empty():
-		return {"success": false, "message": "Kode redeem tidak valid."}
+		return {"success": false, "message": LocScript.pick("Kode redeem tidak valid.", "Invalid redeem code.")}
 	apply_reward(reward)
 	redeemed_codes.append(normalized)
 	save_game_data()
-	return {"success": true, "message": "Berhasil menukarkan kode: %s." % str(reward.get("description", "Hadiah diterima"))}
+	var desc: String = str(reward.get("description_en", reward.get("description", "Reward claimed"))) if LocScript.is_en() else str(reward.get("description", "Hadiah diterima"))
+	return {"success": true, "message": LocScript.pick("Berhasil menukarkan kode: %s." % desc, "Redeemed code: %s." % desc)}
 
 func apply_reward(reward: Dictionary) -> void:
 	var quantity: int = maxi(1, int(reward.get("quantity", 1)))
@@ -1005,7 +1160,7 @@ func _process(delta: float) -> void:
 			last_furnace_elapsed_sec = elapsed_sec
 			SignalBus.objective_updated.emit(
 				"survive_furnace",
-				"Bertahan hidup dari amukan Lampor hingga ritual selesai",
+				LocScript.pick("Bertahan hidup dari amukan Lampor hingga ritual selesai", "Survive Lampor's fury until the ritual finishes"),
 				elapsed_sec,
 				int(furnace_total_time),
 				furnace_time_left <= 0.0
@@ -1032,7 +1187,10 @@ func _sync_act_with_time(prev_hour: int) -> void:
 		if get_ritual_item_count() >= TOTAL_RITUAL_ITEMS:
 			_enter_act_3()
 		elif prev_hour < 4 and not dawn_reached:
-			SignalBus.dialog_requested.emit("Pukul 04.00 WIB tiba! Segera lengkapi Benda Ritual sebelum pukul 05.00 WIB!", 4.0)
+			SignalBus.dialog_requested.emit(LocScript.pick(
+				"Pukul 04.00 WIB tiba! Segera lengkapi Benda Ritual sebelum pukul 05.00 WIB!",
+				"It's 04:00 WIB! Gather the remaining Ritual Relics before 05:00 WIB!"
+			), 4.0)
 
 func _advance_time(minutes: int) -> void:
 	if dawn_reached or current_state != GameState.PLAYING:
@@ -1051,6 +1209,16 @@ func _advance_time(minutes: int) -> void:
 
 	_sync_act_with_time(prev_hour)
 
+	if not dawn_reached and current_hour > prev_hour:
+		if current_hour == 2:
+			var p2: Array[String] = LocScript.dialogue_pool("time_02")
+			if not p2.is_empty():
+				SignalBus.dialog_requested.emit(p2[0], 3.2)
+		elif current_hour == 3:
+			var p3: Array[String] = LocScript.dialogue_pool("time_03")
+			if not p3.is_empty():
+				SignalBus.dialog_requested.emit(p3[0], 3.2)
+
 	if dawn_reached:
 		trigger_dawn_lampor_devour()
 
@@ -1058,16 +1226,27 @@ func trigger_dawn_lampor_devour() -> void:
 	if current_state != GameState.PLAYING or death_sequence_active:
 		return
 	if admin_god_mode:
-		SignalBus.dialog_requested.emit("[GOD MODE] Pukul 05.00 WIB terlewati tanpa dilahap Lampor.", 3.0)
+		SignalBus.dialog_requested.emit(LocScript.pick(
+			"[GOD MODE] Pukul 05.00 WIB terlewati tanpa dilahap Lampor.",
+			"[GOD MODE] Passed 05:00 WIB without being devoured by Lampor."
+		), 3.0)
 		return
 	furnace_burning = false
-	_execute_player_death("Waktu telah menunjukkan pukul 05.00 WIB sebelum ritual penolak bala tuntas! Keranda Lampor langsung melahap dan menyeret jiwamu ke dalam kegelapan abadi.", true, false)
+	_execute_player_death(LocScript.pick(
+		"Waktu telah menunjukkan pukul 05.00 WIB sebelum ritual penolak bala tuntas! Keranda Lampor langsung melahap dan menyeret jiwamu ke dalam kegelapan abadi.",
+		"05:00 WIB struck before the warding ritual was complete! Lampor's coffin devoured your soul into eternal darkness."
+	), true, false)
 
 func _enter_act_1() -> void:
 	current_act = Act.BABAK_1
 	SignalBus.time_tick.emit("%02d:%02d" % [current_hour, current_minute], current_hour, current_minute)
 	SignalBus.act_started.emit(1, get_current_act_title())
 	broadcast_all_objectives()
+	if not is_resuming_saved_run and not is_tutorial_mode:
+		SignalBus.dialog_requested.emit(LocScript.pick(
+			"Malam mencekam dimulai... Nyalakan 5 obor penolak bala dan barikade 3 pintu sebelum pukul 02.30 WIB!",
+			"The cursed night begins... Light 5 repellent torches and barricade 3 doors before 02:30 WIB!"
+		), 4.0)
 
 func _enter_act_2() -> void:
 	if current_act >= Act.BABAK_2:
@@ -1077,9 +1256,15 @@ func _enter_act_2() -> void:
 	var fast_forwarded: bool = _fast_forward_clock_to(2, 30)
 	SignalBus.time_tick.emit("%02d:%02d" % [current_hour, current_minute], current_hour, current_minute)
 	if fast_forwarded:
-		SignalBus.dialog_requested.emit("Semua misi Babak I selesai! Waktu dipercepat ke 02.30 WIB — Babak II dimulai, Lampor turun ke desa!", 4.0)
+		SignalBus.dialog_requested.emit(LocScript.pick(
+			"Semua misi Babak I selesai! Waktu dipercepat ke 02.30 WIB — Babak II dimulai, Lampor turun ke desa!",
+			"All Act I objectives complete! Time advances to 02:30 WIB — Act II begins, Lampor descends into the village!"
+		), 4.0)
 	else:
-		SignalBus.dialog_requested.emit("Lampor telah turun ke desa. Jangan menatap kerandanya!", 3.5)
+		SignalBus.dialog_requested.emit(LocScript.pick(
+			"Lampor telah turun ke desa. Jangan menatap kerandanya!",
+			"Lampor has descended into the village. Do not stare at its coffin!"
+		), 3.5)
 	# Sinkronkan waktu dan seluruh misi ke scene HUD yang aktif.
 	SignalBus.act_started.emit(2, get_current_act_title())
 	broadcast_all_objectives()
@@ -1092,9 +1277,15 @@ func _enter_act_3() -> void:
 	var fast_forwarded: bool = _fast_forward_clock_to(4, 0)
 	SignalBus.time_tick.emit("%02d:%02d" % [current_hour, current_minute], current_hour, current_minute)
 	if fast_forwarded:
-		SignalBus.dialog_requested.emit("Semua benda ritual terkumpul! Waktu dipercepat ke 04.00 WIB — Bakar semuanya di Tungku Balai Desa!", 4.0)
+		SignalBus.dialog_requested.emit(LocScript.pick(
+			"Semua benda ritual terkumpul! Waktu dipercepat ke 04.00 WIB — Bakar semuanya di Tungku Balai Desa!",
+			"All ritual relics gathered! Time advances to 04:00 WIB — Burn them all at the Village Hall Furnace!"
+		), 4.0)
 	else:
-		SignalBus.dialog_requested.emit("Waktunya memutus kutukan. Bakar semua benda ritual!", 3.5)
+		SignalBus.dialog_requested.emit(LocScript.pick(
+			"Waktunya memutus kutukan. Bakar semua benda ritual!",
+			"Time to break the curse. Burn all ritual relics at the furnace!"
+		), 3.5)
 	SignalBus.act_started.emit(3, get_current_act_title())
 	broadcast_all_objectives()
 
@@ -1136,16 +1327,22 @@ func _on_torch_lit(_torch_id: int, total_lit: int, _req: int) -> void:
 		_enter_act_2()
 		return
 	if total_lit == REQUIRED_TORCHES - 1:
-		SignalBus.dialog_requested.emit("Ayo semangat, sedikit lagi! Obor penolak bala sudah 4/5 menyala.", 3.2)
+		SignalBus.dialog_requested.emit(LocScript.pick(
+			"Ayo semangat, sedikit lagi! Obor penolak bala sudah 4/5 menyala.",
+			"Almost there! 4/5 repellent torches are now lit."
+		), 3.2)
 	elif total_lit >= REQUIRED_TORCHES:
-		SignalBus.dialog_requested.emit("Kelima obor telah menyala. Sekarang amankan pintu rumah!", 3.2)
+		SignalBus.dialog_requested.emit(LocScript.pick(
+			"Kelima obor telah menyala. Sekarang amankan pintu rumah!",
+			"All 5 torches are lit! Now secure the remaining house doors!"
+		), 3.2)
 
 func record_door_barricaded() -> void:
 	doors_barricaded += 1
 	if current_act == Act.BABAK_1:
 		SignalBus.objective_updated.emit(
 			"barricades",
-			"Barikade 3 Pintu Rumah dengan Papan & Paku",
+			LocScript.pick("Barikade 3 Pintu Rumah dengan Papan & Paku", "Barricade 3 House Doors with Planks & Nails"),
 			doors_barricaded,
 			REQUIRED_BARRICADES,
 			doors_barricaded >= REQUIRED_BARRICADES
@@ -1154,16 +1351,22 @@ func record_door_barricaded() -> void:
 		_enter_act_2()
 		return
 	if doors_barricaded == REQUIRED_BARRICADES - 1:
-		SignalBus.dialog_requested.emit("Ayo semangat, sedikit lagi! Dua dari tiga pintu sudah diamankan.", 3.2)
+		SignalBus.dialog_requested.emit(LocScript.pick(
+			"Ayo semangat, sedikit lagi! Dua dari tiga pintu sudah diamankan.",
+			"Keep going! Two out of three doors are now barricaded."
+		), 3.2)
 	elif doors_barricaded >= REQUIRED_BARRICADES:
-		SignalBus.dialog_requested.emit("Semua pintu penting sudah dibarikade. Nyalakan seluruh obor penolak bala!", 3.2)
+		SignalBus.dialog_requested.emit(LocScript.pick(
+			"Semua pintu penting sudah dibarikade. Nyalakan seluruh obor penolak bala!",
+			"All key doors barricaded! Light every repellent torch!"
+		), 3.2)
 
 func record_door_unbarricaded() -> void:
 	doors_barricaded = maxi(0, doors_barricaded - 1)
 	if current_act == Act.BABAK_1:
 		SignalBus.objective_updated.emit(
 			"barricades",
-			"Barikade 3 Pintu Rumah dengan Papan & Paku",
+			LocScript.pick("Barikade 3 Pintu Rumah dengan Papan & Paku", "Barricade 3 House Doors with Planks & Nails"),
 			doors_barricaded,
 			REQUIRED_BARRICADES,
 			doors_barricaded >= REQUIRED_BARRICADES
@@ -1174,7 +1377,7 @@ func _on_ritual_item_collected(item_name: String, count: int, total: int) -> voi
 	if current_act == Act.BABAK_2:
 		SignalBus.objective_updated.emit(
 			"ritual_items",
-			"Kumpulkan 4 Benda Ritual (Kemenyan, Bunga 7 Rupa, Keris, Tanah)",
+			LocScript.pick("Kumpulkan 4 Benda Ritual (Kemenyan, Bunga 7 Rupa, Keris, Tanah)", "Collect 4 Ritual Relics (Incense, Flowers, Keris, Soil)"),
 			count,
 			total,
 			count >= total
@@ -1183,9 +1386,15 @@ func _on_ritual_item_collected(item_name: String, count: int, total: int) -> voi
 		_enter_act_3()
 		return
 	if count == total - 1:
-		SignalBus.dialog_requested.emit("Tinggal satu benda ritual lagi. Jangan lengah, Lampor semakin dekat!", 3.5)
+		SignalBus.dialog_requested.emit(LocScript.pick(
+			"Tinggal satu benda ritual lagi. Jangan lengah, Lampor semakin dekat!",
+			"Only one ritual relic left! Stay alert, Lampor draws nearer!"
+		), 3.5)
 	elif count >= total:
-		SignalBus.dialog_requested.emit("Semua benda ritual terkumpul. Kembali ke tungku balai desa!", 3.5)
+		SignalBus.dialog_requested.emit(LocScript.pick(
+			"Semua benda ritual terkumpul. Kembali ke tungku balai desa!",
+			"All ritual relics collected! Return to the Village Hall furnace!"
+		), 3.5)
 
 func get_ritual_item_count() -> int:
 	var count: int = 0
@@ -1258,7 +1467,10 @@ func _execute_player_death(reason: String, ignore_extra_lives: bool = false, byp
 				lampor_node.reset_after_player_revive()
 		get_tree().paused = false
 		death_sequence_active = false
-		SignalBus.dialog_requested.emit("Nyawa tambahan terpakai! Kamu kembali ke desa. Sisa nyawa: %d" % extra_lives, 4.0)
+		SignalBus.dialog_requested.emit(LocScript.pick(
+			"Nyawa tambahan terpakai! Kamu kembali ke desa. Sisa nyawa: %d" % extra_lives,
+			"Extra life used! You returned to the village. Lives left: %d" % extra_lives
+		), 4.0)
 		return
 	# Cutscene kekalahan: pemain diangkat dan dibawa pergi oleh Lampor sebelum layar kalah tampil.
 	var world_root: Node = get_tree().current_scene

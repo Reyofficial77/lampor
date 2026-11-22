@@ -342,6 +342,70 @@ def make_kentongan():
             s[idx] += (body + transient) * attack * amp * 0.85
     write_wav("assets/audio/kentongan.wav", s)
 
+# 17. Energy Drink (bunyi buka tutup kaleng + desis soda + suara tegukan minum, ~1.18s)
+def make_energy_drink():
+    dur = 1.18
+    n = int(dur * SAMPLE_RATE)
+    s = [0.0] * n
+    prev_noise = 0.0
+    for i in range(n):
+        t = i / SAMPLE_RATE
+        val = 0.0
+        # 0.00 - 0.06s: klik pembuka kaleng aluminium
+        if t < 0.08:
+            click_env = math.exp(-t * 95.0)
+            val += (
+                math.sin(2 * math.pi * 2450.0 * t) * 0.42
+                + math.sin(2 * math.pi * 4120.0 * t) * 0.28
+                + (random.random() * 2 - 1) * 0.45
+            ) * click_env
+        # 0.04 - 0.34s: desis karbonasi kaleng terbuka ("psshhh!")
+        if 0.03 <= t < 0.36:
+            ft = t - 0.03
+            rn = random.random() * 2 - 1
+            hp = rn - prev_noise * 0.65
+            prev_noise = rn
+            fizz_env = min(1.0, ft / 0.025) * math.exp(-ft * 8.5)
+            val += hp * fizz_env * 0.42
+        # 0.26 - 1.05s: 3 tegukan minum berurutan ("gluk... gluk... gluk...")
+        for g_start, f_hi, f_lo, g_amp in [
+            (0.26, 460.0, 210.0, 0.72),
+            (0.50, 490.0, 225.0, 0.76),
+            (0.74, 430.0, 195.0, 0.68),
+        ]:
+            if g_start <= t < g_start + 0.19:
+                gt = t - g_start
+                freq = f_hi - (f_hi - f_lo) * min(1.0, gt / 0.16)
+                g_env = math.sin(math.pi * (gt / 0.19)) ** 1.4
+                throat = math.sin(2 * math.pi * freq * gt) * 0.65 + math.sin(2 * math.pi * (freq * 1.92) * gt) * 0.25
+                liquid_mod = 1.0 + 0.35 * math.sin(2 * math.pi * 34.0 * gt)
+                val += throat * g_env * liquid_mod * g_amp
+        tail = min(1.0, (dur - t) / 0.05)
+        s[i] = max(-0.98, min(0.98, val * tail * 0.85))
+    write_wav("assets/audio/energy_drink.wav", s)
+
+# 18. Sorotan UFO (dengung cahaya traktor naik ke langit untuk cutscene menang, ~4.6s)
+def make_ufo_beam():
+    dur = 4.6
+    n = int(dur * SAMPLE_RATE)
+    s = [0.0] * n
+    phase = 0.0
+    for i in range(n):
+        t = i / SAMPLE_RATE
+        prog = t / dur
+        sweep_freq = 110.0 + 260.0 * (prog ** 1.6)
+        wobble = math.sin(2 * math.pi * (5.5 + prog * 9.0) * t) * 14.0
+        phase += 2 * math.pi * (sweep_freq + wobble) / SAMPLE_RATE
+        beam_hum = (
+            math.sin(phase) * 0.45
+            + math.sin(phase * 2.0) * 0.22
+            + math.sin(phase * 3.01) * 0.14
+        )
+        shimmer = math.sin(2 * math.pi * (880.0 + 420.0 * prog) * t) * (0.08 + 0.12 * math.sin(2 * math.pi * 6.5 * t))
+        env = min(1.0, t / 0.45) * min(1.0, (dur - t) / 0.35)
+        s[i] = max(-0.95, min(0.95, (beam_hum + shimmer) * env * 0.72))
+    write_wav("assets/audio/ufo_beam.wav", s)
+
 if __name__ == "__main__":
     print("Generating game audio assets...")
     make_ambient()
@@ -360,4 +424,6 @@ if __name__ == "__main__":
     make_azan()
     make_jumpscare()
     make_kentongan()
+    make_energy_drink()
+    make_ufo_beam()
     print("All audio files generated successfully!")

@@ -50,7 +50,9 @@ func _load_sounds() -> void:
 		"azan_subuh": "res://assets/audio/azan_subuh.wav",
 		"game_over_sting": "res://assets/audio/game_over_sting.wav",
 		"jumpscare": "res://assets/audio/jumpscare.wav",
-		"kentongan": "res://assets/audio/kentongan.wav"
+		"kentongan": "res://assets/audio/kentongan.wav",
+		"energy_drink": "res://assets/audio/energy_drink.wav",
+		"ufo_beam": "res://assets/audio/ufo_beam.wav"
 	}
 	
 	for key: String in sound_files:
@@ -159,6 +161,10 @@ func play_jumpscare_and_wait() -> void:
 	if jumpscare_player and jumpscare_player.playing:
 		jumpscare_player.stop()
 
+func stop_jumpscare() -> void:
+	if jumpscare_player and jumpscare_player.playing:
+		jumpscare_player.stop()
+
 func play_sound(sound_name: String, volume_db: float = 0.0, pitch_scale: float = 1.0) -> void:
 	if not sound_streams.has(sound_name):
 		return
@@ -177,6 +183,14 @@ func play_sound(sound_name: String, volume_db: float = 0.0, pitch_scale: float =
 		p.volume_db = volume_db
 		p.pitch_scale = pitch_scale
 		p.play()
+
+func stop_sound(sound_name: String) -> void:
+	if not sound_streams.has(sound_name):
+		return
+	var stream: AudioStream = sound_streams[sound_name]
+	for p: AudioStreamPlayer in sfx_pool:
+		if p.playing and p.stream == stream:
+			p.stop()
 
 func set_heartbeat_intensity(intensity: float) -> void:
 	# intensity from 0.0 to 1.0

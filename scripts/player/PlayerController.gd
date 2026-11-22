@@ -27,6 +27,10 @@ var is_sprinting: bool = false
 var virtual_move_input: Vector2 = Vector2.ZERO
 var virtual_sprint_pressed: bool = false
 var is_caught: bool = false
+const ENERGY_DRINK_DURATION: float = 3.0
+const ENERGY_DRINK_COOLDOWN: float = 6.0
+var energy_drink_timer: float = 0.0
+var energy_drink_cooldown: float = 0.0
 
 # Head Bobbing & Natural Motion
 var bob_freq: float = 2.4
@@ -152,6 +156,8 @@ func _find_bone_idx(skel: Skeleton3D, canonical_name: String) -> int:
 	return skel.find_bone(actual) if not actual.is_empty() else -1
 
 func _process(_delta: float) -> void:
+	if in_cutscene:
+		return
 	if is_caught:
 		_play_player_anim("die", 0.08, 1.0)
 		if player_skeleton:
@@ -256,8 +262,16 @@ func _physics_process(delta: float) -> void:
 
 	var god_mode: bool = ("admin_god_mode" in GameManager) and bool(GameManager.get("admin_god_mode"))
 
+	if energy_drink_cooldown > 0.0:
+		energy_drink_cooldown = maxf(0.0, energy_drink_cooldown - delta)
+	if energy_drink_timer > 0.0:
+		energy_drink_timer = maxf(0.0, energy_drink_timer - delta)
+		current_stamina = max_stamina
+
+	var unlimited_stamina: bool = god_mode or (energy_drink_timer > 0.0)
+
 	# Sprinting & Stamina
-	var wants_sprint: bool = (Input.is_action_pressed("sprint") or virtual_sprint_pressed) and is_on_floor() and (current_stamina > 5.0 or god_mode)
+	var wants_sprint: bool = (Input.is_action_pressed("sprint") or virtual_sprint_pressed) and is_on_floor() and (current_stamina > 5.0 or unlimited_stamina)
 	var input_dir: Vector2 = Input.get_vector("move_left", "move_right", "move_forward", "move_backward")
 	if virtual_move_input.length_squared() > 0.01:
 		input_dir = virtual_move_input
@@ -265,13 +279,16 @@ func _physics_process(delta: float) -> void:
 
 	if wants_sprint and is_moving:
 		is_sprinting = true
-		if not god_mode:
+		if not unlimited_stamina:
 			current_stamina = max(0.0, current_stamina - stamina_drain_rate * delta)
 		else:
 			current_stamina = max_stamina
 	else:
 		is_sprinting = false
-		current_stamina = min(max_stamina, current_stamina + stamina_recovery_rate * delta)
+		if energy_drink_timer > 0.0:
+			current_stamina = max_stamina
+		else:
+			current_stamina = min(max_stamina, current_stamina + stamina_recovery_rate * delta)
 
 	SignalBus.player_stamina_changed.emit(current_stamina, max_stamina)
 
@@ -499,6 +516,25 @@ func _try_use_equipped_item() -> bool:
 		inventory_system.consume_equipped_item()
 		trigger_action_animation("pick-up", 0.5)
 		AudioManager.play_sound("item_pickup", -4.0, 0.8)
+		SignalBus.item_used.emit(item)
+		if interaction_ray:
+			interaction_ray._update_prompt()
+		return true
+	elif item.get("id") == "energy_drink":
+		if energy_drink_timer > 0.0:
+			SignalBus.dialog_requested.emit("Efek Energy Drink masih aktif (%.1f detik)! Tidak dapat di-spam." % energy_drink_timer, 1.8)
+			return true
+		if energy_drink_cooldown > 0.0:
+			SignalBus.dialog_requested.emit("Tunggu %.1f detik sebelum minum Energy Drink lagi." % energy_drink_cooldown, 1.8)
+			return true
+		energy_drink_timer = ENERGY_DRINK_DURATION
+		energy_drink_cooldown = ENERGY_DRINK_COOLDOWN
+		current_stamina = max_stamina
+		SignalBus.player_stamina_changed.emit(current_stamina, max_stamina)
+		inventory_system.consume_equipped_item()
+		trigger_action_animation("drink", 0.65)
+		AudioManager.play_sound("energy_drink", 1.0)
+		SignalBus.dialog_requested.emit("Energy Drink diminum! Stamina penuh 100% selama 3 detik!", 3.0)
 		SignalBus.item_used.emit(item)
 		if interaction_ray:
 			interaction_ray._update_prompt()
@@ -992,6 +1028,12 @@ func _build_suit_animations(skel: Skeleton3D) -> void:
 		"LowerArm.L": [[0.0, Vector3(-28.0, 10.0, 0.0)], [0.55, Vector3(-28.0, 10.0, 0.0)]]
 	})
 
+	_add_suit_anim(lib, skel_path, skel, "drink", 0.65, Animation.LOOP_NONE, {
+		"Torso": [[0.0, Vector3.ZERO], [0.28, Vector3(4.0, 0.0, -2.0)], [0.65, Vector3.ZERO]],
+		"UpperArm.R": [[0.0, Vector3(-78.0, -48.0, 18.0)], [0.28, Vector3(-104.0, -44.0, 36.0)], [0.48, Vector3(-104.0, -44.0, 36.0)], [0.65, Vector3(-78.0, -48.0, 18.0)]],
+		"LowerArm.R": [[0.0, Vector3(-24.0, -10.0, 0.0)], [0.28, Vector3(-52.0, -8.0, 22.0)], [0.48, Vector3(-52.0, -8.0, 22.0)], [0.65, Vector3(-24.0, -10.0, 0.0)]]
+	})
+
 	_add_suit_anim(lib, skel_path, skel, "die", 0.7, Animation.LOOP_NONE, {
 		"Hips": [[0.0, Vector3.ZERO], [0.5, Vector3(82.0, 0.0, 0.0)], [0.7, Vector3(82.0, 0.0, 0.0)]],
 		"Head": [[0.0, Vector3.ZERO], [0.5, Vector3(18.0, 0.0, 0.0)], [0.7, Vector3(18.0, 0.0, 0.0)]],
@@ -1162,7 +1204,28 @@ func _build_hand_item_holder(skel: Skeleton3D) -> void:
 	bat_top.material_override = _make_suit_mat(Color(0.88, 0.68, 0.16), 0.3, 0.75, 0.06)
 	bat_root.add_child(bat_top)
 
-	# 6. Kentongan (2 Tangan: kanan = pemukul kayu, kiri = tabung kentongan)
+	# 6. Energy Drink (Kaleng minuman energi aluminium di tangan kanan)
+	var drink_root := Node3D.new()
+	drink_root.name = "Prop_energy_drink"
+	drink_root.rotation_degrees = Vector3(-26.0, 0.0, -10.0)
+	drink_root.position = Vector3(0.0, 0.118, -0.026)
+	hand_prop_pivot.add_child(drink_root)
+	hand_item_props["energy_drink"] = drink_root
+
+	var drink_blue: StandardMaterial3D = _make_suit_mat(Color(0.08, 0.44, 0.92), 0.24, 0.85, 0.08)
+	var drink_neon: StandardMaterial3D = _make_suit_mat(Color(0.15, 0.95, 0.88), 0.22, 0.35, 0.35)
+	var drink_silver: StandardMaterial3D = _make_suit_mat(Color(0.84, 0.87, 0.90), 0.22, 0.90, 0.04)
+	var drink_hole: StandardMaterial3D = _make_suit_mat(Color(0.05, 0.05, 0.07), 0.8, 0.3, 0.0)
+	_attach_suit_cyl(drink_root, "CanBody", 0.026, 0.026, 0.084, Vector3.ZERO, drink_blue)
+	_attach_suit_cyl(drink_root, "NeonBandTop", 0.0268, 0.0268, 0.018, Vector3(0.0, 0.012, 0.0), drink_neon)
+	_attach_suit_cyl(drink_root, "NeonBandLow", 0.0268, 0.0268, 0.008, Vector3(0.0, -0.020, 0.0), drink_neon)
+	_attach_suit_cyl(drink_root, "CanNeck", 0.021, 0.026, 0.013, Vector3(0.0, 0.048, 0.0), drink_silver)
+	_attach_suit_cyl(drink_root, "CanBase", 0.026, 0.022, 0.009, Vector3(0.0, -0.046, 0.0), drink_silver)
+	_attach_suit_cyl(drink_root, "CanRim", 0.022, 0.022, 0.005, Vector3(0.0, 0.056, 0.0), drink_silver)
+	_attach_suit_box(drink_root, "Opening", Vector3(0.010, 0.004, 0.007), Vector3(0.0, 0.058, 0.009), drink_hole)
+	_attach_suit_box(drink_root, "PullTab", Vector3(0.008, 0.003, 0.015), Vector3(0.0, 0.060, -0.002), drink_silver, Vector3(12.0, 0.0, 0.0))
+
+	# 7. Kentongan (2 Tangan: kanan = pemukul kayu, kiri = tabung kentongan)
 	var pemukul_root := Node3D.new()
 	pemukul_root.name = "Prop_kentongan_pemukul"
 	pemukul_root.position = Vector3(0.0, 0.125, -0.025)
@@ -1283,7 +1346,7 @@ func _apply_fpp_hand_override() -> void:
 	var item_yaw_offset: float = 0.0
 	var is_two_handed_kentongan: bool = (equipped_item_id == "kentongan")
 	match equipped_item_id:
-		"jamu", "baterai":
+		"jamu", "baterai", "energy_drink":
 			item_pitch_offset = 6.0
 			item_drop_offset = 4.0
 			item_yaw_offset = 5.0
@@ -1297,26 +1360,30 @@ func _apply_fpp_hand_override() -> void:
 			item_yaw_offset = 4.0
 
 	var strike_swing: float = 0.0
+	var drink_lift: float = 0.0
 	if is_two_handed_kentongan and action_anim_timer > 0.0:
 		var hit_p: float = clampf(1.0 - (action_anim_timer / maxf(0.01, action_anim_duration)), 0.0, 1.0)
 		strike_swing = absf(sin(hit_p * PI * 2.0)) * 28.0
+	elif equipped_item_id == "energy_drink" and action_anim_timer > 0.0:
+		var drink_p: float = clampf(1.0 - (action_anim_timer / maxf(0.01, action_anim_duration)), 0.0, 1.0)
+		drink_lift = sin(drink_p * PI) * 26.0
 
 	_set_skeleton_bone_rot("Shoulder.R", -18.0, -8.0, 6.0)
 	_set_skeleton_bone_rot(
 		"UpperArm.R",
-		-95.0 - pitch_deg + item_pitch_offset + raise_drop - idle_breath - sway_lift * 0.65 + (0.0 if is_two_handed_kentongan else action_nudge * 0.55) + look_sway.y * 0.85 + fear_tremor * 0.4,
+		-95.0 - pitch_deg + item_pitch_offset + raise_drop - idle_breath - sway_lift * 0.65 - drink_lift + (0.0 if (is_two_handed_kentongan or drink_lift > 0.0) else action_nudge * 0.55) + look_sway.y * 0.85 + fear_tremor * 0.4,
 		-54.0 + item_drop_offset - sprint_blend * 4.5,
-		28.0 + item_yaw_offset + strike_swing + sway_yaw + sprint_blend * 6.5 + look_sway.x * 1.15
+		28.0 + item_yaw_offset + strike_swing + drink_lift * 0.6 + sway_yaw + sprint_blend * 6.5 + look_sway.x * 1.15
 	)
 	_set_skeleton_bone_rot(
 		"LowerArm.R",
-		-20.0 - sway_lift * 0.65 - sprint_blend * 9.0 + (action_nudge * 0.65 if not is_two_handed_kentongan else -10.0) + look_sway.y * 0.45,
+		-20.0 - sway_lift * 0.65 - sprint_blend * 9.0 - drink_lift * 1.2 + (action_nudge * 0.65 if (not is_two_handed_kentongan and drink_lift <= 0.0) else (-10.0 if is_two_handed_kentongan else 0.0)) + look_sway.y * 0.45,
 		-10.0,
 		wrist_lag + strike_swing * 0.5 + idle_breath * 0.55 + look_sway.x * 0.75 + fear_tremor * 0.6
 	)
 	_set_skeleton_bone_rot(
 		"Hand.R",
-		-4.0 - action_nudge * 0.85 + look_sway.y * 0.35,
+		-4.0 - action_nudge * 0.85 - drink_lift * 1.1 + look_sway.y * 0.35,
 		0.0,
 		-10.0 + strike_swing * 0.35 + wrist_lag * 0.8 + look_sway.x * 0.5 + fear_tremor
 	)
@@ -1398,6 +1465,32 @@ func prepare_for_cutscene() -> void:
 	if flashlight:
 		flashlight.visible = false
 	_play_player_anim("idle", 0.1, 1.0)
+
+func pose_abducted_dangle(phase: float) -> void:
+	if not player_skeleton:
+		return
+	for i: int in range(player_skeleton.get_bone_count()):
+		player_skeleton.reset_bone_pose(i)
+	var head_idx: int = _find_bone_idx(player_skeleton, "Head")
+	if head_idx >= 0:
+		player_skeleton.set_bone_pose_scale(head_idx, Vector3.ONE)
+	var hand_r_idx: int = _find_bone_idx(player_skeleton, "Hand.R")
+	if hand_r_idx >= 0:
+		player_skeleton.set_bone_pose_scale(hand_r_idx, Vector3.ONE)
+	var hand_l_idx: int = _find_bone_idx(player_skeleton, "Hand.L")
+	if hand_l_idx >= 0:
+		player_skeleton.set_bone_pose_scale(hand_l_idx, Vector3.ONE)
+	var sway_a: float = sin(phase * 7.0) * 14.0
+	var sway_b: float = cos(phase * 5.8) * 12.0
+	_set_skeleton_bone_rot("Torso", 8.0 + sin(phase * 4.0) * 4.0, 0.0, 0.0)
+	_set_skeleton_bone_rot("UpperArm.R", -120.0 + sway_a, -36.0, 12.0)
+	_set_skeleton_bone_rot("LowerArm.R", -28.0 + sway_b, 0.0, 0.0)
+	_set_skeleton_bone_rot("UpperArm.L", -115.0 - sway_a, 36.0, -12.0)
+	_set_skeleton_bone_rot("LowerArm.L", -26.0 - sway_b, 0.0, 0.0)
+	_set_skeleton_bone_rot("UpperLeg.R", 14.0 + sway_b * 0.8, 0.0, -4.0)
+	_set_skeleton_bone_rot("LowerLeg.R", 18.0 + absf(sway_a) * 0.5, 0.0, 0.0)
+	_set_skeleton_bone_rot("UpperLeg.L", 14.0 - sway_b * 0.8, 0.0, 4.0)
+	_set_skeleton_bone_rot("LowerLeg.L", 18.0 + absf(sway_b) * 0.5, 0.0, 0.0)
 
 func trigger_action_animation(anim_name: String, duration: float = 0.45) -> void:
 	if not model_anim_player or not model_anim_player.has_animation(anim_name):
@@ -1506,6 +1599,8 @@ func revive_from_extra_life() -> void:
 	current_house = null
 	virtual_move_input = Vector2.ZERO
 	virtual_sprint_pressed = false
+	energy_drink_timer = 0.0
+	energy_drink_cooldown = 0.0
 	move_blend = 0.0
 	sprint_blend = 0.0
 	velocity = Vector3.ZERO

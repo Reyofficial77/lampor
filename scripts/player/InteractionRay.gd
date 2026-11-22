@@ -30,6 +30,8 @@ func _get_held_item_prompt(player: Node) -> String:
 		return "[E] Minum Jamu Tolak Bala"
 	elif item_id == "baterai":
 		return "[E] Isi Ulang Baterai Senter"
+	elif item_id == "energy_drink":
+		return "[E] Minum Energy Drink (Stamina 100% 3 dtk)"
 	elif item_id == "kentongan":
 		return "[E] Pukul Kentongan (Usir Lampor 5 dtk)"
 	return ""

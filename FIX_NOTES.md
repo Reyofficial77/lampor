@@ -2,6 +2,13 @@
 
 ## v1.2.8
 
+- **Item Baru: Energy Drink (Stamina 100% Anti-Spam)**:
+  - Menambahkan item konsumabel **Energy Drink** di peta desa dan **Toko Bekal** (`25 Koin`) yang mengunci stamina pemain di **100%** selama **3 detik** dengan jeda anti-spam sehingga tidak dapat di-spam.
+  - Dilengkapi model 3D kaleng minuman aluminium (di peta maupun genggaman tangan kanan), animasi minum, dan efek suara membuka kaleng & minum (`energy_drink.wav`).
+- **Cutscene Menang, Cutscene Kalah, & Dukungan Lewati (Skip) Semua Cutscene**:
+  - Menambahkan cutscene kemenangan 3D sebelum `VictoryScreen` saat Keranda Lampor ditarik naik ke langit oleh sorotan cahaya seperti terangkat UFO (`ufo_beam.wav`).
+  - Menambahkan cutscene kekalahan 3D sebelum `GameOverScreen` ketika Lampor menyambar, mengangkat tubuh pemain ke udara, lalu membawanya pergi ke kegelapan malam.
+  - Menambahkan tombol **LEWATI >>** serta pintasan `Spasi` / `Enter` / `Esc` agar seluruh cutscene (turunnya Lampor Babak II, cutscene menang, dan cutscene kalah) dapat dilewati kapan saja.
 - **Item Baru: Kentongan (Pengusir Lampor)**:
   - Menambahkan item konsumabel baru **Kentongan** (`1x pakai`, batas maksimal **5** di inventaris) yang hanya tersedia di **Toko Bekal** seharga **250 Koin**.
   - Saat digunakan ketika Lampor mengejar, Lampor berhenti mengejar dan menjauh selama **5 detik** sebelum kembali mengejar.

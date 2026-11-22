@@ -80,8 +80,15 @@ var editor_drag_target: Control = null
 var editor_drag_offset: Vector2 = Vector2.ZERO
 var editor_hint_label: Label
 var editor_done_button: Button
+signal cutscene_finished(skipped: bool)
+
 var descent_camera_tween: Tween
 var descent_cutscene_overlay: Control = null
+var active_cutscene_type: String = ""
+var active_cutscene_camera: Camera3D = null
+var active_cutscene_elapsed: float = 0.0
+var active_cutscene_finish_cb: Callable = Callable()
+var _cutscene_vfx_nodes: Array[Node] = []
 var bottom_left_panel: PanelContainer = null
 var last_synced_battery_pct: int = -1
 
@@ -346,7 +353,12 @@ func _on_inventory_slot_input(event: InputEvent, slot_index: int) -> void:
 		if player:
 			player.touch_select_slot(slot_index)
 
+func is_cutscene_active() -> bool:
+	return not active_cutscene_type.is_empty() or (is_instance_valid(descent_cutscene_overlay) and descent_cutscene_overlay.visible)
+
 func _unhandled_input(event: InputEvent) -> void:
+	if is_cutscene_active():
+		return
 	if event.is_action_pressed("toggle_inventory") or (event is InputEventKey and event.pressed and not event.echo and (event.keycode == KEY_TAB or event.keycode == KEY_B or event.keycode == KEY_I)):
 		if not pause_menu.visible and not barricade_dialog.visible and GameManager.current_state == GameManager.GameState.PLAYING:
 			toggle_inventory()
@@ -371,14 +383,14 @@ func _unhandled_input(event: InputEvent) -> void:
 			toggle_pause()
 
 func toggle_pause() -> void:
-	if descent_cutscene_overlay and is_instance_valid(descent_cutscene_overlay) and descent_cutscene_overlay.visible:
+	if is_cutscene_active():
 		return
 	if mobile_editor_active:
 		_finish_mobile_editor()
 	if inventory_overlay and inventory_overlay.visible:
 		toggle_inventory()
-	# Jangan izinkan pemain membatalkan jeda paksa selama rangkaian jumpscare.
-	if GameManager.death_sequence_active:
+	# Jangan izinkan pemain membatalkan jeda paksa selama rangkaian jumpscare / ending.
+	if GameManager.death_sequence_active or GameManager.victory_sequence_active:
 		return
 	if GameManager.current_state == GameManager.GameState.GAMEOVER or GameManager.current_state == GameManager.GameState.VICTORY:
 		return
@@ -789,7 +801,7 @@ func _refresh_mission_card() -> void:
 	mission_body.text = "\n".join(lines) if not lines.is_empty() else "Misi sedang disiapkan..."
 
 func _show_mission_card(num: int, banner_text: String) -> void:
-	if descent_cutscene_overlay and is_instance_valid(descent_cutscene_overlay):
+	if is_cutscene_active():
 		return
 	if not mission_panel:
 		return
@@ -1289,6 +1301,12 @@ func _draw_virtual_joystick() -> void:
 	joystick_base.draw_arc(knob_center, radius * 0.36, 0.0, TAU, 36, Color(HorrorTheme.PRIMARY.r, HorrorTheme.PRIMARY.g, HorrorTheme.PRIMARY.b, 0.92), 2.0, true)
 
 func _input(event: InputEvent) -> void:
+	if is_cutscene_active():
+		if event is InputEventKey and event.pressed and not event.echo:
+			if event.keycode in [KEY_SPACE, KEY_ENTER, KEY_KP_ENTER, KEY_ESCAPE] and active_cutscene_elapsed >= 0.25:
+				_skip_active_cutscene()
+				get_viewport().set_input_as_handled()
+		return
 	if mobile_editor_active:
 		_handle_mobile_editor_input(event)
 		return
@@ -1522,6 +1540,8 @@ func _on_touch_use() -> void:
 		player.touch_use_item()
 
 func _process(delta: float) -> void:
+	if is_cutscene_active():
+		active_cutscene_elapsed += delta
 	if noise_bar.value > 0:
 		noise_bar.value = move_toward(noise_bar.value, 0.0, delta * 1.5)
 
@@ -1586,28 +1606,45 @@ func _on_act_started(num: int, title: String) -> void:
 	else:
 		_show_act_banner(num, title)
 
-func _play_lampor_descent_cutscene() -> void:
-	var player: PlayerController = GameManager.player_character as PlayerController
-	if not is_instance_valid(player) or not player.camera:
-		return
-	var lampor: LamporStateMachine = get_tree().current_scene.find_child("LamporAI", true, false) as LamporStateMachine
-	if not lampor:
-		return
+func _open_stage_xz(preferred_xz: Vector2) -> Vector2:
+	var candidate := Vector2(clampf(preferred_xz.x, -26.0, 26.0), clampf(preferred_xz.y, -26.0, 26.0))
+	var world_root: Node = get_tree().current_scene
+	if world_root == null:
+		return candidate
+	var houses: Array[Node3D] = []
+	for child: Node in world_root.get_children():
+		if child is VillageHouse:
+			houses.append(child as Node3D)
+	for house: Node3D in houses:
+		var hx: float = house.global_position.x
+		var hz: float = house.global_position.z
+		if absf(candidate.x - hx) < 6.4 and absf(candidate.y - hz) < 6.4:
+			var push_x: float = hx + (-7.5 if candidate.x <= hx else 7.5)
+			var push_z: float = hz + (-7.5 if candidate.y <= hz else 7.5)
+			if absf(push_x) < absf(push_z):
+				candidate.x = clampf(push_x, -26.0, 26.0)
+			else:
+				candidate.y = clampf(push_z, -26.0, 26.0)
+	return candidate
 
+func _begin_cutscene_ui(cutscene_type: String, overlay_name: String, title_text: String, title_color: Color, subtitle_text: String, hide_main_hud: bool) -> Dictionary:
+	if is_cutscene_active():
+		_finish_active_cutscene(true)
+
+	var player: PlayerController = GameManager.player_character as PlayerController
 	if inventory_overlay and inventory_overlay.visible:
 		inventory_overlay.visible = false
 		selected_swap_slot = -1
-		player.is_inventory_open = false
-		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _is_touch_device() else Input.MOUSE_MODE_CAPTURED
-
-	lampor.trigger_descent(true)
-
-	if descent_camera_tween and descent_camera_tween.is_running():
-		descent_camera_tween.kill()
-	if is_instance_valid(descent_cutscene_overlay):
-		descent_cutscene_overlay.queue_free()
-		descent_cutscene_overlay = null
-
+		if player:
+			player.is_inventory_open = false
+	if pause_menu:
+		pause_menu.visible = false
+	if pause_settings_container:
+		pause_settings_container.visible = false
+	if exit_confirm_overlay:
+		exit_confirm_overlay.visible = false
+	if barricade_dialog:
+		barricade_dialog.visible = false
 	if mission_tween and mission_tween.is_running():
 		mission_tween.kill()
 	if mission_panel:
@@ -1618,73 +1655,211 @@ func _play_lampor_descent_cutscene() -> void:
 		desktop_hint_panel.visible = false
 	if hud_bag_button:
 		hud_bag_button.visible = false
-	stare_warning.visible = false
-	interaction_label.text = ""
+	if stare_warning:
+		stare_warning.visible = false
+	if jumpscare_tween and jumpscare_tween.is_running():
+		jumpscare_tween.kill()
+	if jumpscare_rect:
+		jumpscare_rect.visible = false
+	if interaction_label:
+		interaction_label.text = ""
 	var crosshair: Control = get_node_or_null("CenterContainer/Crosshair") as Control
 	if crosshair:
 		crosshair.visible = false
+	if hide_main_hud:
+		if top_left:
+			top_left.visible = false
+		if bottom_left:
+			bottom_left.visible = false
+		if bottom_center:
+			bottom_center.visible = false
 
-	player.camera.current = false
-	player.set_virtual_move(Vector2.ZERO)
-	player.set_virtual_sprint(false)
-	player.velocity = Vector3.ZERO
-	if player.has_method("prepare_for_cutscene"):
-		player.prepare_for_cutscene()
-	player.set_physics_process(false)
-	player.set_process_unhandled_input(false)
+	if is_instance_valid(player):
+		if player.camera:
+			player.camera.current = false
+		player.set_virtual_move(Vector2.ZERO)
+		player.set_virtual_sprint(false)
+		player.velocity = Vector3.ZERO
+		if player.has_method("prepare_for_cutscene"):
+			player.prepare_for_cutscene()
+		player.set_physics_process(false)
+		player.set_process_unhandled_input(false)
+
+	active_cutscene_type = cutscene_type
+	active_cutscene_elapsed = 0.0
+	active_cutscene_finish_cb = Callable()
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 	descent_cutscene_overlay = Control.new()
-	descent_cutscene_overlay.name = "DescentCutsceneOverlay"
+	descent_cutscene_overlay.name = overlay_name
+	descent_cutscene_overlay.process_mode = Node.PROCESS_MODE_ALWAYS
 	descent_cutscene_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	descent_cutscene_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	descent_cutscene_overlay.z_index = 18
+	descent_cutscene_overlay.z_index = 30
 	add_child(descent_cutscene_overlay)
 
+	var top_bar := ColorRect.new()
+	top_bar.color = Color(0.02, 0.01, 0.02, 0.80)
+	top_bar.anchor_left = 0.0
+	top_bar.anchor_top = 0.0
+	top_bar.anchor_right = 1.0
+	top_bar.anchor_bottom = 0.11
+	top_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	descent_cutscene_overlay.add_child(top_bar)
+
+	var bot_bar := ColorRect.new()
+	bot_bar.color = Color(0.02, 0.01, 0.02, 0.84)
+	bot_bar.anchor_left = 0.0
+	bot_bar.anchor_top = 0.85
+	bot_bar.anchor_right = 1.0
+	bot_bar.anchor_bottom = 1.0
+	bot_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	descent_cutscene_overlay.add_child(bot_bar)
+
+	var touch: bool = _is_touch_device()
 	var title_lbl := Label.new()
 	title_lbl.name = "CutsceneTitle"
-	title_lbl.text = "BABAK II: KERANDA LAMPOR TURUN KE DESA"
+	title_lbl.text = title_text
 	title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	title_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	title_lbl.anchor_left = 0.05
-	title_lbl.anchor_top = 0.03
-	title_lbl.anchor_right = 0.95
-	title_lbl.anchor_bottom = 0.14
+	title_lbl.anchor_left = 0.06
+	title_lbl.anchor_top = 0.01
+	title_lbl.anchor_right = 0.78
+	title_lbl.anchor_bottom = 0.11
+	title_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	title_lbl.add_theme_font_override("font", HORROR_TITLE_FONT)
-	title_lbl.add_theme_font_size_override("font_size", 16 if _is_touch_device() else 20)
-	title_lbl.add_theme_color_override("font_color", Color(1.0, 0.25, 0.2, 1.0))
+	title_lbl.add_theme_font_size_override("font_size", 15 if touch else 19)
+	title_lbl.add_theme_color_override("font_color", title_color)
 	title_lbl.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 1.0))
 	title_lbl.add_theme_constant_override("outline_size", 5)
 	descent_cutscene_overlay.add_child(title_lbl)
 
 	var subtitle_lbl := Label.new()
 	subtitle_lbl.name = "CutsceneSubtitle"
-	subtitle_lbl.text = "Lampor mendarat dari langit malam... Bersiaplah, Lampor langsung mengejarmu!"
+	subtitle_lbl.text = subtitle_text
 	subtitle_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	subtitle_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	subtitle_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	subtitle_lbl.anchor_left = 0.05
-	subtitle_lbl.anchor_top = 0.84
+	subtitle_lbl.anchor_top = 0.85
 	subtitle_lbl.anchor_right = 0.95
-	subtitle_lbl.anchor_bottom = 0.96
-	subtitle_lbl.add_theme_font_size_override("font_size", 15 if _is_touch_device() else 19)
-	subtitle_lbl.add_theme_color_override("font_color", Color(0.96, 0.88, 0.72, 1.0))
+	subtitle_lbl.anchor_bottom = 0.98
+	subtitle_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	subtitle_lbl.add_theme_font_size_override("font_size", 14 if touch else 18)
+	subtitle_lbl.add_theme_color_override("font_color", Color(0.96, 0.88, 0.74, 1.0))
 	subtitle_lbl.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 1.0))
 	subtitle_lbl.add_theme_constant_override("outline_size", 4)
 	descent_cutscene_overlay.add_child(subtitle_lbl)
 
-	var cutscene_camera := Camera3D.new()
-	cutscene_camera.name = "LamporDescentCamera"
-	cutscene_camera.fov = maxf(player.camera.fov, 68.0)
+	var skip_box := HBoxContainer.new()
+	skip_box.name = "SkipContainer"
+	skip_box.anchor_left = 0.78
+	skip_box.anchor_top = 0.018
+	skip_box.anchor_right = 0.98
+	skip_box.anchor_bottom = 0.095
+	skip_box.alignment = BoxContainer.ALIGNMENT_END
+	skip_box.add_theme_constant_override("separation", 8)
+	skip_box.mouse_filter = Control.MOUSE_FILTER_PASS
+	descent_cutscene_overlay.add_child(skip_box)
+
+	if not touch:
+		var skip_hint := Label.new()
+		skip_hint.name = "SkipHint"
+		skip_hint.text = "[SPASI / ESC]"
+		skip_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		HorrorTheme.style_label(skip_hint, "mono-sm", Color(0.82, 0.78, 0.72, 0.85), 11)
+		skip_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		skip_box.add_child(skip_hint)
+
+	var skip_btn := Button.new()
+	skip_btn.name = "SkipCutsceneButton"
+	skip_btn.text = "LEWATI >>"
+	skip_btn.custom_minimum_size = Vector2(118.0, 40.0)
+	skip_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	HorrorTheme.style_button(skip_btn, "secondary", 12, true)
+	skip_btn.pressed.connect(_skip_active_cutscene)
+	skip_box.add_child(skip_btn)
+
+	var fade_rect := ColorRect.new()
+	fade_rect.name = "FadeRect"
+	fade_rect.color = Color(0.0, 0.0, 0.0, 0.0)
+	fade_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	fade_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	descent_cutscene_overlay.add_child(fade_rect)
+
+	active_cutscene_camera = Camera3D.new()
+	active_cutscene_camera.name = "ActiveCutsceneCamera"
+	active_cutscene_camera.process_mode = Node.PROCESS_MODE_ALWAYS
+	active_cutscene_camera.fov = maxf(player.camera.fov if (player and player.camera) else 68.0, 66.0)
 
 	var fill_light := OmniLight3D.new()
 	fill_light.name = "CutsceneFillLight"
-	fill_light.omni_range = 24.0
+	fill_light.omni_range = 28.0
 	fill_light.light_energy = 2.0
 	fill_light.light_color = Color(0.65, 0.95, 0.75)
-	cutscene_camera.add_child(fill_light)
+	active_cutscene_camera.add_child(fill_light)
 
-	get_tree().current_scene.add_child(cutscene_camera)
+	if get_tree().current_scene:
+		get_tree().current_scene.add_child(active_cutscene_camera)
+	else:
+		add_child(active_cutscene_camera)
+	active_cutscene_camera.current = true
+
+	return {
+		"camera": active_cutscene_camera,
+		"fill_light": fill_light,
+		"fade_rect": fade_rect,
+		"crosshair": crosshair
+	}
+
+func _skip_active_cutscene() -> void:
+	if not is_cutscene_active():
+		return
+	_finish_active_cutscene(true)
+
+func _finish_active_cutscene(skipped: bool) -> void:
+	if active_cutscene_type.is_empty() and not is_instance_valid(descent_cutscene_overlay):
+		return
+	var finish_cb: Callable = active_cutscene_finish_cb
+	active_cutscene_finish_cb = Callable()
+	active_cutscene_type = ""
+	if descent_camera_tween and descent_camera_tween.is_running():
+		descent_camera_tween.kill()
+	descent_camera_tween = null
+	if finish_cb.is_valid():
+		finish_cb.call(skipped)
+	for vfx_node: Node in _cutscene_vfx_nodes:
+		if is_instance_valid(vfx_node):
+			vfx_node.queue_free()
+	_cutscene_vfx_nodes.clear()
+	if is_instance_valid(active_cutscene_camera):
+		active_cutscene_camera.queue_free()
+	active_cutscene_camera = null
+	if is_instance_valid(descent_cutscene_overlay):
+		descent_cutscene_overlay.queue_free()
+	descent_cutscene_overlay = null
+	cutscene_finished.emit(skipped)
+
+func _play_lampor_descent_cutscene() -> void:
+	var player: PlayerController = GameManager.player_character as PlayerController
+	if not is_instance_valid(player) or not player.camera:
+		return
+	var lampor: LamporStateMachine = get_tree().current_scene.find_child("LamporAI", true, false) as LamporStateMachine
+	if not lampor:
+		return
+
+	lampor.trigger_descent(true)
+	var ctx: Dictionary = _begin_cutscene_ui(
+		"descent",
+		"DescentCutsceneOverlay",
+		"BABAK II: KERANDA LAMPOR TURUN KE DESA",
+		Color(1.0, 0.25, 0.2, 1.0),
+		"Lampor mendarat dari langit malam... Bersiaplah, Lampor langsung mengejarmu!",
+		false
+	)
+	var cutscene_camera: Camera3D = ctx["camera"]
+	var crosshair: Control = ctx["crosshair"]
 
 	var target_pos: Vector3 = lampor.descend_target
 	var to_player: Vector3 = player.global_position - target_pos
@@ -1698,24 +1873,17 @@ func _play_lampor_descent_cutscene() -> void:
 	var initial_focus: Vector3 = lampor.global_position + Vector3(0.0, 0.15, 0.0)
 	if cutscene_camera.global_position.distance_squared_to(initial_focus) > 0.05:
 		cutscene_camera.look_at(initial_focus, Vector3.UP)
-	cutscene_camera.current = true
 	AudioManager.play_sound("lampor_roar", 1.0)
 
-	descent_camera_tween = create_tween()
-	descent_camera_tween.set_pause_mode(Tween.TWEEN_PAUSE_STOP)
-	descent_camera_tween.tween_method(func(progress: float) -> void:
-		if not is_instance_valid(cutscene_camera) or not is_instance_valid(lampor):
-			return
-		cutscene_camera.global_position = cam_start.lerp(cam_end, ease(progress, -1.6))
-		var focus_pos: Vector3 = lampor.global_position + Vector3(0.0, 0.15, 0.0)
-		if cutscene_camera.global_position.distance_squared_to(focus_pos) > 0.05:
-			cutscene_camera.look_at(focus_pos, Vector3.UP)
-	, 0.0, 1.0, LamporStateMachine.DESCENT_DURATION)
-	descent_camera_tween.tween_callback(func() -> void:
+	active_cutscene_finish_cb = func(_skipped: bool) -> void:
+		AudioManager.stop_sound("lampor_roar")
 		if is_instance_valid(player):
+			player.in_cutscene = false
 			player.camera.current = true
 			player.set_physics_process(true)
 			player.set_process_unhandled_input(true)
+			player._sync_hand_prop_visibility()
+			player._sync_flashlight_state(true)
 		if is_instance_valid(crosshair):
 			crosshair.visible = true
 		if touch_root and _is_touch_device() and not get_tree().paused:
@@ -1724,11 +1892,8 @@ func _play_lampor_descent_cutscene() -> void:
 			desktop_hint_panel.visible = true
 		if hud_bag_button:
 			hud_bag_button.visible = true
-		if is_instance_valid(cutscene_camera):
-			cutscene_camera.queue_free()
-		if is_instance_valid(descent_cutscene_overlay):
-			descent_cutscene_overlay.queue_free()
-			descent_cutscene_overlay = null
+		if not get_tree().paused:
+			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _is_touch_device() else Input.MOUSE_MODE_CAPTURED
 		if is_instance_valid(lampor) and lampor.current_state != LamporStateMachine.State.CHASE and lampor.current_state != LamporStateMachine.State.BANISHED:
 			if lampor.descent_tween and lampor.descent_tween.is_running():
 				lampor.descent_tween.kill()
@@ -1742,7 +1907,335 @@ func _play_lampor_descent_cutscene() -> void:
 			lampor._set_state(LamporStateMachine.State.CHASE)
 			SignalBus.lampor_state_changed.emit("CHASE")
 		_on_dialog_requested("LAMPOR TELAH TURUN DAN MENGEJARMU! Lari atau sembunyi di dalam rumah!", 4.5)
+
+	descent_camera_tween = create_tween()
+	descent_camera_tween.set_pause_mode(Tween.TWEEN_PAUSE_STOP)
+	descent_camera_tween.tween_method(func(progress: float) -> void:
+		if not is_instance_valid(cutscene_camera) or not is_instance_valid(lampor):
+			return
+		cutscene_camera.global_position = cam_start.lerp(cam_end, ease(progress, -1.6))
+		var focus_pos: Vector3 = lampor.global_position + Vector3(0.0, 0.15, 0.0)
+		if cutscene_camera.global_position.distance_squared_to(focus_pos) > 0.05:
+			cutscene_camera.look_at(focus_pos, Vector3.UP)
+	, 0.0, 1.0, LamporStateMachine.DESCENT_DURATION)
+	descent_camera_tween.tween_callback(func() -> void: _finish_active_cutscene(false))
+
+func play_victory_cutscene_and_wait() -> void:
+	var lampor: LamporStateMachine = get_tree().current_scene.find_child("LamporAI", true, false) as LamporStateMachine
+	var player: PlayerController = GameManager.player_character as PlayerController
+	var ctx: Dictionary = _begin_cutscene_ui(
+		"victory",
+		"VictoryCutsceneOverlay",
+		"FAJAR MENYINGSING: KUTUKAN MUSNAH",
+		Color(1.0, 0.86, 0.35, 1.0),
+		"Cahaya langit menyambar dan menarik Keranda Lampor ke atas hingga lenyap!",
+		true
 	)
+	var cutscene_camera: Camera3D = ctx["camera"]
+	var fill_light: OmniLight3D = ctx["fill_light"]
+	var fade_rect: ColorRect = ctx["fade_rect"]
+	if fill_light:
+		fill_light.light_color = Color(0.55, 0.95, 1.0)
+		fill_light.light_energy = 2.6
+
+	var pref_xz := Vector2(0.0, -7.0)
+	if is_instance_valid(lampor) and lampor.current_state != LamporStateMachine.State.DORMANT_SKY:
+		pref_xz = Vector2(lampor.global_position.x, lampor.global_position.z)
+	elif is_instance_valid(player):
+		pref_xz = Vector2(player.global_position.x, player.global_position.z - 8.0)
+	var stage_xz: Vector2 = _open_stage_xz(pref_xz)
+
+	var vfx_root := Node3D.new()
+	vfx_root.name = "UfoBeamVFX"
+	vfx_root.process_mode = Node.PROCESS_MODE_ALWAYS
+	vfx_root.position = Vector3(stage_xz.x, 0.0, stage_xz.y)
+	if get_tree().current_scene:
+		get_tree().current_scene.add_child(vfx_root)
+	_cutscene_vfx_nodes.append(vfx_root)
+
+	var beam_inner_mat := StandardMaterial3D.new()
+	beam_inner_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	beam_inner_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	beam_inner_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	beam_inner_mat.albedo_color = Color(0.75, 0.98, 1.0, 0.0)
+
+	var beam_outer_mat := StandardMaterial3D.new()
+	beam_outer_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	beam_outer_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	beam_outer_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	beam_outer_mat.albedo_color = Color(0.20, 0.88, 1.0, 0.0)
+
+	var ring_mat := StandardMaterial3D.new()
+	ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	ring_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	ring_mat.albedo_color = Color(1.0, 0.94, 0.65, 0.0)
+
+	var disc_mat := StandardMaterial3D.new()
+	disc_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	disc_mat.albedo_color = Color(0.85, 0.98, 1.0, 1.0)
+
+	var beam_inner := MeshInstance3D.new()
+	var inner_cyl := CylinderMesh.new()
+	inner_cyl.top_radius = 1.15
+	inner_cyl.bottom_radius = 2.0
+	inner_cyl.height = 50.0
+	beam_inner.mesh = inner_cyl
+	beam_inner.material_override = beam_inner_mat
+	beam_inner.position = Vector3(0.0, 25.0, 0.0)
+	vfx_root.add_child(beam_inner)
+
+	var beam_outer := MeshInstance3D.new()
+	var outer_cyl := CylinderMesh.new()
+	outer_cyl.top_radius = 2.1
+	outer_cyl.bottom_radius = 3.8
+	outer_cyl.height = 50.0
+	beam_outer.mesh = outer_cyl
+	beam_outer.material_override = beam_outer_mat
+	beam_outer.position = Vector3(0.0, 25.0, 0.0)
+	vfx_root.add_child(beam_outer)
+
+	var ufo_disc := MeshInstance3D.new()
+	var disc_cyl := CylinderMesh.new()
+	disc_cyl.top_radius = 5.5
+	disc_cyl.bottom_radius = 3.2
+	disc_cyl.height = 1.4
+	ufo_disc.mesh = disc_cyl
+	ufo_disc.material_override = disc_mat
+	ufo_disc.position = Vector3(0.0, 48.5, 0.0)
+	vfx_root.add_child(ufo_disc)
+
+	var beam_light := SpotLight3D.new()
+	beam_light.position = Vector3(0.0, 38.0, 0.0)
+	beam_light.rotation_degrees = Vector3(-90.0, 0.0, 0.0)
+	beam_light.light_color = Color(0.55, 0.95, 1.0)
+	beam_light.light_energy = 12.0
+	beam_light.spot_range = 48.0
+	beam_light.spot_angle = 28.0
+	vfx_root.add_child(beam_light)
+
+	var energy_rings: Array[MeshInstance3D] = []
+	for ri: int in range(4):
+		var ring := MeshInstance3D.new()
+		var torus := TorusMesh.new()
+		torus.inner_radius = 1.75
+		torus.outer_radius = 2.05
+		ring.mesh = torus
+		ring.material_override = ring_mat
+		ring.position = Vector3(0.0, float(ri) * 10.0, 0.0)
+		vfx_root.add_child(ring)
+		energy_rings.append(ring)
+
+	if is_instance_valid(lampor):
+		if lampor.descent_tween and lampor.descent_tween.is_running():
+			lampor.descent_tween.kill()
+		lampor.is_descending = false
+		lampor.is_catching = false
+		lampor.visible = true
+		lampor.current_state = LamporStateMachine.State.BANISHED
+		lampor.global_position = Vector3(stage_xz.x, 2.3, stage_xz.y)
+		if lampor.red_light:
+			lampor.red_light.light_color = Color(0.35, 0.95, 1.0)
+			lampor.red_light.light_energy = 6.0
+
+	var cam_start := Vector3(stage_xz.x + 7.5, 2.0, stage_xz.y + 10.5)
+	var cam_end := Vector3(stage_xz.x - 3.5, 1.4, stage_xz.y + 8.5)
+	cutscene_camera.global_position = cam_start
+	AudioManager.play_sound("ufo_beam", 0.0)
+	AudioManager.play_sound("lampor_roar", 2.0, 1.25)
+
+	active_cutscene_finish_cb = func(_skipped: bool) -> void:
+		AudioManager.stop_sound("ufo_beam")
+		AudioManager.stop_sound("lampor_roar")
+		if is_instance_valid(lampor):
+			lampor.visible = false
+
+	descent_camera_tween = create_tween()
+	descent_camera_tween.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+	descent_camera_tween.tween_method(func(progress: float) -> void:
+		var beam_fade: float = clampf(progress / 0.16, 0.0, 1.0)
+		if progress > 0.85:
+			beam_fade *= clampf((1.0 - progress) / 0.15, 0.0, 1.0)
+		beam_inner_mat.albedo_color.a = 0.42 * beam_fade
+		beam_outer_mat.albedo_color.a = 0.18 * beam_fade
+		ring_mat.albedo_color.a = 0.72 * beam_fade
+		var pulse: float = 0.85 + 0.25 * sin(progress * TAU * 8.0)
+		beam_inner.scale = Vector3(pulse * beam_fade, 1.0, pulse * beam_fade)
+		beam_outer.scale = Vector3(beam_fade, 1.0, beam_fade)
+		beam_light.light_energy = 14.0 * beam_fade
+
+		for ri: int in range(energy_rings.size()):
+			var ring_prog: float = fmod(progress * 3.2 + float(ri) * 0.25, 1.0)
+			energy_rings[ri].position.y = lerpf(0.6, 46.5, ring_prog)
+			var ring_scl: float = lerpf(1.25, 0.65, ring_prog)
+			energy_rings[ri].scale = Vector3(ring_scl, 1.0, ring_scl)
+
+		var target_focus := Vector3(stage_xz.x, 4.0, stage_xz.y)
+		if is_instance_valid(lampor):
+			var lift_prog: float = clampf((progress - 0.15) / 0.72, 0.0, 1.0)
+			var cur_y: float = lerpf(2.3, 47.0, lift_prog * lift_prog)
+			var wobble: float = sin(progress * 26.0) * (1.0 - lift_prog * 0.5) * 0.28
+			lampor.global_position = Vector3(stage_xz.x + wobble * 0.4, cur_y, stage_xz.y)
+			lampor.rotation.y += 0.09
+			lampor.rotation.z = wobble * 0.35
+			lampor.visible = (progress < 0.88)
+			target_focus = Vector3(stage_xz.x, clampf(cur_y, 2.3, 28.0), stage_xz.y)
+
+		if is_instance_valid(cutscene_camera):
+			cutscene_camera.global_position = cam_start.lerp(cam_end, ease(progress, -1.4))
+			if cutscene_camera.global_position.distance_squared_to(target_focus) > 0.05:
+				cutscene_camera.look_at(target_focus, Vector3.UP)
+
+		if is_instance_valid(fade_rect) and progress > 0.84:
+			var f: float = clampf((progress - 0.84) / 0.16, 0.0, 1.0)
+			fade_rect.color = Color(0.95, 0.85, 0.55, f * 0.92)
+	, 0.0, 1.0, 4.8)
+	descent_camera_tween.tween_callback(func() -> void: _finish_active_cutscene(false))
+	await cutscene_finished
+
+func play_death_cutscene_and_wait() -> void:
+	var player: PlayerController = GameManager.player_character as PlayerController
+	var lampor: LamporStateMachine = get_tree().current_scene.find_child("LamporAI", true, false) as LamporStateMachine
+
+	if is_instance_valid(player) and player.is_hiding:
+		player.exit_hiding()
+
+	var pref_xz := Vector2(0.0, 6.0)
+	if is_instance_valid(player):
+		if player.is_inside_house and is_instance_valid(player.current_house):
+			pref_xz = Vector2(player.current_house.global_position.x, player.current_house.global_position.z + 7.5)
+		else:
+			pref_xz = Vector2(player.global_position.x, player.global_position.z)
+	var stage_xz: Vector2 = _open_stage_xz(pref_xz)
+
+	var ctx: Dictionary = _begin_cutscene_ui(
+		"death",
+		"DeathCutsceneOverlay",
+		"DITANGKAP KERANDA LAMPOR",
+		Color(1.0, 0.2, 0.18, 1.0),
+		"Lampor mengangkat tubuhmu dan membawamu pergi ke dalam kegelapan malam...",
+		true
+	)
+	var cutscene_camera: Camera3D = ctx["camera"]
+	var fill_light: OmniLight3D = ctx["fill_light"]
+	var fade_rect: ColorRect = ctx["fade_rect"]
+	if fill_light:
+		fill_light.light_color = Color(1.0, 0.45, 0.38)
+		fill_light.light_energy = 2.4
+
+	if is_instance_valid(player):
+		player.visible = true
+		if player.player_model:
+			player.player_model.visible = true
+			player.player_model.position = Vector3.ZERO
+			player.player_model.rotation.y = PI
+		player.global_position = Vector3(stage_xz.x, 0.1, stage_xz.y)
+		if player.has_method("pose_abducted_dangle"):
+			player.pose_abducted_dangle(0.0)
+
+	var tether_root := Node3D.new()
+	tether_root.name = "AbductionTetherVFX"
+	tether_root.process_mode = Node.PROCESS_MODE_ALWAYS
+	if get_tree().current_scene:
+		get_tree().current_scene.add_child(tether_root)
+	_cutscene_vfx_nodes.append(tether_root)
+
+	var tether_mat := StandardMaterial3D.new()
+	tether_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	tether_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	tether_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	tether_mat.albedo_color = Color(0.95, 0.14, 0.12, 0.0)
+
+	var tether_mesh := MeshInstance3D.new()
+	var tether_cyl := CylinderMesh.new()
+	tether_cyl.top_radius = 0.55
+	tether_cyl.bottom_radius = 0.95
+	tether_cyl.height = 2.2
+	tether_mesh.mesh = tether_cyl
+	tether_mesh.material_override = tether_mat
+	tether_root.add_child(tether_mesh)
+
+	var lampor_start := Vector3(stage_xz.x - 4.0, 5.2, stage_xz.y - 5.5)
+	var lampor_hover := Vector3(stage_xz.x, 2.5, stage_xz.y)
+	var lampor_lift := Vector3(stage_xz.x, 3.6, stage_xz.y)
+	var escape_dir := Vector3(0.58, 0.38, -0.72).normalized()
+	var lampor_exit := lampor_lift + escape_dir * 44.0
+
+	if is_instance_valid(lampor):
+		if lampor.descent_tween and lampor.descent_tween.is_running():
+			lampor.descent_tween.kill()
+		lampor.is_descending = false
+		lampor.is_catching = false
+		lampor.visible = true
+		lampor.global_position = lampor_start
+		if lampor.red_light:
+			lampor.red_light.light_color = Color(1.0, 0.14, 0.10)
+			lampor.red_light.light_energy = 5.5
+		lampor.safe_look_at(Vector3(stage_xz.x, lampor_start.y, stage_xz.y))
+
+	var cam_pos_start := Vector3(stage_xz.x + 5.8, 1.8, stage_xz.y + 6.4)
+	var cam_pos_end := Vector3(stage_xz.x + 2.8, 1.4, stage_xz.y + 8.8)
+	cutscene_camera.global_position = cam_pos_start
+	AudioManager.play_sound("lampor_roar", 2.0, 0.92)
+	AudioManager.play_sound("lampor_bell", 1.0, 0.95)
+
+	active_cutscene_finish_cb = func(_skipped: bool) -> void:
+		AudioManager.stop_sound("lampor_roar")
+		AudioManager.stop_sound("lampor_bell")
+
+	descent_camera_tween = create_tween()
+	descent_camera_tween.set_pause_mode(Tween.TWEEN_PAUSE_PROCESS)
+	descent_camera_tween.tween_method(func(progress: float) -> void:
+		var cur_lampor_pos := lampor_hover
+		var cur_player_pos := Vector3(stage_xz.x, 0.1, stage_xz.y)
+		var tether_alpha: float = 0.0
+
+		if progress < 0.24:
+			# Fase 1: Lampor menyambar turun ke atas pemain
+			var p1: float = clampf(progress / 0.24, 0.0, 1.0)
+			cur_lampor_pos = lampor_start.lerp(lampor_hover, ease(p1, -1.6))
+			cur_player_pos = Vector3(stage_xz.x, 0.1, stage_xz.y)
+			tether_alpha = p1 * 0.28
+		elif progress < 0.46:
+			# Fase 2: Pemain diangkat ke udara di bawah keranda Lampor
+			var p2: float = clampf((progress - 0.24) / 0.22, 0.0, 1.0)
+			cur_lampor_pos = lampor_hover.lerp(lampor_lift, ease(p2, -1.3))
+			cur_player_pos = Vector3(stage_xz.x, lerpf(0.1, cur_lampor_pos.y - 1.9, ease(p2, -1.2)), stage_xz.y)
+			tether_alpha = 0.36
+		else:
+			# Fase 3: Lampor membawa pemain terbang menjauh ke langit malam
+			var p3: float = clampf((progress - 0.46) / 0.54, 0.0, 1.0)
+			cur_lampor_pos = lampor_lift.lerp(lampor_exit, p3 * p3 * 0.45 + p3 * 0.55)
+			cur_player_pos = cur_lampor_pos + Vector3(0.0, -1.9, 0.0)
+			tether_alpha = 0.32 * clampf(1.0 - p3 * 0.6, 0.1, 1.0)
+
+		tether_mat.albedo_color.a = tether_alpha
+		tether_root.global_position = cur_lampor_pos + Vector3(0.0, -1.1, 0.0)
+
+		if is_instance_valid(lampor):
+			lampor.global_position = cur_lampor_pos
+			if progress >= 0.44:
+				lampor.safe_look_at(lampor_exit)
+			else:
+				lampor.safe_look_at(cur_player_pos)
+
+		if is_instance_valid(player):
+			player.global_position = cur_player_pos
+			player.rotation.y = sin(progress * 9.0) * 0.22
+			if player.has_method("pose_abducted_dangle"):
+				player.pose_abducted_dangle(progress * 4.0)
+
+		if is_instance_valid(cutscene_camera):
+			cutscene_camera.global_position = cam_pos_start.lerp(cam_pos_end, progress)
+			var look_target: Vector3 = cur_lampor_pos.lerp(cur_player_pos, 0.45)
+			if cutscene_camera.global_position.distance_squared_to(look_target) > 0.05:
+				cutscene_camera.look_at(look_target, Vector3.UP)
+
+		if is_instance_valid(fade_rect) and progress > 0.84:
+			var f: float = clampf((progress - 0.84) / 0.16, 0.0, 1.0)
+			fade_rect.color = Color(0.04, 0.0, 0.0, f)
+	, 0.0, 1.0, 5.2)
+	descent_camera_tween.tween_callback(func() -> void: _finish_active_cutscene(false))
+	await cutscene_finished
 
 func _show_act_banner(num: int, _title: String) -> void:
 	if banner_tween:

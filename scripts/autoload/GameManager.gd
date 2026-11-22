@@ -47,6 +47,7 @@ const FURNACE_TOTAL_TIME: float = 45.0
 var player_character: Node = null
 var last_death_reason: String = ""
 var death_sequence_active: bool = false
+var victory_sequence_active: bool = false
 
 # Save Data
 var total_wins: int = 0
@@ -55,7 +56,7 @@ var extra_lives: int = 0
 const MAX_COINS: int = 999999999
 const MAX_EXTRA_LIVES: int = 5
 const MAX_SHOP_ITEM_QTY: int = 5
-var item_stash: Dictionary = {"jamu": 0, "baterai": 0, "kentongan": 0}
+var item_stash: Dictionary = {"jamu": 0, "baterai": 0, "energy_drink": 0, "kentongan": 0}
 var redeemed_codes: Array[String] = []
 var run_reward_awarded: bool = false
 var last_run_coin_reward: int = 0
@@ -137,6 +138,7 @@ func load_save_data() -> void:
 	if saved_stash is Dictionary:
 		item_stash["jamu"] = clampi(int(saved_stash.get("jamu", 0)), 0, MAX_SHOP_ITEM_QTY)
 		item_stash["baterai"] = clampi(int(saved_stash.get("baterai", 0)), 0, MAX_SHOP_ITEM_QTY)
+		item_stash["energy_drink"] = clampi(int(saved_stash.get("energy_drink", 0)), 0, MAX_SHOP_ITEM_QTY)
 		item_stash["kentongan"] = clampi(int(saved_stash.get("kentongan", 0)), 0, MAX_SHOP_ITEM_QTY)
 	var saved_codes: Variant = data.get("redeemed_codes", [])
 	if saved_codes is Array:
@@ -376,6 +378,8 @@ func save_active_run() -> bool:
 			"sanity": player.sanity_system.current_sanity,
 			"flashlight_battery": player.flashlight_battery,
 			"flashlight_on": player.flashlight_on,
+			"energy_drink_timer": player.energy_drink_timer,
+			"energy_drink_cooldown": player.energy_drink_cooldown,
 			"inventory": inventory_data,
 			"active_slot": active_slot,
 			"inside_house": player.is_inside_house,
@@ -431,6 +435,7 @@ func resume_saved_game() -> void:
 	furnace_time_left = clampf(float(snapshot.get("furnace_time_left", furnace_total_time)), 0.0, furnace_total_time)
 	last_furnace_elapsed_sec = int(furnace_total_time - furnace_time_left) if furnace_burning else -1
 	death_sequence_active = false
+	victory_sequence_active = false
 	last_death_reason = ""
 	is_resuming_saved_run = true
 	current_state = GameState.PLAYING
@@ -581,6 +586,8 @@ func _restore_player_snapshot(world_root: Node, raw_player: Variant) -> void:
 	player.flashlight_preferred_on = bool(saved_player.get("flashlight_on", true))
 	player.flashlight_on = player.flashlight_preferred_on and player.flashlight_battery > 0.0
 	player.flashlight.visible = player.flashlight_on
+	player.energy_drink_timer = clampf(float(saved_player.get("energy_drink_timer", 0.0)), 0.0, PlayerController.ENERGY_DRINK_DURATION)
+	player.energy_drink_cooldown = clampf(float(saved_player.get("energy_drink_cooldown", 0.0)), 0.0, PlayerController.ENERGY_DRINK_COOLDOWN)
 	player.is_hiding = false
 	player.hiding_spot = null
 	player.is_inside_house = bool(saved_player.get("inside_house", false))
@@ -699,6 +706,8 @@ func purchase_shop_item(item_id: String, quantity: int = 1) -> Dictionary:
 			price = 30 * safe_quantity
 		"baterai":
 			price = 20 * safe_quantity
+		"energy_drink":
+			price = 25 * safe_quantity
 		"kentongan":
 			price = 250 * safe_quantity
 		"extra_life":
@@ -732,6 +741,8 @@ func purchase_shop_item(item_id: String, quantity: int = 1) -> Dictionary:
 		item_label = "Jamu Tolak Bala"
 	elif item_id == "baterai":
 		item_label = "Baterai Senter"
+	elif item_id == "energy_drink":
+		item_label = "Energy Drink"
 	elif item_id == "kentongan":
 		item_label = "Kentongan"
 	return {"success": true, "message": "%s x%d berhasil dibeli." % [item_label, safe_quantity], "price": price}
@@ -762,7 +773,7 @@ func apply_reward(reward: Dictionary) -> void:
 			extra_lives = mini(MAX_EXTRA_LIVES, extra_lives + quantity)
 		"item":
 			var item_id: String = str(reward.get("item_id", ""))
-			if item_id in ["jamu", "baterai", "kentongan"]:
+			if item_id in ["jamu", "baterai", "energy_drink", "kentongan"]:
 				item_stash[item_id] = mini(MAX_SHOP_ITEM_QTY, maxi(0, int(item_stash.get(item_id, 0))) + quantity)
 
 func deliver_stored_items(inventory: Node) -> void:
@@ -774,9 +785,10 @@ func deliver_stored_items(inventory: Node) -> void:
 	var stash_names: Dictionary = {
 		"jamu": "Jamu Tolak Bala",
 		"baterai": "Baterai Senter",
+		"energy_drink": "Energy Drink",
 		"kentongan": "Kentongan"
 	}
-	for item_id: String in ["jamu", "baterai", "kentongan"]:
+	for item_id: String in ["jamu", "baterai", "energy_drink", "kentongan"]:
 		var remaining: int = maxi(0, int(item_stash.get(item_id, 0)))
 		if remaining <= 0:
 			continue
@@ -912,6 +924,7 @@ func start_new_game(diff: Difficulty = Difficulty.NORMAL, tutorial: bool = false
 	
 	last_death_reason = ""
 	death_sequence_active = false
+	victory_sequence_active = false
 	for k: String in ritual_items.keys():
 		ritual_items[k] = false
 		
@@ -1182,16 +1195,29 @@ func get_ritual_item_count() -> int:
 	return count
 
 func trigger_victory() -> void:
-	if current_state == GameState.GAMEOVER or current_state == GameState.VICTORY:
+	if victory_sequence_active or death_sequence_active or current_state == GameState.GAMEOVER or current_state == GameState.VICTORY:
 		return
+	victory_sequence_active = true
+	furnace_burning = false
 	clear_run_save()
 	if is_tutorial_mode:
 		mark_tutorial_completed()
+	current_state = GameState.PAUSED
+	get_tree().paused = true
+	var world_root: Node = get_tree().current_scene
+	var hud: Node = world_root.find_child("HUD", true, false) if is_instance_valid(world_root) else null
+	if hud and hud.has_method("play_victory_cutscene_and_wait"):
+		await hud.play_victory_cutscene_and_wait()
+	if not is_inside_tree():
+		victory_sequence_active = false
+		return
+	get_tree().paused = false
 	current_state = GameState.VICTORY
 	total_wins += 1
 	_award_run_coins(WIN_COIN_REWARD)
 	save_game_data()
 	SignalBus.game_won.emit()
+	victory_sequence_active = false
 	get_tree().change_scene_to_file("res://scenes/ui/VictoryScreen.tscn")
 
 # True jika kematian disebabkan Lampor (ditangkap keranda atau kewarasan habis
@@ -1204,7 +1230,7 @@ func _on_player_death_requested(reason: String) -> void:
 	_execute_player_death(reason, false, false)
 
 func _execute_player_death(reason: String, ignore_extra_lives: bool = false, bypass_god_mode: bool = false) -> void:
-	if death_sequence_active or current_state == GameState.GAMEOVER or current_state == GameState.VICTORY:
+	if death_sequence_active or victory_sequence_active or current_state == GameState.GAMEOVER or current_state == GameState.VICTORY:
 		return
 	if admin_god_mode and not bypass_god_mode:
 		return
@@ -1219,6 +1245,7 @@ func _execute_player_death(reason: String, ignore_extra_lives: bool = false, byp
 	else:
 		await get_tree().create_timer(0.65, true).timeout
 	if not is_inside_tree():
+		death_sequence_active = false
 		return
 	# Nyawa tambahan menghidupkan kembali pemain di titik awal desa (kecuali batas pukul 05.00 atau force lose).
 	if not ignore_extra_lives and extra_lives > 0 and is_instance_valid(player_character) and player_character.has_method("revive_from_extra_life"):
@@ -1233,6 +1260,14 @@ func _execute_player_death(reason: String, ignore_extra_lives: bool = false, byp
 		death_sequence_active = false
 		SignalBus.dialog_requested.emit("Nyawa tambahan terpakai! Kamu kembali ke desa. Sisa nyawa: %d" % extra_lives, 4.0)
 		return
+	# Cutscene kekalahan: pemain diangkat dan dibawa pergi oleh Lampor sebelum layar kalah tampil.
+	var world_root: Node = get_tree().current_scene
+	var hud: Node = world_root.find_child("HUD", true, false) if is_instance_valid(world_root) else null
+	if hud and hud.has_method("play_death_cutscene_and_wait"):
+		await hud.play_death_cutscene_and_wait()
+	if not is_inside_tree():
+		death_sequence_active = false
+		return
 	# Koin kekalahan hanya diberikan ketika permainan benar-benar berakhir.
 	if is_tutorial_mode:
 		mark_tutorial_completed()
@@ -1242,6 +1277,7 @@ func _execute_player_death(reason: String, ignore_extra_lives: bool = false, byp
 	SignalBus.player_died.emit(reason)
 	SignalBus.game_over.emit(reason)
 	get_tree().paused = false
+	death_sequence_active = false
 	get_tree().change_scene_to_file("res://scenes/ui/GameOverScreen.tscn")
 
 # ---------- Fungsi Bantuan Admin & Tester Panel (Alt+F2) ----------
@@ -1251,18 +1287,16 @@ func is_in_active_gameplay() -> bool:
 	return world_root != null and world_root.scene_file_path == "res://scenes/world/VillageMap.tscn"
 
 func admin_instant_win() -> bool:
-	if not is_in_active_gameplay():
+	if not is_in_active_gameplay() or victory_sequence_active or death_sequence_active:
 		return false
-	death_sequence_active = false
 	get_tree().paused = false
 	current_state = GameState.PLAYING
 	trigger_victory()
 	return true
 
 func admin_instant_lose() -> bool:
-	if not is_in_active_gameplay():
+	if not is_in_active_gameplay() or victory_sequence_active or death_sequence_active:
 		return false
-	death_sequence_active = false
 	get_tree().paused = false
 	current_state = GameState.PLAYING
 	_execute_player_death("Ditelan Keranda Lampor secara instan melalui Admin Panel.", true, true)
@@ -1365,6 +1399,7 @@ func admin_give_all_items() -> void:
 	inv.add_item({"id": "papan_paku", "name": "Papan & Paku", "type": "resource", "quantity": 4})
 	inv.add_item({"id": "jamu", "name": "Jamu Tolak Bala", "type": "consumable", "quantity": 5})
 	inv.add_item({"id": "baterai", "name": "Baterai Senter", "type": "consumable", "quantity": 5})
+	inv.add_item({"id": "energy_drink", "name": "Energy Drink", "type": "consumable", "quantity": 5})
 	inv.add_item({"id": "kentongan", "name": "Kentongan", "type": "consumable", "quantity": 5})
 
 func admin_refill_player_stats() -> void:

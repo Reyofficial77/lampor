@@ -83,6 +83,11 @@ func _update_model_appearance() -> void:
 			if item_light:
 				item_light.light_color = Color(0.95, 0.65, 0.25)
 				item_light.light_energy = 1.1
+		"energy_drink":
+			target_name = "EnergyDrinkVisual"
+			if item_light:
+				item_light.light_color = Color(0.15, 0.85, 1.0)
+				item_light.light_energy = 1.1
 
 	_build_ritual_model(item_id)
 	if is_ritual_item and visual_node:
@@ -222,6 +227,32 @@ func _build_ritual_model(id: String) -> void:
 			_build_keris()
 		'kentongan':
 			_build_kentongan()
+		'energy_drink':
+			_build_energy_drink()
+
+func _build_energy_drink() -> void:
+	# Kaleng minuman energi aluminium berlabel biru elektrik, cincin perak, & tab penarik atas
+	var root: Node3D = _replace_visual('EnergyDrinkVisual')
+	var can_blue: StandardMaterial3D = _mat(Color(0.08, 0.42, 0.92), 0.25, 0.85, 0.15)
+	var stripe_cyan: StandardMaterial3D = _mat(Color(0.15, 0.95, 0.88), 0.2, 0.35, 1.1)
+	var aluminum: StandardMaterial3D = _mat(Color(0.84, 0.87, 0.90), 0.22, 0.92)
+	var dark_opening: StandardMaterial3D = _mat(Color(0.06, 0.06, 0.08), 0.7, 0.4)
+
+	var can_holder := Node3D.new()
+	can_holder.rotation_degrees = Vector3(8.0, 15.0, -10.0)
+	root.add_child(can_holder)
+
+	# Badan kaleng utama & garis energi
+	_add_mesh(can_holder, _cyl(0.066, 0.066, 0.21), can_blue, Vector3(0.0, 0.0, 0.0))
+	_add_mesh(can_holder, _cyl(0.0675, 0.0675, 0.042), stripe_cyan, Vector3(0.0, 0.025, 0.0))
+	_add_mesh(can_holder, _cyl(0.0675, 0.0675, 0.016), stripe_cyan, Vector3(0.0, -0.045, 0.0))
+	# Bahu miring atas & bawah aluminium
+	_add_mesh(can_holder, _cyl(0.056, 0.066, 0.028), aluminum, Vector3(0.0, 0.119, 0.0))
+	_add_mesh(can_holder, _cyl(0.060, 0.066, 0.018), aluminum, Vector3(0.0, -0.114, 0.0))
+	# Bibir & tutup atas kaleng + tab penarik
+	_add_mesh(can_holder, _cyl(0.058, 0.058, 0.010), aluminum, Vector3(0.0, 0.136, 0.0))
+	_add_mesh(can_holder, _box(0.022, 0.008, 0.016), dark_opening, Vector3(0.0, 0.140, 0.024))
+	_add_mesh(can_holder, _box(0.018, 0.006, 0.036), aluminum, Vector3(0.0, 0.145, -0.004), Vector3(12.0, 0.0, 0.0))
 
 func _build_kentongan() -> void:
 	# Tabung bambu/kayu berongga bercelah vertikal disertai pemukul kayu

@@ -16,6 +16,7 @@ const STACK_LIMITS: Dictionary = {
 	"papan_paku": 4,
 	"jamu": 10,
 	"baterai": 10,
+	"energy_drink": 10,
 	"kentongan": 5
 }
 

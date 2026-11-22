@@ -15,6 +15,8 @@ var is_playing: bool = false
 var play_time: float = 0.0
 var playback_duration: float = FALLBACK_DURATION
 var eye_glow: float = 1.0
+var _skip_requested: bool = false
+signal jumpscare_finished()
 
 func _ready() -> void:
 	layer = 100
@@ -50,6 +52,7 @@ func play_jumpscare_and_wait() -> void:
 	if is_playing:
 		return
 	is_playing = true
+	_skip_requested = false
 	play_time = 0.0
 	playback_duration = maxf(AudioManager.get_jumpscare_duration(), 0.1)
 	root.modulate.a = 1.0
@@ -57,14 +60,37 @@ func play_jumpscare_and_wait() -> void:
 	face.position = Vector2.ZERO
 	flash.color = Color(1.0, 1.0, 1.0, 0.0)
 	root.visible = true
-	# Audio dimulai setelah overlay siap; fungsi ini menunggu sinyal finished.
-	# Getar di HP (tidak berpengaruh di desktop).
 	Input.vibrate_handheld(700)
-	await AudioManager.play_jumpscare_and_wait()
+	AudioManager.play_jumpscare_and_wait()
+	await jumpscare_finished
 	_finish()
 
+func skip_jumpscare() -> void:
+	if not is_playing or _skip_requested:
+		return
+	_skip_requested = true
+	AudioManager.stop_jumpscare()
+	jumpscare_finished.emit()
+
+func _input(event: InputEvent) -> void:
+	if not is_playing or play_time < 0.22:
+		return
+	var wants_skip: bool = false
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode in [KEY_SPACE, KEY_ENTER, KEY_KP_ENTER, KEY_ESCAPE]:
+			wants_skip = true
+	elif event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		wants_skip = true
+	elif event is InputEventScreenTouch and event.pressed:
+		wants_skip = true
+	if wants_skip:
+		skip_jumpscare()
+		get_viewport().set_input_as_handled()
+
 func _finish() -> void:
+	AudioManager.stop_jumpscare()
 	is_playing = false
+	_skip_requested = false
 	root.visible = false
 	root.modulate.a = 1.0
 	face.scale = Vector2.ONE
@@ -76,6 +102,10 @@ func _process(delta: float) -> void:
 	if not is_playing:
 		return
 	play_time += delta
+	if play_time >= playback_duration + 0.12:
+		is_playing = false
+		jumpscare_finished.emit()
+		return
 
 	# Wajah membesar mendadak lalu pelan-pelan mendekat
 	var zoom: float = 1.5 + (play_time - 0.12) * 0.25

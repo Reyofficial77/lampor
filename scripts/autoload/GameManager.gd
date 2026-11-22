@@ -55,7 +55,7 @@ var extra_lives: int = 0
 const MAX_COINS: int = 999999999
 const MAX_EXTRA_LIVES: int = 5
 const MAX_SHOP_ITEM_QTY: int = 5
-var item_stash: Dictionary = {"jamu": 0, "baterai": 0}
+var item_stash: Dictionary = {"jamu": 0, "baterai": 0, "kentongan": 0}
 var redeemed_codes: Array[String] = []
 var run_reward_awarded: bool = false
 var last_run_coin_reward: int = 0
@@ -137,6 +137,7 @@ func load_save_data() -> void:
 	if saved_stash is Dictionary:
 		item_stash["jamu"] = clampi(int(saved_stash.get("jamu", 0)), 0, MAX_SHOP_ITEM_QTY)
 		item_stash["baterai"] = clampi(int(saved_stash.get("baterai", 0)), 0, MAX_SHOP_ITEM_QTY)
+		item_stash["kentongan"] = clampi(int(saved_stash.get("kentongan", 0)), 0, MAX_SHOP_ITEM_QTY)
 	var saved_codes: Variant = data.get("redeemed_codes", [])
 	if saved_codes is Array:
 		for code: Variant in saved_codes:
@@ -327,6 +328,7 @@ func _capture_world_snapshot(world_root: Node) -> Dictionary:
 				"chase_cooldown": lampor.chase_cooldown,
 				"stare_timer": lampor.stare_timer,
 				"stare_punish_timer": lampor.stare_punish_timer,
+				"repel_timer": lampor.repel_timer,
 				"hover_time": lampor.hover_time
 			})
 	return world_data
@@ -416,6 +418,10 @@ func resume_saved_game() -> void:
 	current_minute = clampi(int(snapshot.get("current_minute", 0)), 0, 59)
 	time_accumulator = maxf(0.0, float(snapshot.get("time_accumulator", 0.0)))
 	dawn_reached = bool(snapshot.get("dawn_reached", false))
+	if current_act == Act.BABAK_2:
+		_fast_forward_clock_to(2, 30)
+	elif current_act == Act.BABAK_3:
+		_fast_forward_clock_to(4, 0)
 	torches_lit = clampi(int(snapshot.get("torches_lit", 0)), 0, REQUIRED_TORCHES)
 	doors_barricaded = clampi(int(snapshot.get("doors_barricaded", 0)), 0, REQUIRED_BARRICADES)
 	var saved_ritual: Variant = snapshot.get("ritual_items", {})
@@ -540,6 +546,7 @@ func _restore_lampor_snapshot(world_root: Node, raw_world: Variant) -> void:
 			LamporStateMachine.State.INVESTIGATE: restored_state = LamporStateMachine.State.INVESTIGATE
 			LamporStateMachine.State.STARE_PUNISHMENT: restored_state = LamporStateMachine.State.STARE_PUNISHMENT
 			LamporStateMachine.State.CHASE: restored_state = LamporStateMachine.State.CHASE
+			LamporStateMachine.State.REPELLED: restored_state = LamporStateMachine.State.REPELLED
 			LamporStateMachine.State.BANISHED: restored_state = LamporStateMachine.State.BANISHED
 		lampor.is_descending = false
 		lampor.is_catching = false
@@ -551,6 +558,7 @@ func _restore_lampor_snapshot(world_root: Node, raw_world: Variant) -> void:
 		lampor.chase_cooldown = maxf(0.0, float(entry.get("chase_cooldown", 0.0)))
 		lampor.stare_timer = maxf(0.0, float(entry.get("stare_timer", 0.0)))
 		lampor.stare_punish_timer = maxf(0.0, float(entry.get("stare_punish_timer", 0.0)))
+		lampor.repel_timer = maxf(0.0, float(entry.get("repel_timer", 0.0)))
 		lampor.hover_time = maxf(0.0, float(entry.get("hover_time", 0.0)))
 		lampor.velocity = Vector3.ZERO
 		if lampor.collision_shape:
@@ -605,6 +613,8 @@ func get_current_act_title() -> String:
 		Act.BABAK_1:
 			return "Babak I: Pertahanan Awal (01.00 - 02.30)"
 		Act.BABAK_2:
+			if current_hour >= 4:
+				return "Babak II: Ritual Pemutus Kutukan (02.30 - 05.00)"
 			return "Babak II: Ritual Pemutus Kutukan (02.30 - 04.00)"
 		Act.BABAK_3:
 			return "Babak III: Klimaks Pembakaran (04.00 - 05.00)"
@@ -689,6 +699,8 @@ func purchase_shop_item(item_id: String, quantity: int = 1) -> Dictionary:
 			price = 30 * safe_quantity
 		"baterai":
 			price = 20 * safe_quantity
+		"kentongan":
+			price = 50 * safe_quantity
 		"extra_life":
 			price = 80 if safe_quantity == 1 else (150 if safe_quantity == 2 else 210)
 		_:
@@ -715,7 +727,13 @@ func purchase_shop_item(item_id: String, quantity: int = 1) -> Dictionary:
 	else:
 		item_stash[item_id] = maxi(0, int(item_stash.get(item_id, 0))) + safe_quantity
 	save_game_data()
-	var item_label: String = "Nyawa tambahan" if item_id == "extra_life" else ("Jamu Tolak Bala" if item_id == "jamu" else "Baterai Senter")
+	var item_label: String = "Nyawa tambahan"
+	if item_id == "jamu":
+		item_label = "Jamu Tolak Bala"
+	elif item_id == "baterai":
+		item_label = "Baterai Senter"
+	elif item_id == "kentongan":
+		item_label = "Kentongan"
 	return {"success": true, "message": "%s x%d berhasil dibeli." % [item_label, safe_quantity], "price": price}
 
 func redeem_code(raw_code: String) -> Dictionary:
@@ -744,7 +762,7 @@ func apply_reward(reward: Dictionary) -> void:
 			extra_lives = mini(MAX_EXTRA_LIVES, extra_lives + quantity)
 		"item":
 			var item_id: String = str(reward.get("item_id", ""))
-			if item_id in ["jamu", "baterai"]:
+			if item_id in ["jamu", "baterai", "kentongan"]:
 				item_stash[item_id] = mini(MAX_SHOP_ITEM_QTY, maxi(0, int(item_stash.get(item_id, 0))) + quantity)
 
 func deliver_stored_items(inventory: Node) -> void:
@@ -753,12 +771,17 @@ func deliver_stored_items(inventory: Node) -> void:
 	if not is_instance_valid(inventory) or not inventory.has_method("add_item"):
 		return
 	var stash_changed: bool = false
-	for item_id: String in ["jamu", "baterai"]:
+	var stash_names: Dictionary = {
+		"jamu": "Jamu Tolak Bala",
+		"baterai": "Baterai Senter",
+		"kentongan": "Kentongan"
+	}
+	for item_id: String in ["jamu", "baterai", "kentongan"]:
 		var remaining: int = maxi(0, int(item_stash.get(item_id, 0)))
 		if remaining <= 0:
 			continue
 		stash_changed = true
-		var item_name: String = "Jamu Tolak Bala" if item_id == "jamu" else "Baterai Senter"
+		var item_name: String = str(stash_names.get(item_id, "Barang"))
 		# Batas maksimal yang dapat dibawa/digunakan saat permainan adalah 5
 		var deliver_qty: int = mini(MAX_SHOP_ITEM_QTY, remaining)
 		while deliver_qty > 0:
@@ -977,9 +1000,31 @@ func _process(delta: float) -> void:
 		if furnace_time_left <= 0.0:
 			trigger_victory()
 
+func _fast_forward_clock_to(target_hour: int, target_minute: int) -> bool:
+	var current_total: int = current_hour * 60 + current_minute
+	var target_total: int = target_hour * 60 + target_minute
+	if current_total >= target_total:
+		return false
+	current_hour = target_hour
+	current_minute = target_minute
+	time_accumulator = 0.0
+	dawn_reached = current_hour >= 5
+	return true
+
+func _sync_act_with_time(prev_hour: int) -> void:
+	if current_act == Act.BABAK_1 and (current_hour * 60 + current_minute) >= (2 * 60 + 30):
+		# Batas waktu tetap memajukan babak bila objektif Babak I belum selesai.
+		_enter_act_2()
+	if current_act == Act.BABAK_2 and current_hour >= 4:
+		if get_ritual_item_count() >= TOTAL_RITUAL_ITEMS:
+			_enter_act_3()
+		elif prev_hour < 4 and not dawn_reached:
+			SignalBus.dialog_requested.emit("Pukul 04.00 WIB tiba! Segera lengkapi Benda Ritual sebelum pukul 05.00 WIB!", 4.0)
+
 func _advance_time(minutes: int) -> void:
 	if dawn_reached or current_state != GameState.PLAYING:
 		return
+	var prev_hour: int = current_hour
 	current_minute += minutes
 	while current_minute >= 60:
 		current_minute -= 60
@@ -991,12 +1036,7 @@ func _advance_time(minutes: int) -> void:
 	var time_str: String = "%02d:%02d" % [current_hour, current_minute]
 	SignalBus.time_tick.emit(time_str, current_hour, current_minute)
 
-	if current_act == Act.BABAK_1 and (current_hour * 60 + current_minute) >= (2 * 60 + 30):
-		# Batas waktu tetap memajukan babak bila objektif Babak I belum selesai.
-		_enter_act_2()
-	elif current_act == Act.BABAK_2 and current_hour >= 4:
-		if get_ritual_item_count() >= TOTAL_RITUAL_ITEMS:
-			_enter_act_3()
+	_sync_act_with_time(prev_hour)
 
 	if dawn_reached:
 		trigger_dawn_lampor_devour()
@@ -1013,38 +1053,36 @@ func trigger_dawn_lampor_devour() -> void:
 func _enter_act_1() -> void:
 	current_act = Act.BABAK_1
 	SignalBus.time_tick.emit("%02d:%02d" % [current_hour, current_minute], current_hour, current_minute)
-	SignalBus.act_started.emit(1, "Babak I: Pertahanan Awal (01.00 - 02.30)")
+	SignalBus.act_started.emit(1, get_current_act_title())
 	broadcast_all_objectives()
 
 func _enter_act_2() -> void:
 	if current_act >= Act.BABAK_2:
 		return
 	current_act = Act.BABAK_2
-	var fast_forwarded: bool = false
 	# Jika semua misi Babak I selesai sebelum pukul 02.30, langsung fast-forward ke 02.30
-	if current_hour < 2 or (current_hour == 2 and current_minute < 30):
-		current_hour = 2
-		current_minute = 30
-		time_accumulator = 0.0
-		fast_forwarded = true
+	var fast_forwarded: bool = _fast_forward_clock_to(2, 30)
 	SignalBus.time_tick.emit("%02d:%02d" % [current_hour, current_minute], current_hour, current_minute)
 	if fast_forwarded:
 		SignalBus.dialog_requested.emit("Semua misi Babak I selesai! Waktu dipercepat ke 02.30 WIB — Babak II dimulai, Lampor turun ke desa!", 4.0)
 	else:
 		SignalBus.dialog_requested.emit("Lampor telah turun ke desa. Jangan menatap kerandanya!", 3.5)
 	# Sinkronkan waktu dan seluruh misi ke scene HUD yang aktif.
-	SignalBus.act_started.emit(2, "Babak II: Ritual Pemutus Kutukan (02.30 - 04.00)")
+	SignalBus.act_started.emit(2, get_current_act_title())
 	broadcast_all_objectives()
 
 func _enter_act_3() -> void:
 	if current_act == Act.BABAK_3:
 		return
 	current_act = Act.BABAK_3
-	SignalBus.dialog_requested.emit("Waktunya memutus kutukan. Bakar semua benda ritual!", 3.5)
-	# Pertahankan sisa waktu yang berhasil dihemat pemain di Babak II agar tidak
-	# memotong waktu tempuh menuju Tungku Balai Desa sebelum batas pukul 05.00 WIB.
+	# Jika semua benda ritual terkumpul sebelum pukul 04.00, langsung fast-forward ke 04.00
+	var fast_forwarded: bool = _fast_forward_clock_to(4, 0)
 	SignalBus.time_tick.emit("%02d:%02d" % [current_hour, current_minute], current_hour, current_minute)
-	SignalBus.act_started.emit(3, "Babak III: Klimaks Pembakaran (04.00 - 05.00)")
+	if fast_forwarded:
+		SignalBus.dialog_requested.emit("Semua benda ritual terkumpul! Waktu dipercepat ke 04.00 WIB — Bakar semuanya di Tungku Balai Desa!", 4.0)
+	else:
+		SignalBus.dialog_requested.emit("Waktunya memutus kutukan. Bakar semua benda ritual!", 3.5)
+	SignalBus.act_started.emit(3, get_current_act_title())
 	broadcast_all_objectives()
 
 # Dipanggil altar saat pemain menekan [E]. Mengembalikan true jika ritual berjalan.
@@ -1120,10 +1158,6 @@ func record_door_unbarricaded() -> void:
 
 func _on_ritual_item_collected(item_name: String, count: int, total: int) -> void:
 	ritual_items[item_name] = true
-	if count == total - 1:
-		SignalBus.dialog_requested.emit("Tinggal satu benda ritual lagi. Jangan lengah, Lampor semakin dekat!", 3.5)
-	elif count >= total:
-		SignalBus.dialog_requested.emit("Semua benda ritual terkumpul. Kembali ke tungku balai desa!", 3.5)
 	if current_act == Act.BABAK_2:
 		SignalBus.objective_updated.emit(
 			"ritual_items",
@@ -1134,6 +1168,11 @@ func _on_ritual_item_collected(item_name: String, count: int, total: int) -> voi
 		)
 	if count >= total and current_act == Act.BABAK_2:
 		_enter_act_3()
+		return
+	if count == total - 1:
+		SignalBus.dialog_requested.emit("Tinggal satu benda ritual lagi. Jangan lengah, Lampor semakin dekat!", 3.5)
+	elif count >= total:
+		SignalBus.dialog_requested.emit("Semua benda ritual terkumpul. Kembali ke tungku balai desa!", 3.5)
 
 func get_ritual_item_count() -> int:
 	var count: int = 0
@@ -1244,6 +1283,7 @@ func admin_set_total_wins(new_wins: int) -> void:
 func admin_set_time(hour: int, minute: int) -> bool:
 	if not is_in_active_gameplay():
 		return false
+	var prev_hour: int = current_hour
 	current_hour = clampi(hour, 1, 5)
 	current_minute = clampi(minute, 0, 59)
 	time_accumulator = 0.0
@@ -1255,6 +1295,8 @@ func admin_set_time(hour: int, minute: int) -> bool:
 	SignalBus.time_tick.emit(time_str, current_hour, current_minute)
 	if dawn_reached:
 		trigger_dawn_lampor_devour()
+	else:
+		_sync_act_with_time(prev_hour)
 	return true
 
 func admin_jump_to_act(target_act: int) -> bool:
@@ -1264,6 +1306,7 @@ func admin_jump_to_act(target_act: int) -> bool:
 		current_act = Act.BABAK_1
 		current_hour = 1
 		current_minute = 0
+		time_accumulator = 0.0
 		dawn_reached = false
 		furnace_burning = false
 		_enter_act_1()
@@ -1322,6 +1365,7 @@ func admin_give_all_items() -> void:
 	inv.add_item({"id": "papan_paku", "name": "Papan & Paku", "type": "resource", "quantity": 4})
 	inv.add_item({"id": "jamu", "name": "Jamu Tolak Bala", "type": "consumable", "quantity": 5})
 	inv.add_item({"id": "baterai", "name": "Baterai Senter", "type": "consumable", "quantity": 5})
+	inv.add_item({"id": "kentongan", "name": "Kentongan", "type": "consumable", "quantity": 5})
 
 func admin_refill_player_stats() -> void:
 	if not is_instance_valid(player_character) or not (player_character is PlayerController):

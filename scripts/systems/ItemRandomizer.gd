@@ -3,8 +3,8 @@ extends Node3D
 # Barang bantu dipusatkan di empat rumah. Benda ritual tetap berada di lokasi
 # misinya agar pemain masih harus menjelajahi makam, sumur, dan rumpun bambu.
 const ITEM_MIN_GAP: float = 1.5
-const MAX_INDOOR_SUPPLIES_PER_HOUSE: int = 2
-const MAX_OUTDOOR_SUPPLIES: int = 2
+const MAX_INDOOR_SUPPLIES_PER_HOUSE: int = 3
+const MAX_OUTDOOR_SUPPLIES: int = 3
 const HOUSE_HALF_SIZE: float = 4.8
 const ITEM_Y: float = 0.3
 const INDOOR_LOCAL_SLOTS: Array[Vector3] = [

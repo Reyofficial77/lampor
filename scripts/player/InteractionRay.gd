@@ -30,6 +30,8 @@ func _get_held_item_prompt(player: Node) -> String:
 		return "[E] Minum Jamu Tolak Bala"
 	elif item_id == "baterai":
 		return "[E] Isi Ulang Baterai Senter"
+	elif item_id == "kentongan":
+		return "[E] Pukul Kentongan (Usir Lampor 5 dtk)"
 	return ""
 
 func _is_target_actionable(target: Node, player: Node) -> bool:

@@ -78,6 +78,11 @@ func _update_model_appearance() -> void:
 			if item_light:
 				item_light.light_color = Color(0.6, 0.3, 0.8)
 				item_light.light_energy = 1.5
+		"kentongan":
+			target_name = "KentonganVisual"
+			if item_light:
+				item_light.light_color = Color(0.95, 0.65, 0.25)
+				item_light.light_energy = 1.1
 
 	_build_ritual_model(item_id)
 	if is_ritual_item and visual_node:
@@ -215,6 +220,38 @@ func _build_ritual_model(id: String) -> void:
 			_build_kemenyan()
 		'keris':
 			_build_keris()
+		'kentongan':
+			_build_kentongan()
+
+func _build_kentongan() -> void:
+	# Tabung bambu/kayu berongga bercelah vertikal disertai pemukul kayu
+	var root: Node3D = _replace_visual('KentonganVisual')
+	var bamboo: StandardMaterial3D = _mat(Color(0.58, 0.39, 0.16), 0.78)
+	var bamboo_node: StandardMaterial3D = _mat(Color(0.32, 0.19, 0.08), 0.85)
+	var slit_dark: StandardMaterial3D = _mat(Color(0.04, 0.025, 0.015), 1.0)
+	var wood_beater: StandardMaterial3D = _mat(Color(0.42, 0.24, 0.10), 0.8)
+
+	# Badan tabung kentongan (sedikit miring di atas tanah)
+	var body_holder := Node3D.new()
+	body_holder.rotation_degrees = Vector3(12.0, 18.0, -72.0)
+	body_holder.position = Vector3(-0.02, 0.02, 0.0)
+	root.add_child(body_holder)
+
+	_add_mesh(body_holder, _cyl(0.068, 0.072, 0.38), bamboo, Vector3.ZERO)
+	for ry: float in [-0.15, 0.0, 0.15]:
+		_add_mesh(body_holder, _cyl(0.075, 0.075, 0.022), bamboo_node, Vector3(0.0, ry, 0.0))
+	_add_mesh(body_holder, _cyl(0.056, 0.068, 0.04), bamboo_node, Vector3(0.0, 0.21, 0.0))
+	_add_mesh(body_holder, _cyl(0.014, 0.014, 0.06), bamboo_node, Vector3(0.0, 0.25, 0.0))
+	# Celah vertikal kentongan
+	_add_mesh(body_holder, _box(0.032, 0.22, 0.035), slit_dark, Vector3(0.0, 0.0, 0.058))
+
+	# Pemukul kentongan di sampingnya
+	var beater_holder := Node3D.new()
+	beater_holder.rotation_degrees = Vector3(78.0, -28.0, 15.0)
+	beater_holder.position = Vector3(0.08, -0.02, 0.12)
+	root.add_child(beater_holder)
+	_add_mesh(beater_holder, _cyl(0.014, 0.012, 0.28), wood_beater, Vector3.ZERO)
+	_add_mesh(beater_holder, _sph(0.024), bamboo_node, Vector3(0.0, 0.145, 0.0))
 
 func _build_tanah() -> void:
 	# Wadah tanah liat berlilit kain kafan, berisi gundukan tanah makam dan nisan kecil

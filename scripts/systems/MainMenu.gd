@@ -1,7 +1,7 @@
 class_name MainMenu
 extends Control
 
-const GAME_VERSION: String = "v1.2.7"
+const GAME_VERSION: String = "v1.2.8"
 const FALLBACK_REDEEM_CODES: Dictionary = {
 	"LAMPORGIFT": {"type": "coins", "quantity": 2500, "description": "hadiah untuk kalian!"}
 }
@@ -505,7 +505,7 @@ func _build_settings_modal() -> void:
 	guide.add_theme_font_size_override("normal_font_size", 14)
 	guide.add_theme_font_size_override("bold_font_size", 14)
 	guide.add_theme_constant_override("line_separation", 6)
-	guide.text = "[color=#ffb4ac][b]TUJUAN PERMAINAN[/b][/color]\nBertahan mulai pukul 01.00 WIB hingga ritual tuntas sebelum pukul 05.00 WIB. Nyalakan 5 obor, amankan 3 pintu rumah, kumpulkan 4 benda ritual, lalu bakar semuanya di tungku balai desa. Bila pukul 05.00 WIB tiba sebelum tuntas, Lampor akan langsung melahapmu.\n\n[color=#ffb4ac][b]KONTROL DESKTOP[/b][/color]\n• W, A, S, D: Bergerak\n• Mouse: Melihat ke sekitar\n• Shift: Berlari\n• E: Interaksi, nyalakan obor, palang pintu, sembunyi, & pakai Jamu/Baterai\n• F: Senter\n• 1-5: Pilih slot hotbar\n• Tab / B: Buka tas inventori (15 slot)\n• G: Jatuhkan barang\n• Esc: Jeda permainan\n\n[color=#ffb4ac][b]KONTROL MOBILE[/b][/color]\nGunakan joystick kiri untuk bergerak, geser sisi kanan layar untuk menoleh, dan sentuh tombol aksi di layar untuk lari, interaksi (ikon Tangan), senter, tas, serta jeda.\n\n[color=#ffb4ac][b]MENGHADAPI LAMPOR[/b][/color]\n• Jangan menatap langsung keranda Lampor; segera palingkan pandangan.\n• Saat lonceng mendekat, matikan senter dan bersembunyilah di rumah atau lemari.\n• Area obor yang menyala membantu memulihkan kewarasan.\n• Mode Nightmare terbuka setelah 5 kemenangan."
+	guide.text = "[color=#ffb4ac][b]TUJUAN PERMAINAN[/b][/color]\nBertahan mulai pukul 01.00 WIB hingga ritual tuntas sebelum pukul 05.00 WIB. Nyalakan 5 obor, amankan 3 pintu rumah, kumpulkan 4 benda ritual, lalu bakar semuanya di tungku balai desa. Bila pukul 05.00 WIB tiba sebelum tuntas, Lampor akan langsung melahapmu.\n\n[color=#ffb4ac][b]KONTROL DESKTOP[/b][/color]\n• W, A, S, D: Bergerak\n• Mouse: Melihat ke sekitar\n• Shift: Berlari\n• E: Interaksi, nyalakan obor, palang pintu, sembunyi, & pakai Jamu/Baterai/Kentongan\n• F: Senter\n• 1-5: Pilih slot hotbar\n• Tab / B: Buka tas inventori (15 slot)\n• G: Jatuhkan barang\n• Esc: Jeda permainan\n\n[color=#ffb4ac][b]KONTROL MOBILE[/b][/color]\nGunakan joystick kiri untuk bergerak, geser sisi kanan layar untuk menoleh, dan sentuh tombol aksi di layar untuk lari, interaksi (ikon Tangan), senter, tas, serta jeda.\n\n[color=#ffb4ac][b]MENGHADAPI LAMPOR[/b][/color]\n• Jangan menatap langsung keranda Lampor; segera palingkan pandangan.\n• Saat lonceng mendekat, matikan senter dan bersembunyilah di rumah atau lemari.\n• Pukul Kentongan [E] untuk mengusir kejaran Lampor selama 5 detik (sekali pakai, maks. 5).\n• Area obor yang menyala membantu memulihkan kewarasan.\n• Mode Nightmare terbuka setelah 5 kemenangan."
 	guide_tab_box.add_child(guide)
 
 	var close := _make_button("TUTUP", false, "ghost")
@@ -588,6 +588,7 @@ func _build_shop_modal() -> void:
 	_add_shop_offer(offers, "Jamu Tolak Bala x1", "Pulihkan 45 kewarasan dan seluruh stamina.", "30 Koin", "jamu", 1)
 	_add_shop_offer(offers, "Jamu Tolak Bala x3", "Persediaan jamu tiga kali pakai.", "90 Koin", "jamu", 3)
 	_add_shop_offer(offers, "Baterai Senter x1", "Isi ulang 50% daya senter.", "20 Koin", "baterai", 1)
+	_add_shop_offer(offers, "Kentongan x1", "Usir kejaran Lampor selama 5 detik (1x pakai).", "50 Koin", "kentongan", 1)
 	_add_shop_offer(offers, "Nyawa Tambahan x1", "Bangkit sekali di titik awal saat terbunuh.", "80 Koin", "extra_life", 1)
 	_add_shop_offer(offers, "Nyawa Tambahan x2", "Dua kesempatan bangkit tambahan.", "150 Koin", "extra_life", 2)
 	_add_shop_offer(offers, "Nyawa Tambahan x3", "Tiga kesempatan bangkit tambahan.", "210 Koin", "extra_life", 3)
@@ -645,13 +646,15 @@ func _refresh_currency_display() -> void:
 
 func _refresh_shop_display() -> void:
 	if shop_balance_label:
-		shop_balance_label.text = "Koin: %d  ·  Nyawa: %d/%d  ·  Jamu: %d/%d  ·  Baterai: %d/%d" % [
+		shop_balance_label.text = "Koin: %d  ·  Nyawa: %d/%d  ·  Jamu: %d/%d  ·  Baterai: %d/%d  ·  Kentongan: %d/%d" % [
 			GameManager.coins,
 			GameManager.extra_lives,
 			GameManager.MAX_EXTRA_LIVES,
 			GameManager.item_stash.get("jamu", 0),
 			GameManager.MAX_SHOP_ITEM_QTY,
 			GameManager.item_stash.get("baterai", 0),
+			GameManager.MAX_SHOP_ITEM_QTY,
+			GameManager.item_stash.get("kentongan", 0),
 			GameManager.MAX_SHOP_ITEM_QTY
 		]
 
@@ -760,21 +763,23 @@ func _build_update_restart_modal() -> void:
 	update_restart_status = _make_label("Disarankan: mulai ulang sekarang.", 12, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm")
 	update_restart_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_child(update_restart_status)
-	var restart_label: String = "TUTUP GAME UNTUK MENERAPKAN" if OS.has_feature("android") else "MULAI ULANG SEKARANG"
+	var restart_label: String = "MUAT ULANG HALAMAN" if OS.has_feature("web") else ("TUTUP GAME UNTUK MENERAPKAN" if OS.has_feature("android") else "MULAI ULANG SEKARANG")
 	var restart := _make_button(restart_label, true)
 	restart.pressed.connect(_restart_after_update)
 	body.add_child(restart)
 	var later := _make_button("NANTI", false, "ghost")
 	later.pressed.connect(func() -> void:
 		update_restart_overlay.visible = false
-		update_status_label.text = "Pembaruan siap. Tutup permainan lalu buka kembali Lampor."
+		update_status_label.text = "Pembaruan siap. Muat ulang halaman untuk menerapkan." if OS.has_feature("web") else "Pembaruan siap. Tutup permainan lalu buka kembali Lampor."
 	)
 	body.add_child(later)
 
 func _show_update_restart_prompt(commit_sha: String) -> void:
 	if update_restart_overlay == null:
 		return
-	if OS.has_feature("android"):
+	if OS.has_feature("web"):
+		update_restart_status.text = "Commit terpasang: %s · Muat ulang halaman untuk menerapkan." % commit_sha.substr(0, 10)
+	elif OS.has_feature("android"):
 		update_restart_status.text = "Commit terpasang: %s · Tutup game lalu buka kembali." % commit_sha.substr(0, 10)
 	else:
 		update_restart_status.text = "Commit terpasang: %s · Mulai ulang disarankan." % commit_sha.substr(0, 10)
@@ -785,6 +790,11 @@ func _restart_after_update() -> void:
 		update_restart_status.text = "Menyimpan progres dan memulai ulang..."
 	GameManager.save_active_run()
 	GameManager.save_game_data()
+	if OS.has_feature("web"):
+		if Engine.has_singleton("JavaScriptBridge"):
+			var js: Object = Engine.get_singleton("JavaScriptBridge")
+			js.call("eval", "(function(){var r=function(){window.location.reload();};try{if(typeof FS!=='undefined'&&FS.syncfs){FS.syncfs(false,function(){setTimeout(r,150);});setTimeout(r,1200);return;}}catch(e){}setTimeout(r,450);})();")
+		return
 	if OS.has_feature("android"):
 		get_tree().quit()
 		return

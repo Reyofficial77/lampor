@@ -314,6 +314,34 @@ def make_jumpscare():
         s.append(val * tail * 0.95)
     write_wav("assets/audio/jumpscare.wav", s)
 
+# 16. Kentongan (pukulan bambu/kayu berongga khas ronda malam: "tok-tok-tok!", ~0.95s)
+def make_kentongan():
+    dur = 0.95
+    n = int(dur * SAMPLE_RATE)
+    s = [0.0] * n
+    # Tiga pukulan beruntun bernada kayu berongga
+    strikes = [(0.02, 485.0, 1.0), (0.20, 505.0, 0.92), (0.39, 492.0, 1.0)]
+    for st, base_f, amp in strikes:
+        start_idx = int(st * SAMPLE_RATE)
+        hit_len = int(0.45 * SAMPLE_RATE)
+        for i in range(hit_len):
+            idx = start_idx + i
+            if idx >= n:
+                break
+            t = i / SAMPLE_RATE
+            # Serangan pukul awal (ketukan kayu keras)
+            attack = min(1.0, t / 0.003)
+            transient = (random.random() * 2 - 1) * math.exp(-t * 140.0) * 0.45
+            # Resonansi rongga bambu/kayu (fundamental + overtone tidak harmonis ringan)
+            body = (
+                math.sin(2 * math.pi * base_f * t) * 0.65 * math.exp(-t * 14.0)
+                + math.sin(2 * math.pi * (base_f * 1.58) * t) * 0.35 * math.exp(-t * 22.0)
+                + math.sin(2 * math.pi * (base_f * 2.42) * t) * 0.22 * math.exp(-t * 36.0)
+                + math.sin(2 * math.pi * (base_f * 0.52) * t) * 0.25 * math.exp(-t * 18.0)
+            )
+            s[idx] += (body + transient) * attack * amp * 0.85
+    write_wav("assets/audio/kentongan.wav", s)
+
 if __name__ == "__main__":
     print("Generating game audio assets...")
     make_ambient()
@@ -331,4 +359,5 @@ if __name__ == "__main__":
     make_rooster()
     make_azan()
     make_jumpscare()
+    make_kentongan()
     print("All audio files generated successfully!")

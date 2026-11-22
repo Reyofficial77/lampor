@@ -15,7 +15,12 @@ const STACK_LIMITS: Dictionary = {
 	"minyak_tanah": 5,
 	"papan_paku": 4,
 	"jamu": 10,
-	"baterai": 10
+	"baterai": 10,
+	"kentongan": 5
+}
+
+const TOTAL_ITEM_CAPS: Dictionary = {
+	"kentongan": 5
 }
 
 func _ready() -> void:
@@ -57,6 +62,9 @@ func get_equipped_item() -> Dictionary:
 
 func can_add_item(item_id: String, qty: int = 1) -> bool:
 	var max_stack: int = STACK_LIMITS.get(item_id, 1)
+	if TOTAL_ITEM_CAPS.has(item_id):
+		if get_item_quantity(item_id) + qty > int(TOTAL_ITEM_CAPS[item_id]):
+			return false
 	
 	# Periksa stack yang sudah ada di semua slot
 	for i in range(TOTAL_SLOTS):
@@ -76,6 +84,11 @@ func add_item(item_data: Dictionary) -> bool:
 	var item_id: String = item_data.get("id", "")
 	var qty: int = item_data.get("quantity", 1)
 	var max_stack: int = STACK_LIMITS.get(item_id, 1)
+	if TOTAL_ITEM_CAPS.has(item_id):
+		var remaining_cap: int = int(TOTAL_ITEM_CAPS[item_id]) - get_item_quantity(item_id)
+		if remaining_cap <= 0:
+			return false
+		qty = mini(qty, remaining_cap)
 
 	# Coba stack ke item yang sama (prioritaskan hotbar lalu inventaris)
 	for i in range(TOTAL_SLOTS):

@@ -36,8 +36,25 @@ jobs:
         run: |
           mkdir -p build
           godot --headless --export-pack "Windows Desktop" build/update.pck
+          godot --headless --export-pack "Web" build/update_web.pck || cp build/update.pck build/update_web.pck
           APP_VERSION=$(sed -n 's/^config\/version="\([^"]*\)"/\1/p' project.godot | head -n1)
-          printf '{"commit":"%s","version":"%s","preset":"Windows Desktop","godot":"4.7.2"}\n' "${{ github.sha }}" "$APP_VERSION" > build/pck_manifest.json
+          printf '{"commit":"%s","version":"%s","preset":"Windows Desktop","web_pck":"update_web.pck","godot":"4.7.2"}\n' "${{ github.sha }}" "$APP_VERSION" > build/pck_manifest.json
+
+      - name: Publish CORS-Friendly PCK Branch for Web
+        run: |
+          rm -rf pck-branch
+          mkdir -p pck-branch
+          cp build/update.pck pck-branch/update.pck
+          cp build/update_web.pck pck-branch/update_web.pck
+          cp build/pck_manifest.json pck-branch/pck_manifest.json
+          cd pck-branch
+          git init -b pck-builds
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add update.pck update_web.pck pck_manifest.json
+          git commit -m "PCK build for ${{ github.sha }}"
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git push --force origin pck-builds
 
       - name: Upload PCK to Latest-Commit Release
         uses: softprops/action-gh-release@v2
@@ -47,6 +64,7 @@ jobs:
           body: "Auto-generated PCK from commit ${{ github.sha }}"
           files: |
             build/update.pck
+            build/update_web.pck
             build/pck_manifest.json
           prerelease: true
           make_latest: false

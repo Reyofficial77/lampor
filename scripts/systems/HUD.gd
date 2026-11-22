@@ -1567,6 +1567,8 @@ func _on_noise_made(level: float, _pos: Vector3) -> void:
 
 func _on_time_tick(time_str: String, _h: int, _m: int) -> void:
 	clock_label.text = time_str + " WIB"
+	if act_label:
+		act_label.text = GameManager.get_current_act_title()
 
 func _on_act_started(num: int, title: String) -> void:
 	act_label.text = title

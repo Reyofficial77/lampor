@@ -1,4 +1,16 @@
-# LAMPOR v1.2.7
+# LAMPOR v1.2.8
+
+## v1.2.8
+
+- **Item Baru: Kentongan (Pengusir Lampor)**:
+  - Menambahkan item konsumabel baru **Kentongan** (`1x pakai`, batas maksimal **5** di inventaris) yang tersedia di peta desa dan **Toko Bekal**.
+  - Saat digunakan ketika Lampor mengejar, Lampor berhenti mengejar dan menjauh selama **5 detik** sebelum kembali mengejar.
+  - Dilengkapi model 3D dengan pegangan **dua tangan** (tangan kanan memegang **pemukul**, tangan kiri memegang **kentongan**), animasi pukulan, serta efek suara **kentongan**.
+- **Sinkronisasi Jam & Babak Permainan**:
+  - Memperbaiki ketidaksesuaian jam dengan babak dengan memajukan waktu ke **04:00 WIB** saat **Babak III** dimulai serta menyelaraskan label **Babak II** ketika jam melewati pukul **04:00 WIB**.
+- **Perbaikan Sistem Pembaruan pada Ekspor Website (Web)**:
+  - Menambahkan publikasi `pck_manifest.json` dan `update_web.pck` melalui cabang `pck-builds` yang mendukung CORS (`raw.githubusercontent.com` dan `cdn.jsdelivr.net`) agar pembaruan lewat website tidak gagal terblokir redirect rilis GitHub.
+  - Menyesuaikan `UpdateManager` dan alur restart untuk platform Web: menonaktifkan `use_threads`, menghilangkan header pemicu CORS *preflight* (`User-Agent`, `Cache-Control`), menulis paket `.pck` langsung ke `user://` dengan sinkronisasi `IDBFS`, serta memuat ulang halaman otomatis setelah pembaruan.
 
 ## v1.2.7
 

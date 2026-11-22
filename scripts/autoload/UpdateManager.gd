@@ -17,6 +17,10 @@ const ATOM_URL: String = "https://github.com/Reyofficial77/lampor/commits/main.a
 const ARCHIVE_URL: String = "https://codeload.github.com/Reyofficial77/lampor/zip/"
 const PCK_DOWNLOAD_URL: String = "https://github.com/Reyofficial77/lampor/releases/download/latest-commit/update.pck"
 const PCK_MANIFEST_URL: String = "https://github.com/Reyofficial77/lampor/releases/download/latest-commit/pck_manifest.json"
+const RAW_PCK_MANIFEST_URL: String = "https://raw.githubusercontent.com/Reyofficial77/lampor/pck-builds/pck_manifest.json"
+const RAW_PCK_DOWNLOAD_URL: String = "https://raw.githubusercontent.com/Reyofficial77/lampor/pck-builds/update.pck"
+const RAW_WEB_PCK_DOWNLOAD_URL: String = "https://raw.githubusercontent.com/Reyofficial77/lampor/pck-builds/update_web.pck"
+const JSDELIVR_PCK_BASE_URL: String = "https://cdn.jsdelivr.net/gh/Reyofficial77/lampor@pck-builds/"
 const RAW_FIX_NOTES_BASE_URL: String = "https://raw.githubusercontent.com/Reyofficial77/lampor/"
 const UPDATE_CONFIG_PATH: String = "user://lampor_update.cfg"
 const UPDATE_ROOT: String = "user://updates"
@@ -27,7 +31,19 @@ const FIX_NOTES_CACHE_PATH: String = "user://lampor_fix_notes.md"
 const AUTO_CHECK_INTERVAL_SEC: float = 300.0
 const REQUIRED_UPDATE_FILES: PackedStringArray = ["project.godot", "scripts/autoload/UpdateManager.gd", "FIX_NOTES.md"]
 
-const BUNDLED_FIX_NOTES: String = """# LAMPOR v1.2.7
+const BUNDLED_FIX_NOTES: String = """# LAMPOR v1.2.8
+
+## v1.2.8
+
+- **Item Baru: Kentongan (Pengusir Lampor)**:
+  - Menambahkan item konsumabel baru **Kentongan** (`1x pakai`, batas maksimal **5** di inventaris) yang tersedia di peta desa dan **Toko Bekal**.
+  - Saat digunakan ketika Lampor mengejar, Lampor berhenti mengejar dan menjauh selama **5 detik** sebelum kembali mengejar.
+  - Dilengkapi model 3D dengan pegangan **dua tangan** (tangan kanan memegang **pemukul**, tangan kiri memegang **kentongan**), animasi pukulan, serta efek suara **kentongan**.
+- **Sinkronisasi Jam & Babak Permainan**:
+  - Memperbaiki ketidaksesuaian jam dengan babak dengan memajukan waktu ke **04:00 WIB** saat **Babak III** dimulai serta menyelaraskan label **Babak II** ketika jam melewati pukul **04:00 WIB**.
+- **Perbaikan Sistem Pembaruan pada Ekspor Website (Web)**:
+  - Menambahkan publikasi `pck_manifest.json` dan `update_web.pck` melalui cabang `pck-builds` yang mendukung CORS (`raw.githubusercontent.com` dan `cdn.jsdelivr.net`) agar pembaruan lewat website tidak gagal terblokir redirect rilis GitHub.
+  - Menyesuaikan `UpdateManager` dan alur restart untuk platform Web: menonaktifkan `use_threads`, menghilangkan header pemicu CORS *preflight* (`User-Agent`, `Cache-Control`), menulis paket `.pck` langsung ke `user://` dengan sinkronisasi `IDBFS`, serta memuat ulang halaman otomatis setelah pembaruan.
 
 ## v1.2.7
 
@@ -191,6 +207,11 @@ var pending_pck_commit: String = ""
 var pending_pck_version: String = ""
 var pck_manifest_commit: String = ""
 var pck_manifest_version: String = ""
+var pck_manifest_web_file: String = "update_web.pck"
+var pck_manifest_urls: Array[String] = []
+var pck_manifest_url_idx: int = 0
+var pck_download_urls: Array[String] = []
+var pck_download_url_idx: int = 0
 var pending_download_commit: String = ""
 var remote_fix_notes_markdown: String = ""
 var remote_fix_notes_commit: String = ""
@@ -247,34 +268,35 @@ func _detect_prior_user_data() -> void:
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	var allow_threads: bool = not _is_web_build()
 	api_request = HTTPRequest.new()
 	api_request.timeout = 45.0
 	api_request.max_redirects = 12
-	api_request.use_threads = true
+	api_request.use_threads = allow_threads
 	add_child(api_request)
 	api_request.request_completed.connect(_on_api_request_completed)
 	fallback_request = HTTPRequest.new()
 	fallback_request.timeout = 45.0
 	fallback_request.max_redirects = 12
-	fallback_request.use_threads = true
+	fallback_request.use_threads = allow_threads
 	add_child(fallback_request)
 	fallback_request.request_completed.connect(_on_atom_request_completed)
 	download_request = HTTPRequest.new()
 	download_request.timeout = 300.0
 	download_request.max_redirects = 12
-	download_request.use_threads = true
+	download_request.use_threads = allow_threads
 	add_child(download_request)
 	download_request.request_completed.connect(_on_download_request_completed)
 	pck_manifest_request = HTTPRequest.new()
 	pck_manifest_request.timeout = 25.0
 	pck_manifest_request.max_redirects = 12
-	pck_manifest_request.use_threads = true
+	pck_manifest_request.use_threads = allow_threads
 	add_child(pck_manifest_request)
 	pck_manifest_request.request_completed.connect(_on_pck_manifest_completed)
 	fix_notes_request = HTTPRequest.new()
 	fix_notes_request.timeout = 35.0
 	fix_notes_request.max_redirects = 12
-	fix_notes_request.use_threads = true
+	fix_notes_request.use_threads = allow_threads
 	add_child(fix_notes_request)
 	fix_notes_request.request_completed.connect(_on_fix_notes_request_completed)
 	periodic_check_timer = Timer.new()
@@ -341,6 +363,9 @@ func _prepare_and_mount_pck() -> void:
 				ProjectSettings.globalize_path(PENDING_PCK_PATH),
 				ProjectSettings.globalize_path(PCK_PATH)
 			)
+			if rename_err != OK and _copy_user_file(PENDING_PCK_PATH, PCK_PATH):
+				_remove_user_file(PENDING_PCK_PATH)
+				rename_err = OK
 			if rename_err == OK:
 				if not pending_pck_commit.is_empty():
 					active_pck_commit = pending_pck_commit
@@ -435,6 +460,26 @@ func _save_update_state() -> void:
 		config.set_value("pck", "pending_version", pending_pck_version)
 	config.save(UPDATE_CONFIG_PATH)
 
+func _is_web_build() -> bool:
+	return OS.has_feature("web")
+
+func _http_headers(desktop_headers: PackedStringArray, is_github_api: bool = false) -> PackedStringArray:
+	if _is_web_build():
+		# Browser melarang User-Agent & menolak preflight Cache-Control pada raw.githubusercontent.com
+		if is_github_api:
+			return PackedStringArray(["Accept: application/vnd.github+json"])
+		return PackedStringArray()
+	return desktop_headers
+
+func _sync_web_idbfs() -> void:
+	if _is_web_build() and Engine.has_singleton("JavaScriptBridge"):
+		var js: Object = Engine.get_singleton("JavaScriptBridge")
+		js.call("eval", "try{if(typeof FS!=='undefined'&&FS.syncfs){FS.syncfs(false,function(){});}}catch(e){}")
+
+func _cache_busted_url(base_url: String) -> String:
+	var sep: String = "&" if base_url.contains("?") else "?"
+	return "%s%st=%d" % [base_url, sep, int(Time.get_unix_time_from_system())]
+
 func is_pck_update_mode() -> bool:
 	return not OS.has_feature("editor") and not _can_write_project_source()
 
@@ -465,14 +510,24 @@ func check_for_updates(force: bool = false) -> void:
 	last_error = ""
 	latest_commit = ""
 	latest_message = ""
-	var headers: PackedStringArray = ["User-Agent: Lampor-Game", "Accept: application/vnd.github+json", "X-GitHub-Api-Version: 2022-11-28"]
-	var request_error: Error = api_request.request(API_URL, headers)
+	var url: String = _cache_busted_url(API_URL) if _is_web_build() else API_URL
+	var headers: PackedStringArray = _http_headers(["User-Agent: Lampor-Game", "Accept: application/vnd.github+json", "X-GitHub-Api-Version: 2022-11-28"], true)
+	var request_error: Error = api_request.request(url, headers)
 	if request_error != OK:
 		_request_atom_fallback(HTTPRequest.RESULT_CANT_CONNECT)
 
 func _request_atom_fallback(previous_result: int) -> void:
 	using_atom_fallback = true
-	var headers: PackedStringArray = ["User-Agent: Lampor-Game", "Accept: application/atom+xml"]
+	if _is_web_build():
+		# Atom feed github.com tidak mengizinkan CORS; gunakan manifest CORS-safe di branch pck-builds
+		var web_url: String = _cache_busted_url(RAW_PCK_MANIFEST_URL)
+		var web_err: Error = fallback_request.request(web_url, _http_headers([]))
+		if web_err != OK:
+			using_atom_fallback = false
+			is_checking = false
+			_fail(_format_network_error(previous_result, 0, "GitHub API dan manifest Web"))
+		return
+	var headers: PackedStringArray = _http_headers(["User-Agent: Lampor-Game", "Accept: application/atom+xml"])
 	var request_error: Error = fallback_request.request(ATOM_URL, headers)
 	if request_error != OK:
 		using_atom_fallback = false
@@ -523,24 +578,47 @@ func _start_pck_update_flow() -> void:
 	is_fetching_pck_manifest = true
 	pck_manifest_commit = ""
 	pck_manifest_version = ""
-	var url: String = "%s?t=%d" % [PCK_MANIFEST_URL, int(Time.get_unix_time_from_system())]
-	var headers: PackedStringArray = ["User-Agent: Lampor-Game", "Cache-Control: no-cache"]
-	var err: Error = pck_manifest_request.request(url, headers)
-	if err != OK:
-		is_fetching_pck_manifest = false
-		_fail("Tidak dapat memeriksa manifest PCK di GitHub Release.")
+	pck_manifest_web_file = "update_web.pck"
+	if _is_web_build():
+		pck_manifest_urls = [RAW_PCK_MANIFEST_URL, JSDELIVR_PCK_BASE_URL + "pck_manifest.json"]
+	else:
+		pck_manifest_urls = [PCK_MANIFEST_URL, RAW_PCK_MANIFEST_URL, JSDELIVR_PCK_BASE_URL + "pck_manifest.json"]
+	pck_manifest_url_idx = 0
+	_request_next_pck_manifest()
+
+func _request_next_pck_manifest() -> void:
+	while pck_manifest_url_idx < pck_manifest_urls.size():
+		var base_url: String = pck_manifest_urls[pck_manifest_url_idx]
+		pck_manifest_url_idx += 1
+		var url: String = _cache_busted_url(base_url)
+		var headers: PackedStringArray = _http_headers(["User-Agent: Lampor-Game", "Cache-Control: no-cache"])
+		if pck_manifest_request.request(url, headers) == OK:
+			return
+	is_fetching_pck_manifest = false
+	_fail("Tidak dapat memeriksa manifest PCK di GitHub.")
 
 func _on_pck_manifest_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
-	is_fetching_pck_manifest = false
 	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
-		_fail("Manifest paket PCK belum tersedia di GitHub Release.")
+		if pck_manifest_url_idx < pck_manifest_urls.size():
+			_request_next_pck_manifest()
+			return
+		is_fetching_pck_manifest = false
+		_fail("Manifest paket PCK belum tersedia (%s)." % _format_network_error(result, response_code, "Manifest PCK"))
 		return
 	var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
 	if not parsed is Dictionary:
+		if pck_manifest_url_idx < pck_manifest_urls.size():
+			_request_next_pck_manifest()
+			return
+		is_fetching_pck_manifest = false
 		_fail("Manifest paket PCK tidak valid.")
 		return
+	is_fetching_pck_manifest = false
 	pck_manifest_commit = str(parsed.get("commit", "")).strip_edges()
 	pck_manifest_version = str(parsed.get("version", "")).strip_edges()
+	pck_manifest_web_file = str(parsed.get("web_pck", "update_web.pck")).strip_edges()
+	if pck_manifest_web_file.is_empty():
+		pck_manifest_web_file = "update.pck"
 	var local_version: String = str(ProjectSettings.get_setting("application/config/version", ""))
 	if pck_manifest_version.is_empty() or _compare_versions(pck_manifest_version, local_version) < 0:
 		_fail("Paket PCK di GitHub (%s) lebih lama daripada versi aplikasi ini (%s). Pembaruan dibatalkan." % [pck_manifest_version if not pck_manifest_version.is_empty() else "lama", local_version])
@@ -552,19 +630,43 @@ func _on_pck_manifest_completed(result: int, response_code: int, _headers: Packe
 
 func _download_pck_binary(target_commit: String) -> void:
 	pending_download_commit = target_commit
-	_remove_user_file(TEMP_PCK_PATH)
+	pck_download_urls.clear()
+	if _is_web_build():
+		var web_candidates: Array[String] = [
+			"https://raw.githubusercontent.com/%s/%s/pck-builds/%s" % [REPO_OWNER, REPO_NAME, pck_manifest_web_file],
+			RAW_PCK_DOWNLOAD_URL,
+			JSDELIVR_PCK_BASE_URL + pck_manifest_web_file,
+			JSDELIVR_PCK_BASE_URL + "update.pck"
+		]
+		for u: String in web_candidates:
+			if not pck_download_urls.has(u):
+				pck_download_urls.append(u)
+	else:
+		pck_download_urls = [PCK_DOWNLOAD_URL, RAW_PCK_DOWNLOAD_URL, JSDELIVR_PCK_BASE_URL + "update.pck"]
+	pck_download_url_idx = 0
 	downloading_mode = "pck"
-	downloaded_path = TEMP_PCK_PATH
-	download_request.download_file = TEMP_PCK_PATH
-	var url: String = "%s?t=%d" % [PCK_DOWNLOAD_URL, int(Time.get_unix_time_from_system())]
-	var headers: PackedStringArray = ["User-Agent: Lampor-Game", "Accept: application/octet-stream", "Cache-Control: no-cache"]
-	var request_error: Error = download_request.request(url, headers)
-	if request_error != OK:
-		downloading_mode = ""
-		download_request.download_file = ""
-		_fail("Tidak dapat memulai unduhan patch PCK (kode %d)." % request_error)
-		return
 	is_downloading = true
+	_request_next_pck_binary()
+
+func _request_next_pck_binary() -> void:
+	while pck_download_url_idx < pck_download_urls.size():
+		var base_url: String = pck_download_urls[pck_download_url_idx]
+		pck_download_url_idx += 1
+		_remove_user_file(TEMP_PCK_PATH)
+		if _is_web_build():
+			downloaded_path = ""
+			download_request.download_file = ""
+		else:
+			downloaded_path = TEMP_PCK_PATH
+			download_request.download_file = TEMP_PCK_PATH
+		var url: String = _cache_busted_url(base_url)
+		var headers: PackedStringArray = _http_headers(["User-Agent: Lampor-Game", "Accept: application/octet-stream", "Cache-Control: no-cache"])
+		if download_request.request(url, headers) == OK:
+			return
+	downloading_mode = ""
+	download_request.download_file = ""
+	is_downloading = false
+	_fail("Tidak dapat memulai unduhan patch PCK dari GitHub.")
 
 func _on_api_request_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
@@ -584,7 +686,20 @@ func _on_atom_request_completed(result: int, response_code: int, _headers: Packe
 	using_atom_fallback = false
 	is_checking = false
 	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200:
-		_fail(_format_network_error(result, response_code, "jalur alternatif GitHub (Atom)"))
+		_fail(_format_network_error(result, response_code, "jalur alternatif GitHub"))
+		return
+	if _is_web_build():
+		var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
+		if not parsed is Dictionary:
+			_fail("Manifest pembaruan Web tidak dapat dibaca.")
+			return
+		var commit_sha: String = str(parsed.get("commit", "")).strip_edges()
+		var ver: String = str(parsed.get("version", "")).strip_edges()
+		if commit_sha.is_empty():
+			_fail("Manifest pembaruan Web tidak memuat identitas commit.")
+			return
+		var msg: String = "Pembaruan Lampor v%s" % ver if not ver.is_empty() else "Pembaruan terbaru dari GitHub"
+		_handle_latest_commit(commit_sha, msg)
 		return
 	_parse_atom_response(body)
 
@@ -681,8 +796,8 @@ func fetch_latest_fix_notes(force: bool = false) -> void:
 		return
 	is_fetching_fix_notes = true
 	fix_notes_using_main_fallback = (target_ref == "main")
-	var url: String = "%s%s/FIX_NOTES.md?t=%d" % [RAW_FIX_NOTES_BASE_URL, target_ref, int(Time.get_unix_time_from_system())]
-	var headers: PackedStringArray = ["User-Agent: Lampor-Game", "Cache-Control: no-cache"]
+	var url: String = _cache_busted_url("%s%s/FIX_NOTES.md" % [RAW_FIX_NOTES_BASE_URL, target_ref])
+	var headers: PackedStringArray = _http_headers(["User-Agent: Lampor-Game", "Cache-Control: no-cache"])
 	var err: Error = fix_notes_request.request(url, headers)
 	if err != OK:
 		is_fetching_fix_notes = false
@@ -693,8 +808,8 @@ func _on_fix_notes_request_completed(result: int, response_code: int, _headers: 
 		if not fix_notes_using_main_fallback:
 			fix_notes_using_main_fallback = true
 			is_fetching_fix_notes = true
-			var fallback_url: String = "%smain/FIX_NOTES.md?t=%d" % [RAW_FIX_NOTES_BASE_URL, int(Time.get_unix_time_from_system())]
-			var headers: PackedStringArray = ["User-Agent: Lampor-Game", "Cache-Control: no-cache"]
+			var fallback_url: String = _cache_busted_url("%smain/FIX_NOTES.md" % RAW_FIX_NOTES_BASE_URL)
+			var headers: PackedStringArray = _http_headers(["User-Agent: Lampor-Game", "Cache-Control: no-cache"])
 			if fix_notes_request.request(fallback_url, headers) != OK:
 				is_fetching_fix_notes = false
 		return
@@ -703,17 +818,17 @@ func _on_fix_notes_request_completed(result: int, response_code: int, _headers: 
 		return
 	remote_fix_notes_markdown = text
 	remote_fix_notes_commit = latest_commit if not latest_commit.is_empty() else "main"
-	_write_absolute_file(ProjectSettings.globalize_path(FIX_NOTES_CACHE_PATH), text.to_utf8_buffer())
+	_write_user_file(FIX_NOTES_CACHE_PATH, text.to_utf8_buffer())
 	_save_update_state()
 	fix_notes_updated.emit(remote_fix_notes_markdown, remote_fix_notes_commit)
 
-func _on_download_request_completed(result: int, response_code: int, _headers: PackedStringArray, _body: PackedByteArray) -> void:
+func _on_download_request_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
 	var mode: String = downloading_mode
 	downloading_mode = ""
 	is_downloading = false
 	download_request.download_file = ""
 	if mode == "pck":
-		_on_pck_downloaded(result, response_code)
+		_on_pck_downloaded(result, response_code, body)
 		return
 	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200 or not FileAccess.file_exists(downloaded_path):
 		if FileAccess.file_exists(downloaded_path):
@@ -727,41 +842,63 @@ func _on_download_request_completed(result: int, response_code: int, _headers: P
 		return
 	_install_update_archive()
 
-func _on_pck_downloaded(result: int, response_code: int) -> void:
-	if result != HTTPRequest.RESULT_SUCCESS or response_code != 200 or not FileAccess.file_exists(TEMP_PCK_PATH):
+func _on_pck_downloaded(result: int, response_code: int, body: PackedByteArray = PackedByteArray()) -> void:
+	var web_mode: bool = _is_web_build()
+	var transfer_ok: bool = (result == HTTPRequest.RESULT_SUCCESS and response_code == 200)
+	if web_mode:
+		transfer_ok = transfer_ok and _is_valid_pck_bytes(body)
+	else:
+		transfer_ok = transfer_ok and FileAccess.file_exists(TEMP_PCK_PATH) and _is_valid_pck_file(TEMP_PCK_PATH)
+
+	if not transfer_ok:
 		_remove_user_file(TEMP_PCK_PATH)
+		if pck_download_url_idx < pck_download_urls.size():
+			downloading_mode = "pck"
+			is_downloading = true
+			_request_next_pck_binary()
+			return
 		if response_code == 404:
-			_fail("File update.pck belum tersedia di rilis latest-commit GitHub. Pastikan workflow auto_pck.yml sudah selesai berjalan.")
+			_fail("File update.pck belum tersedia di GitHub. Pastikan workflow auto_pck.yml sudah selesai berjalan.")
+		elif result == HTTPRequest.RESULT_SUCCESS and response_code == 200:
+			_fail("Server tidak mengirim file .pck Godot yang valid. Pembaruan dibatalkan.")
 		else:
 			_fail(_format_network_error(result, response_code, "unduhan patch PCK"))
-		return
-	if not _is_valid_pck_file(TEMP_PCK_PATH):
-		_remove_user_file(TEMP_PCK_PATH)
-		_fail("Server tidak mengirim file .pck Godot yang valid. Pembaruan dibatalkan.")
 		return
 
 	var applied_commit: String = pending_download_commit if not pending_download_commit.is_empty() else latest_commit
 	var applied_version: String = pck_manifest_version if not pck_manifest_version.is_empty() else str(ProjectSettings.get_setting("application/config/version", ""))
 	pending_download_commit = ""
-	var temp_abs: String = ProjectSettings.globalize_path(TEMP_PCK_PATH)
 
 	# Simpan ke update_pending.pck agar otomatis dipromosikan oleh _init() sebelum
 	# autoload dan scene dimuat saat aplikasi dimulai ulang (mencegah ketidakcocokan skrip di memori).
 	_remove_user_file(PENDING_PCK_PATH)
-	var pending_err: Error = DirAccess.rename_absolute(temp_abs, ProjectSettings.globalize_path(PENDING_PCK_PATH))
-	if pending_err != OK:
-		_remove_user_file(TEMP_PCK_PATH)
-		_fail("Gagal menyimpan patch PCK ke penyimpanan lokal (kode %d)." % pending_err)
-		return
+	if web_mode:
+		if not _write_user_file(PENDING_PCK_PATH, body):
+			_fail("Gagal menyimpan patch PCK ke penyimpanan browser (user://).")
+			return
+	else:
+		var temp_abs: String = ProjectSettings.globalize_path(TEMP_PCK_PATH)
+		var pending_err: Error = DirAccess.rename_absolute(temp_abs, ProjectSettings.globalize_path(PENDING_PCK_PATH))
+		if pending_err != OK:
+			if _copy_user_file(TEMP_PCK_PATH, PENDING_PCK_PATH):
+				_remove_user_file(TEMP_PCK_PATH)
+			else:
+				_remove_user_file(TEMP_PCK_PATH)
+				_fail("Gagal menyimpan patch PCK ke penyimpanan lokal (kode %d)." % pending_err)
+				return
 	pending_pck_commit = applied_commit
 	pending_pck_version = applied_version
 	pck_pending_restart = true
 	has_update = false
 	_save_update_state()
+	_sync_web_idbfs()
 	if not pck_loaded_this_session and ProjectSettings.load_resource_pack(PENDING_PCK_PATH, true):
 		pck_loaded_this_session = true
 		_reload_patched_scripts()
 	update_installed.emit(ProjectSettings.globalize_path(PENDING_PCK_PATH), applied_commit, true)
+
+func _is_valid_pck_bytes(bytes: PackedByteArray) -> bool:
+	return bytes.size() >= 64 and bytes[0] == 0x47 and bytes[1] == 0x44 and bytes[2] == 0x50 and bytes[3] == 0x43
 
 func _is_valid_pck_file(path: String) -> bool:
 	var file := FileAccess.open(path, FileAccess.READ)
@@ -775,9 +912,33 @@ func _is_valid_pck_file(path: String) -> bool:
 	file.close()
 	return header.size() == 4 and header[0] == 0x47 and header[1] == 0x44 and header[2] == 0x50 and header[3] == 0x43
 
+func _write_user_file(user_path: String, bytes: PackedByteArray) -> bool:
+	var file := FileAccess.open(user_path, FileAccess.WRITE)
+	if file == null:
+		return false
+	file.store_buffer(bytes)
+	file.flush()
+	var err: Error = file.get_error()
+	file.close()
+	_sync_web_idbfs()
+	return err == OK
+
+func _copy_user_file(src_path: String, dst_path: String) -> bool:
+	if not FileAccess.file_exists(src_path):
+		return false
+	var bytes: PackedByteArray = FileAccess.get_file_as_bytes(src_path)
+	if bytes.is_empty():
+		return false
+	return _write_user_file(dst_path, bytes)
+
 func _remove_user_file(path: String) -> void:
+	if not FileAccess.file_exists(path):
+		return
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
 	if FileAccess.file_exists(path):
-		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+		var user_dir := DirAccess.open("user://")
+		if user_dir:
+			user_dir.remove(path.trim_prefix("user://"))
 
 func _install_update_archive() -> void:
 	if _is_git_working_copy():
@@ -895,6 +1056,8 @@ func _extract_zip_safely(archive_path: String, destination_root: String) -> Erro
 	return OK
 
 func _can_write_project_source() -> bool:
+	if _is_web_build():
+		return false
 	var root: String = ProjectSettings.globalize_path("res://")
 	if not FileAccess.file_exists(root.path_join("project.godot")) or not DirAccess.dir_exists_absolute(root.path_join("scripts")):
 		return false
@@ -1075,6 +1238,8 @@ func _format_network_error(result: int, response_code: int, service: String) -> 
 		message += " HTTP 0 bukan status GitHub; koneksi gagal sebelum menerima header HTTP."
 	if OS.has_feature("android"):
 		message += " Pastikan permission INTERNET aktif pada Android Export Preset."
+	elif _is_web_build() and response_code == 0:
+		message += " Pada versi Web, pastikan koneksi aktif dan server tujuan mengizinkan akses CORS."
 	return message
 
 func _fail(message: String) -> void:

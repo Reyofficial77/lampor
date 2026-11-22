@@ -1,7 +1,7 @@
 class_name LamporStateMachine
 extends CharacterBody3D
 
-enum State { DORMANT_SKY, DESCENDING, PATROL, INVESTIGATE, STARE_PUNISHMENT, CHASE, BANISHED }
+enum State { DORMANT_SKY, DESCENDING, PATROL, INVESTIGATE, STARE_PUNISHMENT, CHASE, BANISHED, REPELLED }
 var current_state: State = State.DORMANT_SKY
 
 @export var patrol_speed: float = 3.2
@@ -32,10 +32,12 @@ var descent_tween: Tween = null
 const MAX_CHASE_TIME: float = 18.0
 const LOST_SIGHT_GIVE_UP: float = 5.0
 const CHASE_COOLDOWN_TIME: float = 10.0
+const REPEL_DURATION: float = 5.0
 var chase_timer: float = 0.0
 var lost_sight_timer: float = 0.0
 var chase_cooldown: float = 0.0
 var stare_punish_timer: float = 0.0
+var repel_timer: float = 0.0
 var is_catching: bool = false
 
 @onready var visual_mesh: Node3D = $Visuals
@@ -71,7 +73,7 @@ func _ready() -> void:
 		if new_state_str == "CHASE":
 			if current_state == State.DORMANT_SKY:
 				trigger_descent(true)
-			elif current_state != State.DESCENDING and current_state != State.CHASE:
+			elif current_state != State.DESCENDING and current_state != State.CHASE and current_state != State.REPELLED:
 				_set_state(State.CHASE)
 	)
 	
@@ -411,8 +413,12 @@ func _physics_process(delta: float) -> void:
 	else:
 		SignalBus.lampor_nearby.emit(dist_to_player)
 
-	# Check player staring at Lampor
-	_check_player_stare(dist_to_player, delta)
+	# Check player staring at Lampor (nonaktif saat Lampor sedang terusir kentongan)
+	if current_state == State.REPELLED:
+		SignalBus.lampor_stare_detected.emit(0.0)
+		stare_timer = 0.0
+	else:
+		_check_player_stare(dist_to_player, delta)
 
 	# Regular eerie bell ringing on ground
 	bell_timer += delta
@@ -431,6 +437,8 @@ func _physics_process(delta: float) -> void:
 			_process_stare_punishment(delta, dist_to_player, hover_bob)
 		State.CHASE:
 			_process_chase(delta, dist_to_player, hover_bob)
+		State.REPELLED:
+			_process_repelled(delta, hover_bob)
 		State.BANISHED:
 			global_position.y += delta * 5.0
 
@@ -584,11 +592,50 @@ func _start_catch() -> void:
 	SignalBus.player_death_requested.emit("Kamu ditarik ke dalam keranda Lampor!")
 
 
+func repel_from_kentongan(duration: float = REPEL_DURATION) -> bool:
+	if current_state == State.DORMANT_SKY or current_state == State.DESCENDING or current_state == State.BANISHED or is_catching:
+		return false
+	repel_timer = maxf(repel_timer, duration)
+	chase_cooldown = maxf(chase_cooldown, repel_timer)
+	stare_timer = 0.0
+	SignalBus.lampor_stare_detected.emit(0.0)
+	_set_state(State.REPELLED)
+	SignalBus.lampor_state_changed.emit("REPELLED")
+	return true
+
+func _process_repelled(delta: float, hover_bob: float) -> void:
+	repel_timer = maxf(0.0, repel_timer - delta)
+	chase_cooldown = maxf(chase_cooldown, repel_timer)
+
+	var away_vec: Vector3 = global_position - player.global_position
+	away_vec.y = 0.0
+	if away_vec.length_squared() < 0.01:
+		away_vec = Vector3(1.0, 0.0, 0.0)
+	var away_dir: Vector3 = away_vec.normalized()
+	var next_xz: Vector2 = Vector2(global_position.x + away_dir.x * 2.0, global_position.z + away_dir.z * 2.0)
+	if absf(next_xz.x) > 37.0 or absf(next_xz.y) > 37.0:
+		away_dir = Vector3(-away_dir.z, 0.0, away_dir.x).normalized()
+
+	var desired_vy: float = (hover_offset + hover_bob - global_position.y) * 2.5
+	var flee_speed: float = maxf(patrol_speed * 1.65, chase_speed * 0.72)
+	velocity = Vector3(away_dir.x * flee_speed, desired_vy, away_dir.z * flee_speed)
+	safe_look_at(global_position + Vector3(velocity.x, 0.0, velocity.z))
+
+	if repel_timer <= 0.0:
+		repel_timer = 0.0
+		chase_cooldown = 0.0
+		chase_timer = 0.0
+		lost_sight_timer = 0.0
+		_set_state(State.CHASE)
+		SignalBus.lampor_state_changed.emit("CHASE")
+		SignalBus.dialog_requested.emit("Efek kentongan habis — Lampor kembali mengejar!", 2.5)
+
 func reset_after_player_revive() -> void:
 	is_catching = false
 	chase_timer = 0.0
 	lost_sight_timer = 0.0
 	stare_timer = 0.0
+	repel_timer = 0.0
 	chase_cooldown = CHASE_COOLDOWN_TIME
 	velocity = Vector3.ZERO
 	if current_state != State.DORMANT_SKY and current_state != State.DESCENDING and current_state != State.BANISHED:
@@ -608,7 +655,7 @@ func _give_up_chase() -> void:
 	_set_state(State.PATROL)
 
 func _on_player_noise(level: float, noise_pos: Vector3) -> void:
-	if current_state == State.DORMANT_SKY or current_state == State.DESCENDING:
+	if current_state == State.DORMANT_SKY or current_state == State.DESCENDING or current_state == State.REPELLED or repel_timer > 0.0:
 		return
 	if current_state == State.CHASE or current_state == State.STARE_PUNISHMENT:
 		return
@@ -641,3 +688,6 @@ func _set_state(new_state: State) -> void:
 			red_light.light_color = Color(1.0, 0.1, 0.1) # Menacing crimson
 			if audio_roar and not audio_roar.playing:
 				audio_roar.play()
+		State.REPELLED:
+			red_light.light_energy = 1.2
+			red_light.light_color = Color(0.45, 0.75, 1.0) # Repelled cool glow

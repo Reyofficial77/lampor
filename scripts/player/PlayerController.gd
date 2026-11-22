@@ -73,6 +73,9 @@ var model_head_mesh: GeometryInstance3D = null
 var hand_item_holder: BoneAttachment3D = null
 var hand_prop_pivot: Node3D = null
 var hand_item_props: Dictionary = {}
+var left_hand_item_holder: BoneAttachment3D = null
+var left_hand_prop_pivot: Node3D = null
+var left_hand_item_props: Dictionary = {}
 var handheld_flashlight_lens: MeshInstance3D = null
 var equipped_item_id: String = "flashlight"
 var flashlight_preferred_on: bool = true
@@ -155,6 +158,9 @@ func _process(_delta: float) -> void:
 			var hand_idx: int = _find_bone_idx(player_skeleton, "Hand.R")
 			if hand_idx >= 0:
 				player_skeleton.set_bone_pose_scale(hand_idx, Vector3.ONE)
+			var hand_l_idx: int = _find_bone_idx(player_skeleton, "Hand.L")
+			if hand_l_idx >= 0:
+				player_skeleton.set_bone_pose_scale(hand_l_idx, Vector3.ONE)
 			var head_idx: int = _find_bone_idx(player_skeleton, "Head")
 			if head_idx >= 0:
 				player_skeleton.set_bone_pose_scale(head_idx, Vector3.ONE)
@@ -405,10 +411,18 @@ func _sync_hand_prop_visibility() -> void:
 		var prop_node: Node3D = hand_item_props[prop_id] as Node3D
 		if prop_node:
 			prop_node.visible = show_prop and (prop_id == equipped_item_id)
+	for prop_id: String in left_hand_item_props.keys():
+		var prop_node: Node3D = left_hand_item_props[prop_id] as Node3D
+		if prop_node:
+			prop_node.visible = show_prop and (prop_id == equipped_item_id)
 
 func _hide_all_hand_props() -> void:
 	for prop_id: String in hand_item_props.keys():
 		var prop_node: Node3D = hand_item_props[prop_id] as Node3D
+		if prop_node:
+			prop_node.visible = false
+	for prop_id: String in left_hand_item_props.keys():
+		var prop_node: Node3D = left_hand_item_props[prop_id] as Node3D
 		if prop_node:
 			prop_node.visible = false
 
@@ -485,6 +499,23 @@ func _try_use_equipped_item() -> bool:
 		inventory_system.consume_equipped_item()
 		trigger_action_animation("pick-up", 0.5)
 		AudioManager.play_sound("item_pickup", -4.0, 0.8)
+		SignalBus.item_used.emit(item)
+		if interaction_ray:
+			interaction_ray._update_prompt()
+		return true
+	elif item.get("id") == "kentongan":
+		var repelled_any: bool = false
+		for lampor_node: Node in get_tree().get_nodes_in_group("lampor"):
+			if lampor_node.has_method("repel_from_kentongan"):
+				if bool(lampor_node.call("repel_from_kentongan", 5.0)):
+					repelled_any = true
+		if not repelled_any:
+			SignalBus.dialog_requested.emit("Lampor belum turun ke desa. Simpan kentongan untuk nanti!", 2.5)
+			return true
+		inventory_system.consume_equipped_item()
+		trigger_action_animation("kentongan_hit", 0.55)
+		AudioManager.play_sound("kentongan", 2.0)
+		SignalBus.dialog_requested.emit("Kentongan dibunyikan! Lampor terusir selama 5 detik!", 3.0)
 		SignalBus.item_used.emit(item)
 		if interaction_ray:
 			interaction_ray._update_prompt()
@@ -579,6 +610,34 @@ func _attach_suit_box(parent_node: Node3D, box_name: String, size_vec: Vector3, 
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	mi.position = pos_vec
 	mi.rotation_degrees = rot_deg
+	parent_node.add_child(mi)
+	return mi
+
+func _attach_suit_cyl(parent_node: Node3D, cyl_name: String, top_r: float, bottom_r: float, h: float, pos_vec: Vector3, mat: Material, rot_deg: Vector3 = Vector3.ZERO) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.name = cyl_name
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = top_r
+	mesh.bottom_radius = bottom_r
+	mesh.height = h
+	mi.mesh = mesh
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.position = pos_vec
+	mi.rotation_degrees = rot_deg
+	parent_node.add_child(mi)
+	return mi
+
+func _attach_suit_sph(parent_node: Node3D, sph_name: String, r: float, pos_vec: Vector3, mat: Material) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.name = sph_name
+	var mesh := SphereMesh.new()
+	mesh.radius = r
+	mesh.height = r * 2.0
+	mi.mesh = mesh
+	mi.material_override = mat
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.position = pos_vec
 	parent_node.add_child(mi)
 	return mi
 
@@ -925,6 +984,14 @@ func _build_suit_animations(skel: Skeleton3D) -> void:
 		"LowerArm.R": [[0.0, Vector3(-18.0, 0.0, 0.0)], [0.22, Vector3(-32.0, 0.0, 0.0)], [0.5, Vector3(-18.0, 0.0, 0.0)]]
 	})
 
+	_add_suit_anim(lib, skel_path, skel, "kentongan_hit", 0.55, Animation.LOOP_NONE, {
+		"Torso": [[0.0, Vector3.ZERO], [0.18, Vector3(-4.0, 0.0, 3.0)], [0.55, Vector3.ZERO]],
+		"UpperArm.R": [[0.0, Vector3(-76.0, -48.0, 18.0)], [0.14, Vector3(-88.0, -44.0, 42.0)], [0.28, Vector3(-78.0, -48.0, 22.0)], [0.42, Vector3(-88.0, -44.0, 42.0)], [0.55, Vector3(-76.0, -48.0, 18.0)]],
+		"LowerArm.R": [[0.0, Vector3(-28.0, -10.0, 0.0)], [0.14, Vector3(-38.0, -10.0, 18.0)], [0.42, Vector3(-38.0, -10.0, 18.0)], [0.55, Vector3(-28.0, -10.0, 0.0)]],
+		"UpperArm.L": [[0.0, Vector3(-78.0, 48.0, -18.0)], [0.55, Vector3(-78.0, 48.0, -18.0)]],
+		"LowerArm.L": [[0.0, Vector3(-28.0, 10.0, 0.0)], [0.55, Vector3(-28.0, 10.0, 0.0)]]
+	})
+
 	_add_suit_anim(lib, skel_path, skel, "die", 0.7, Animation.LOOP_NONE, {
 		"Hips": [[0.0, Vector3.ZERO], [0.5, Vector3(82.0, 0.0, 0.0)], [0.7, Vector3(82.0, 0.0, 0.0)]],
 		"Head": [[0.0, Vector3.ZERO], [0.5, Vector3(18.0, 0.0, 0.0)], [0.7, Vector3(18.0, 0.0, 0.0)]],
@@ -937,7 +1004,10 @@ func _build_hand_item_holder(skel: Skeleton3D) -> void:
 		return
 	if hand_item_holder and is_instance_valid(hand_item_holder):
 		hand_item_holder.queue_free()
+	if left_hand_item_holder and is_instance_valid(left_hand_item_holder):
+		left_hand_item_holder.queue_free()
 	hand_item_props.clear()
+	left_hand_item_props.clear()
 
 	var right_hand_bone: String = _resolve_bone_name(skel, "Hand.R")
 	if right_hand_bone.is_empty():
@@ -949,17 +1019,32 @@ func _build_hand_item_holder(skel: Skeleton3D) -> void:
 	skel.add_child(hand_item_holder)
 
 	var parent_scale: Vector3 = skel.get_parent().scale if skel.get_parent() is Node3D else Vector3.ONE
-	hand_prop_pivot = Node3D.new()
-	hand_prop_pivot.name = "HandPropPivot"
-	hand_prop_pivot.scale = Vector3(
+	var inv_scale := Vector3(
 		1.0 / maxf(0.001, absf(parent_scale.x)),
 		1.0 / maxf(0.001, absf(parent_scale.y)),
 		1.0 / maxf(0.001, absf(parent_scale.z))
 	)
+	hand_prop_pivot = Node3D.new()
+	hand_prop_pivot.name = "HandPropPivot"
+	hand_prop_pivot.scale = inv_scale
 	# Pada ordinaryMan.fbx, sumbu lokal X/Z hand.r berputar 90 derajat di sekitar sumbu jari (+Y)
 	if right_hand_bone == "hand.r":
 		hand_prop_pivot.rotation_degrees = Vector3(0.0, 90.0, 0.0)
 	hand_item_holder.add_child(hand_prop_pivot)
+
+	var left_hand_bone: String = _resolve_bone_name(skel, "Hand.L")
+	if not left_hand_bone.is_empty():
+		left_hand_item_holder = BoneAttachment3D.new()
+		left_hand_item_holder.name = "LeftHandItemHolder"
+		left_hand_item_holder.bone_name = left_hand_bone
+		skel.add_child(left_hand_item_holder)
+
+		left_hand_prop_pivot = Node3D.new()
+		left_hand_prop_pivot.name = "LeftHandPropPivot"
+		left_hand_prop_pivot.scale = inv_scale
+		if left_hand_bone == "hand.l":
+			left_hand_prop_pivot.rotation_degrees = Vector3(0.0, -90.0, 0.0)
+		left_hand_item_holder.add_child(left_hand_prop_pivot)
 
 	# 1. Flashlight
 	var torch_root := Node3D.new()
@@ -1077,6 +1162,36 @@ func _build_hand_item_holder(skel: Skeleton3D) -> void:
 	bat_top.material_override = _make_suit_mat(Color(0.88, 0.68, 0.16), 0.3, 0.75, 0.06)
 	bat_root.add_child(bat_top)
 
+	# 6. Kentongan (2 Tangan: kanan = pemukul kayu, kiri = tabung kentongan)
+	var pemukul_root := Node3D.new()
+	pemukul_root.name = "Prop_kentongan_pemukul"
+	pemukul_root.position = Vector3(0.0, 0.125, -0.025)
+	pemukul_root.rotation_degrees = Vector3(-48.0, 0.0, 28.0)
+	hand_prop_pivot.add_child(pemukul_root)
+	hand_item_props["kentongan"] = pemukul_root
+
+	var beater_wood: StandardMaterial3D = _make_suit_mat(Color(0.45, 0.25, 0.11), 0.76, 0.04, 0.05)
+	var beater_tip: StandardMaterial3D = _make_suit_mat(Color(0.30, 0.16, 0.07), 0.82, 0.02, 0.04)
+	_attach_suit_cyl(pemukul_root, "BeaterShaft", 0.011, 0.010, 0.22, Vector3(0.0, 0.06, 0.0), beater_wood)
+	_attach_suit_sph(pemukul_root, "BeaterHead", 0.022, Vector3(0.0, 0.175, 0.0), beater_tip)
+
+	if left_hand_prop_pivot:
+		var kentongan_root := Node3D.new()
+		kentongan_root.name = "Prop_kentongan_body"
+		kentongan_root.position = Vector3(0.0, 0.120, -0.028)
+		kentongan_root.rotation_degrees = Vector3(-68.0, 12.0, -8.0)
+		left_hand_prop_pivot.add_child(kentongan_root)
+		left_hand_item_props["kentongan"] = kentongan_root
+
+		var bamboo_mat: StandardMaterial3D = _make_suit_mat(Color(0.60, 0.41, 0.17), 0.75, 0.02, 0.06)
+		var ring_mat: StandardMaterial3D = _make_suit_mat(Color(0.32, 0.19, 0.08), 0.84, 0.02, 0.04)
+		var slit_mat: StandardMaterial3D = _make_suit_mat(Color(0.04, 0.02, 0.015), 0.98, 0.0, 0.0)
+		_attach_suit_cyl(kentongan_root, "Body", 0.044, 0.048, 0.24, Vector3(0.0, 0.04, 0.0), bamboo_mat)
+		for ry: float in [-0.065, 0.04, 0.145]:
+			_attach_suit_cyl(kentongan_root, "Ring", 0.050, 0.050, 0.015, Vector3(0.0, ry, 0.0), ring_mat)
+		_attach_suit_cyl(kentongan_root, "Peg", 0.012, 0.012, 0.045, Vector3(0.0, 0.175, 0.0), ring_mat)
+		_attach_suit_box(kentongan_root, "Slit", Vector3(0.024, 0.15, 0.032), Vector3(-0.032, 0.04, 0.022), slit_mat)
+
 	_sync_hand_prop_visibility()
 
 func _apply_fpp_hand_override() -> void:
@@ -1164,6 +1279,7 @@ func _apply_fpp_hand_override() -> void:
 	var item_pitch_offset: float = 0.0
 	var item_drop_offset: float = 0.0
 	var item_yaw_offset: float = 0.0
+	var is_two_handed_kentongan: bool = (equipped_item_id == "kentongan")
 	match equipped_item_id:
 		"jamu", "baterai":
 			item_pitch_offset = 6.0
@@ -1173,37 +1289,72 @@ func _apply_fpp_hand_override() -> void:
 			item_pitch_offset = 4.0
 			item_drop_offset = -3.0
 			item_yaw_offset = -2.0
+		"kentongan":
+			item_pitch_offset = -2.0
+			item_drop_offset = 2.0
+			item_yaw_offset = 4.0
+
+	var strike_swing: float = 0.0
+	if is_two_handed_kentongan and action_anim_timer > 0.0:
+		var hit_p: float = clampf(1.0 - (action_anim_timer / maxf(0.01, action_anim_duration)), 0.0, 1.0)
+		strike_swing = absf(sin(hit_p * PI * 2.0)) * 28.0
 
 	_set_skeleton_bone_rot("Shoulder.R", -18.0, -8.0, 6.0)
 	_set_skeleton_bone_rot(
 		"UpperArm.R",
-		-95.0 - pitch_deg + item_pitch_offset + raise_drop - idle_breath - sway_lift * 0.65 + action_nudge * 0.55 + look_sway.y * 0.85 + fear_tremor * 0.4,
+		-95.0 - pitch_deg + item_pitch_offset + raise_drop - idle_breath - sway_lift * 0.65 + (0.0 if is_two_handed_kentongan else action_nudge * 0.55) + look_sway.y * 0.85 + fear_tremor * 0.4,
 		-54.0 + item_drop_offset - sprint_blend * 4.5,
-		28.0 + item_yaw_offset + sway_yaw + sprint_blend * 6.5 + look_sway.x * 1.15
+		28.0 + item_yaw_offset + strike_swing + sway_yaw + sprint_blend * 6.5 + look_sway.x * 1.15
 	)
 	_set_skeleton_bone_rot(
 		"LowerArm.R",
-		-20.0 - sway_lift * 0.65 - sprint_blend * 9.0 + action_nudge * 0.65 + look_sway.y * 0.45,
+		-20.0 - sway_lift * 0.65 - sprint_blend * 9.0 + (action_nudge * 0.65 if not is_two_handed_kentongan else -10.0) + look_sway.y * 0.45,
 		-10.0,
-		wrist_lag + idle_breath * 0.55 + look_sway.x * 0.75 + fear_tremor * 0.6
+		wrist_lag + strike_swing * 0.5 + idle_breath * 0.55 + look_sway.x * 0.75 + fear_tremor * 0.6
 	)
 	_set_skeleton_bone_rot(
 		"Hand.R",
 		-4.0 - action_nudge * 0.85 + look_sway.y * 0.35,
 		0.0,
-		-10.0 + wrist_lag * 0.8 + look_sway.x * 0.5 + fear_tremor
+		-10.0 + strike_swing * 0.35 + wrist_lag * 0.8 + look_sway.x * 0.5 + fear_tremor
 	)
 
-	# Lengan kiri tetap mengayun sebagai penyeimbang tubuh saat memegang barang di tangan kanan
-	var left_stride: float = -sin(walk_phase) * lerpf(16.0, 36.0, sprint_blend) * move_blend
-	var left_pump: float = maxf(0.0, sin(walk_phase - 0.35)) * lerpf(12.0, 28.0, sprint_blend) * move_blend
-	_set_skeleton_bone_rot(
-		"UpperArm.L",
-		-18.0 - lerpf(0.0, 20.0, sprint_blend) * move_blend - left_stride - idle_breath * 0.7,
-		68.0 - sprint_blend * 6.0,
-		-12.0 + look_sway.x * 0.5
-	)
-	_set_skeleton_bone_rot("LowerArm.L", -22.0 - left_pump, 6.0, 5.0)
+	if is_two_handed_kentongan:
+		# Tangan kiri mengangkat tabung kentongan di sisi kiri pandangan agar siap dipukul tangan kanan
+		_set_skeleton_bone_rot("Shoulder.L", -18.0, 8.0, -6.0)
+		_set_skeleton_bone_rot(
+			"UpperArm.L",
+			-95.0 - pitch_deg + raise_drop - idle_breath * 0.9 - sway_lift * 0.5 + look_sway.y * 0.8 + fear_tremor * 0.3,
+			52.0 + sprint_blend * 4.5,
+			-28.0 - sway_yaw * 0.6 - sprint_blend * 5.0 + look_sway.x * 1.0
+		)
+		_set_skeleton_bone_rot(
+			"LowerArm.L",
+			-20.0 - sway_lift * 0.5 - sprint_blend * 8.0 + look_sway.y * 0.4,
+			10.0,
+			-wrist_lag * 0.6 + idle_breath * 0.45 + look_sway.x * 0.65
+		)
+		_set_skeleton_bone_rot(
+			"Hand.L",
+			-4.0 + look_sway.y * 0.3,
+			0.0,
+			10.0 + look_sway.x * 0.45
+		)
+		if hand_l_idx >= 0:
+			player_skeleton.set_bone_pose_scale(hand_l_idx, Vector3(0.78, 0.78, 0.78))
+	else:
+		# Lengan kiri tetap mengayun sebagai penyeimbang tubuh saat memegang barang di tangan kanan
+		if hand_l_idx >= 0:
+			player_skeleton.set_bone_pose_scale(hand_l_idx, Vector3(0.86, 0.86, 0.86))
+		var left_stride: float = -sin(walk_phase) * lerpf(16.0, 36.0, sprint_blend) * move_blend
+		var left_pump: float = maxf(0.0, sin(walk_phase - 0.35)) * lerpf(12.0, 28.0, sprint_blend) * move_blend
+		_set_skeleton_bone_rot(
+			"UpperArm.L",
+			-18.0 - lerpf(0.0, 20.0, sprint_blend) * move_blend - left_stride - idle_breath * 0.7,
+			68.0 - sprint_blend * 6.0,
+			-12.0 + look_sway.x * 0.5
+		)
+		_set_skeleton_bone_rot("LowerArm.L", -22.0 - left_pump, 6.0, 5.0)
 
 	if hand_idx >= 0:
 		player_skeleton.set_bone_pose_scale(hand_idx, Vector3(0.78, 0.78, 0.78))
@@ -1227,6 +1378,9 @@ func prepare_for_cutscene() -> void:
 		var hand_idx: int = _find_bone_idx(player_skeleton, "Hand.R")
 		if hand_idx >= 0:
 			player_skeleton.set_bone_pose_scale(hand_idx, Vector3.ONE)
+		var hand_l_idx: int = _find_bone_idx(player_skeleton, "Hand.L")
+		if hand_l_idx >= 0:
+			player_skeleton.set_bone_pose_scale(hand_l_idx, Vector3.ONE)
 		var head_idx: int = _find_bone_idx(player_skeleton, "Head")
 		if head_idx >= 0:
 			player_skeleton.set_bone_pose_scale(head_idx, Vector3.ONE)

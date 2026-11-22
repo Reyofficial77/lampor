@@ -49,7 +49,8 @@ func _load_sounds() -> void:
 		"rooster_crow": "res://assets/audio/rooster_crow.wav",
 		"azan_subuh": "res://assets/audio/azan_subuh.wav",
 		"game_over_sting": "res://assets/audio/game_over_sting.wav",
-		"jumpscare": "res://assets/audio/jumpscare.wav"
+		"jumpscare": "res://assets/audio/jumpscare.wav",
+		"kentongan": "res://assets/audio/kentongan.wav"
 	}
 	
 	for key: String in sound_files:

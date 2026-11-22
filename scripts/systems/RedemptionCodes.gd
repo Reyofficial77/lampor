@@ -20,8 +20,17 @@ const CODES: Dictionary = {
 	"LAMPORGIFT": {"type": "coins", "quantity": 2500, "description": "hadiah untuk kalian!"}
 }
 
+static func normalize_code(raw_code: String) -> String:
+	var upper: String = raw_code.strip_edges().to_upper()
+	var result: String = ""
+	for i: int in range(upper.length()):
+		var ch_code: int = upper.unicode_at(i)
+		if (ch_code >= 65 and ch_code <= 90) or (ch_code >= 48 and ch_code <= 57):
+			result += upper[i]
+	return result
+
 static func get_reward(raw_code: String) -> Dictionary:
-	var normalized: String = raw_code.strip_edges().to_upper()
+	var normalized: String = normalize_code(raw_code)
 	if not CODES.has(normalized):
 		return {}
 	var reward: Dictionary = CODES[normalized]

@@ -35,10 +35,14 @@ const ON_SURFACE: Color = Color("f7ddda")
 const ON_SURFACE_VARIANT: Color = Color("d5bdbb")
 const OUTLINE: Color = Color("8d706d")
 const OUTLINE_VARIANT: Color = Color("59413e")
+const TEXT_MUTED: Color = Color("a98e8b")
+const BORDER_SUBTLE: Color = Color("4a3431")
+const BORDER_INTERACTIVE: Color = Color("7d625e")
 
 const ERROR: Color = Color("ffb4ab")
 const ON_ERROR: Color = Color("690005")
 const SCRIM: Color = Color("0a0505")
+const SCRIM_DARK: Color = Color("080303")
 
 # Aksen sekunder terkendali untuk relik/koin/obor/status positif
 const RELIC_BRASS: Color = Color("c99a5b")
@@ -124,6 +128,36 @@ static func make_panel_style(
 		s.content_margin_bottom = float(pad_v)
 	return s
 
+static func make_minimal_panel_style(
+	bg_color: Color = Color(0.086, 0.045, 0.043, 0.96),
+	border_color: Color = BORDER_INTERACTIVE,
+	radius: int = 2,
+	pad_h: int = 24,
+	pad_v: int = 22
+) -> StyleBoxFlat:
+	var s := StyleBoxFlat.new()
+	s.bg_color = bg_color
+	s.border_color = border_color
+	s.set_border_width_all(1)
+	s.set_corner_radius_all(radius)
+	s.shadow_size = 0
+	if pad_h > 0 or pad_v > 0:
+		s.content_margin_left = float(pad_h)
+		s.content_margin_right = float(pad_h)
+		s.content_margin_top = float(pad_v)
+		s.content_margin_bottom = float(pad_v)
+	return s
+
+static func make_hairline_divider(color: Color = Color(OUTLINE_VARIANT.r, OUTLINE_VARIANT.g, OUTLINE_VARIANT.b, 0.55)) -> HSeparator:
+	var sep := HSeparator.new()
+	var s := StyleBoxFlat.new()
+	s.bg_color = color
+	s.content_margin_top = 1.0
+	s.content_margin_bottom = 0.0
+	sep.add_theme_stylebox_override("separator", s)
+	sep.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return sep
+
 static func make_chip_style(
 	bg_color: Color = SURFACE_LOWEST,
 	border_color: Color = OUTLINE_VARIANT,
@@ -203,20 +237,17 @@ static func style_button(btn: Button, variant: String = "secondary", font_size: 
 	if not btn:
 		return
 	var normal := StyleBoxFlat.new()
-	normal.set_corner_radius_all(3)
-	normal.border_width_left = 3
-	normal.border_width_right = 1
-	normal.border_width_top = 1
-	normal.border_width_bottom = 2
+	normal.set_corner_radius_all(2)
+	normal.set_border_width_all(1)
 	normal.content_margin_left = 14.0
 	normal.content_margin_right = 14.0
 	normal.content_margin_top = 8.0
 	normal.content_margin_bottom = 8.0
-	normal.shadow_color = Color(SCRIM.r, SCRIM.g, SCRIM.b, 0.55)
-	normal.shadow_size = 4
+	normal.shadow_size = 0
 
 	var hover := normal.duplicate() as StyleBoxFlat
 	var pressed := normal.duplicate() as StyleBoxFlat
+	var focus := normal.duplicate() as StyleBoxFlat
 	var disabled := normal.duplicate() as StyleBoxFlat
 
 	var txt_normal: Color = ON_SURFACE
@@ -225,57 +256,114 @@ static func style_button(btn: Button, variant: String = "secondary", font_size: 
 
 	match variant:
 		"primary":
-			normal.bg_color = Color(PRIMARY_CONTAINER.r, PRIMARY_CONTAINER.g, PRIMARY_CONTAINER.b, 0.96)
+			normal.bg_color = Color("8e1919")
 			normal.border_color = ACCENT
-			hover.bg_color = Color("b62525")
+			hover.bg_color = Color("ab2424")
 			hover.border_color = PRIMARY
-			pressed.bg_color = Color("7b1212")
+			pressed.bg_color = Color("6e1111")
 			pressed.border_color = PRIMARY
+			focus.bg_color = hover.bg_color
+			focus.border_color = PRIMARY
+			focus.set_border_width_all(2)
 			txt_normal = ON_PRIMARY_CONTAINER
 			txt_hover = Color.WHITE
 		"danger":
-			normal.bg_color = Color(SECONDARY_CONTAINER.r, SECONDARY_CONTAINER.g, SECONDARY_CONTAINER.b, 0.94)
-			normal.border_color = Color(ACCENT.r, ACCENT.g, ACCENT.b, 0.85)
+			normal.bg_color = Color(0.18, 0.06, 0.06, 0.85)
+			normal.border_color = Color(ACCENT.r, ACCENT.g, ACCENT.b, 0.78)
 			hover.bg_color = PRIMARY_CONTAINER
 			hover.border_color = PRIMARY
-			pressed.bg_color = Color("731414")
+			pressed.bg_color = Color("6e1111")
 			pressed.border_color = PRIMARY
-			txt_normal = ON_SECONDARY_CONTAINER
-			txt_hover = ON_PRIMARY_CONTAINER
+			focus.bg_color = hover.bg_color
+			focus.border_color = PRIMARY
+			focus.set_border_width_all(2)
+			txt_normal = PRIMARY
+			txt_hover = Color.WHITE
 		"ghost":
-			normal.bg_color = Color(SURFACE_LOW.r, SURFACE_LOW.g, SURFACE_LOW.b, 0.85)
-			normal.border_color = OUTLINE_VARIANT
-			normal.border_width_left = 1
-			hover.bg_color = SURFACE_HIGH
-			hover.border_color = OUTLINE
-			pressed.bg_color = SURFACE_CONTAINER
+			normal.bg_color = Color(0.0, 0.0, 0.0, 0.0)
+			normal.border_color = Color(0.0, 0.0, 0.0, 0.0)
+			normal.set_border_width_all(0)
+			hover.bg_color = Color(SURFACE_CONTAINER.r, SURFACE_CONTAINER.g, SURFACE_CONTAINER.b, 0.72)
+			hover.border_color = BORDER_INTERACTIVE
+			hover.set_border_width_all(1)
+			pressed.bg_color = SURFACE_HIGH
 			pressed.border_color = ACCENT
+			pressed.set_border_width_all(1)
+			focus.bg_color = hover.bg_color
+			focus.border_color = PRIMARY
+			focus.set_border_width_all(2)
 			txt_normal = ON_SURFACE_VARIANT
 			txt_hover = ON_SURFACE
+		"nav_primary":
+			normal.bg_color = Color(PRIMARY_CONTAINER.r, PRIMARY_CONTAINER.g, PRIMARY_CONTAINER.b, 0.14)
+			normal.set_border_width_all(0)
+			normal.border_width_left = 2
+			normal.border_color = ACCENT
+			normal.content_margin_left = 14.0
+			normal.content_margin_right = 12.0
+			normal.content_margin_top = 9.0
+			normal.content_margin_bottom = 9.0
+			hover = normal.duplicate() as StyleBoxFlat
+			hover.bg_color = Color(PRIMARY_CONTAINER.r, PRIMARY_CONTAINER.g, PRIMARY_CONTAINER.b, 0.34)
+			hover.border_width_left = 3
+			hover.border_color = PRIMARY
+			pressed = hover.duplicate() as StyleBoxFlat
+			pressed.bg_color = Color(PRIMARY_CONTAINER.r, PRIMARY_CONTAINER.g, PRIMARY_CONTAINER.b, 0.48)
+			focus = hover.duplicate() as StyleBoxFlat
+			focus.set_border_width_all(1)
+			focus.border_width_left = 3
+			focus.border_color = PRIMARY
+			txt_normal = ON_PRIMARY_CONTAINER
+			txt_hover = Color.WHITE
+		"nav":
+			normal.bg_color = Color(0.0, 0.0, 0.0, 0.0)
+			normal.set_border_width_all(0)
+			normal.border_color = Color(0.0, 0.0, 0.0, 0.0)
+			normal.content_margin_left = 14.0
+			normal.content_margin_right = 12.0
+			normal.content_margin_top = 8.0
+			normal.content_margin_bottom = 8.0
+			hover = normal.duplicate() as StyleBoxFlat
+			hover.bg_color = Color(SURFACE_CONTAINER.r, SURFACE_CONTAINER.g, SURFACE_CONTAINER.b, 0.65)
+			hover.border_width_left = 2
+			hover.border_color = ACCENT
+			pressed = hover.duplicate() as StyleBoxFlat
+			pressed.bg_color = Color(PRIMARY_CONTAINER.r, PRIMARY_CONTAINER.g, PRIMARY_CONTAINER.b, 0.28)
+			pressed.border_color = PRIMARY
+			focus = hover.duplicate() as StyleBoxFlat
+			focus.set_border_width_all(1)
+			focus.border_width_left = 2
+			focus.border_color = PRIMARY
+			txt_normal = ON_SURFACE_VARIANT
+			txt_hover = ON_PRIMARY_CONTAINER
 		_: # secondary
-			normal.bg_color = Color(SURFACE_CONTAINER.r, SURFACE_CONTAINER.g, SURFACE_CONTAINER.b, 0.96)
-			normal.border_color = OUTLINE_VARIANT
+			normal.bg_color = Color(SURFACE_LOW.r, SURFACE_LOW.g, SURFACE_LOW.b, 0.94)
+			normal.border_color = BORDER_INTERACTIVE
 			hover.bg_color = SURFACE_HIGH
 			hover.border_color = ACCENT
 			pressed.bg_color = SECONDARY_CONTAINER
 			pressed.border_color = PRIMARY
+			focus.bg_color = hover.bg_color
+			focus.border_color = PRIMARY
+			focus.set_border_width_all(2)
 			txt_normal = ON_SURFACE
 			txt_hover = ON_PRIMARY_CONTAINER
 
-	disabled.bg_color = Color(SURFACE_DIM.r, SURFACE_DIM.g, SURFACE_DIM.b, 0.82)
+	disabled.bg_color = Color(SURFACE_DIM.r, SURFACE_DIM.g, SURFACE_DIM.b, 0.72)
 	disabled.border_color = Color(OUTLINE_VARIANT.r, OUTLINE_VARIANT.g, OUTLINE_VARIANT.b, 0.45)
 
+	btn.mouse_default_cursor_shape = Control.CURSOR_ARROW if btn.disabled else Control.CURSOR_POINTING_HAND
 	btn.add_theme_stylebox_override("normal", normal)
 	btn.add_theme_stylebox_override("hover", hover)
 	btn.add_theme_stylebox_override("pressed", pressed)
-	btn.add_theme_stylebox_override("focus", hover)
+	btn.add_theme_stylebox_override("focus", focus)
 	btn.add_theme_stylebox_override("disabled", disabled)
 
 	btn.add_theme_color_override("font_color", txt_normal)
 	btn.add_theme_color_override("font_hover_color", txt_hover)
 	btn.add_theme_color_override("font_pressed_color", txt_pressed)
 	btn.add_theme_color_override("font_focus_color", txt_hover)
-	btn.add_theme_color_override("font_disabled_color", Color(OUTLINE.r, OUTLINE.g, OUTLINE.b, 0.55))
+	btn.add_theme_color_override("font_disabled_color", Color(TEXT_MUTED.r, TEXT_MUTED.g, TEXT_MUTED.b, 0.55))
 	btn.add_theme_font_size_override("font_size", font_size)
 	if use_serif:
 		btn.add_theme_font_override("font", get_serif_font(2, true))
@@ -287,9 +375,9 @@ static func style_line_edit(le: LineEdit) -> void:
 		return
 	var normal := StyleBoxFlat.new()
 	normal.bg_color = SURFACE_LOWEST
-	normal.border_color = OUTLINE_VARIANT
+	normal.border_color = BORDER_INTERACTIVE
 	normal.set_border_width_all(1)
-	normal.set_corner_radius_all(3)
+	normal.set_corner_radius_all(2)
 	normal.content_margin_left = 10.0
 	normal.content_margin_right = 10.0
 	normal.content_margin_top = 8.0
@@ -297,13 +385,13 @@ static func style_line_edit(le: LineEdit) -> void:
 
 	var focus := normal.duplicate() as StyleBoxFlat
 	focus.bg_color = SURFACE_LOW
-	focus.border_color = ACCENT
+	focus.border_color = PRIMARY
 	focus.set_border_width_all(2)
 
 	le.add_theme_stylebox_override("normal", normal)
 	le.add_theme_stylebox_override("focus", focus)
 	le.add_theme_color_override("font_color", ON_SURFACE)
-	le.add_theme_color_override("font_placeholder_color", OUTLINE)
+	le.add_theme_color_override("font_placeholder_color", TEXT_MUTED)
 	le.add_theme_color_override("caret_color", PRIMARY)
 	le.add_theme_color_override("selection_color", Color(PRIMARY_CONTAINER.r, PRIMARY_CONTAINER.g, PRIMARY_CONTAINER.b, 0.65))
 	le.add_theme_font_override("font", get_mono_font())
@@ -315,7 +403,7 @@ static func style_option_button(opt: OptionButton) -> void:
 	style_button(opt, "secondary", 13, false)
 	var popup: PopupMenu = opt.get_popup()
 	if popup:
-		var panel := make_panel_style(SURFACE, OUTLINE_VARIANT, 3, 1, 6, 6)
+		var panel := make_minimal_panel_style(SURFACE, BORDER_INTERACTIVE, 2, 6, 6)
 		var hover := StyleBoxFlat.new()
 		hover.bg_color = PRIMARY_CONTAINER
 		hover.set_corner_radius_all(2)
@@ -330,21 +418,25 @@ static func style_check_button(chk: CheckButton) -> void:
 	if not chk:
 		return
 	var normal := StyleBoxFlat.new()
-	normal.bg_color = SURFACE_LOW
-	normal.border_color = OUTLINE_VARIANT
+	normal.bg_color = Color(0.0, 0.0, 0.0, 0.0)
+	normal.border_color = BORDER_SUBTLE
 	normal.set_border_width_all(1)
-	normal.set_corner_radius_all(3)
+	normal.set_corner_radius_all(2)
 	normal.content_margin_left = 10.0
 	normal.content_margin_right = 10.0
-	normal.content_margin_top = 6.0
-	normal.content_margin_bottom = 6.0
+	normal.content_margin_top = 8.0
+	normal.content_margin_bottom = 8.0
 	var hover := normal.duplicate() as StyleBoxFlat
-	hover.bg_color = SURFACE_HIGH
-	hover.border_color = ACCENT
+	hover.bg_color = SURFACE_LOW
+	hover.border_color = BORDER_INTERACTIVE
+	var focus := hover.duplicate() as StyleBoxFlat
+	focus.border_color = PRIMARY
+	focus.set_border_width_all(2)
+	chk.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	chk.add_theme_stylebox_override("normal", normal)
 	chk.add_theme_stylebox_override("hover", hover)
 	chk.add_theme_stylebox_override("pressed", hover)
-	chk.add_theme_stylebox_override("focus", hover)
+	chk.add_theme_stylebox_override("focus", focus)
 	chk.add_theme_stylebox_override("hover_pressed", hover)
 	chk.add_theme_color_override("font_color", ON_SURFACE)
 	chk.add_theme_color_override("font_hover_color", ON_PRIMARY_CONTAINER)
@@ -401,6 +493,7 @@ static func style_slider(slider: HSlider) -> void:
 	var area_hi := area.duplicate() as StyleBoxFlat
 	area_hi.bg_color = ACCENT
 
+	slider.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	slider.add_theme_stylebox_override("slider", rail)
 	slider.add_theme_stylebox_override("grabber_area", area)
 	slider.add_theme_stylebox_override("grabber_area_highlight", area_hi)
@@ -414,15 +507,14 @@ static func style_scroll_container(sc: ScrollContainer) -> void:
 	if not vbar:
 		return
 	var track := StyleBoxFlat.new()
-	track.bg_color = SURFACE_LOWEST
-	track.border_color = Color(OUTLINE_VARIANT.r, OUTLINE_VARIANT.g, OUTLINE_VARIANT.b, 0.45)
-	track.set_border_width_all(1)
+	track.bg_color = Color(SURFACE_LOWEST.r, SURFACE_LOWEST.g, SURFACE_LOWEST.b, 0.55)
+	track.set_border_width_all(0)
 	track.set_corner_radius_all(2)
-	track.content_margin_left = 4.0
-	track.content_margin_right = 4.0
+	track.content_margin_left = 3.0
+	track.content_margin_right = 3.0
 
 	var grab := StyleBoxFlat.new()
-	grab.bg_color = OUTLINE_VARIANT
+	grab.bg_color = BORDER_INTERACTIVE
 	grab.set_corner_radius_all(2)
 
 	var grab_hi := StyleBoxFlat.new()

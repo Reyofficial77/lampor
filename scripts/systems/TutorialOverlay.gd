@@ -6,7 +6,6 @@ var content_box: VBoxContainer
 var step_badge: Label
 var title_label: Label
 var body_label: Label
-var goal_chip: PanelContainer
 var goal_label: Label
 var next_btn: Button
 var min_btn: Button
@@ -40,20 +39,18 @@ func _build_ui() -> void:
 	card.mouse_filter = Control.MOUSE_FILTER_PASS
 	card.add_theme_stylebox_override(
 		"panel",
-		HorrorTheme.make_panel_style(
-			Color(HorrorTheme.SURFACE.r, HorrorTheme.SURFACE.g, HorrorTheme.SURFACE.b, 0.78),
-			HorrorTheme.ACCENT,
-			3,
-			1,
-			10,
-			8
+		HorrorTheme.make_minimal_panel_style(
+			Color(0.08, 0.042, 0.04, 0.84),
+			HorrorTheme.BORDER_INTERACTIVE,
+			2,
+			12,
+			9
 		)
 	)
-	HorrorTheme.attach_corner_ornaments(card, HorrorTheme.PRIMARY, 7.0, 1.2, 3.0, false)
 	add_child(card)
 
 	var outer_vbox := VBoxContainer.new()
-	outer_vbox.add_theme_constant_override("separation", 4)
+	outer_vbox.add_theme_constant_override("separation", 5)
 	outer_vbox.mouse_filter = Control.MOUSE_FILTER_PASS
 	card.add_child(outer_vbox)
 
@@ -62,36 +59,39 @@ func _build_ui() -> void:
 	outer_vbox.add_child(top_row)
 
 	step_badge = Label.new()
-	step_badge.text = "◆ TUTORIAL · 1/7"
+	step_badge.text = "TUTORIAL · 1/7"
 	step_badge.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	HorrorTheme.style_label(step_badge, "label-lg", HorrorTheme.PRIMARY, 10)
+	HorrorTheme.style_label(step_badge, "mono-sm", HorrorTheme.PRIMARY, 10)
 	top_row.add_child(step_badge)
 
 	min_btn = Button.new()
-	min_btn.text = "–"
-	min_btn.custom_minimum_size = Vector2(24.0, 22.0)
-	HorrorTheme.style_button(min_btn, "ghost", 10, false)
+	min_btn.text = "-"
+	min_btn.tooltip_text = "Perkecil / perbesar panduan"
+	min_btn.custom_minimum_size = Vector2(32.0, 30.0)
+	HorrorTheme.style_button(min_btn, "ghost", 12, false)
 	min_btn.pressed.connect(_toggle_minimize)
 	top_row.add_child(min_btn)
 
 	next_btn = Button.new()
-	next_btn.text = "LANJUT ▶"
-	next_btn.custom_minimum_size = Vector2(64.0, 22.0)
-	HorrorTheme.style_button(next_btn, "secondary", 9, true)
+	next_btn.text = "LANJUT"
+	next_btn.custom_minimum_size = Vector2(64.0, 30.0)
+	HorrorTheme.style_button(next_btn, "secondary", 10, true)
 	next_btn.pressed.connect(_on_next_pressed)
 	top_row.add_child(next_btn)
 
 	skip_btn = Button.new()
 	skip_btn.text = "TUTUP"
-	skip_btn.custom_minimum_size = Vector2(52.0, 22.0)
-	HorrorTheme.style_button(skip_btn, "ghost", 9, true)
+	skip_btn.custom_minimum_size = Vector2(56.0, 30.0)
+	HorrorTheme.style_button(skip_btn, "ghost", 10, true)
 	skip_btn.pressed.connect(_on_skip_pressed)
 	top_row.add_child(skip_btn)
 
 	content_box = VBoxContainer.new()
-	content_box.add_theme_constant_override("separation", 3)
+	content_box.add_theme_constant_override("separation", 4)
 	content_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	outer_vbox.add_child(content_box)
+
+	content_box.add_child(HorrorTheme.make_hairline_divider(Color(HorrorTheme.OUTLINE_VARIANT.r, HorrorTheme.OUTLINE_VARIANT.g, HorrorTheme.OUTLINE_VARIANT.b, 0.45)))
 
 	title_label = Label.new()
 	title_label.custom_minimum_size.x = 320.0
@@ -105,31 +105,18 @@ func _build_ui() -> void:
 	HorrorTheme.style_label(body_label, "body-md", HorrorTheme.ON_SURFACE_VARIANT, 11)
 	content_box.add_child(body_label)
 
-	goal_chip = PanelContainer.new()
-	goal_chip.add_theme_stylebox_override(
-		"panel",
-		HorrorTheme.make_chip_style(
-			Color(HorrorTheme.SURFACE_LOWEST.r, HorrorTheme.SURFACE_LOWEST.g, HorrorTheme.SURFACE_LOWEST.b, 0.82),
-			HorrorTheme.OUTLINE_VARIANT,
-			2,
-			6,
-			3
-		)
-	)
-	content_box.add_child(goal_chip)
-
 	goal_label = Label.new()
-	goal_label.custom_minimum_size.x = 306.0
+	goal_label.custom_minimum_size.x = 320.0
 	goal_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	HorrorTheme.style_label(goal_label, "label-sm", HorrorTheme.RELIC_BRASS, 10)
-	goal_chip.add_child(goal_label)
+	HorrorTheme.style_label(goal_label, "label-sm", HorrorTheme.RELIC_BRASS, 11)
+	content_box.add_child(goal_label)
 
 func _toggle_minimize() -> void:
 	is_minimized = not is_minimized
 	if content_box:
 		content_box.visible = not is_minimized
 	if min_btn:
-		min_btn.text = "+" if is_minimized else "–"
+		min_btn.text = "+" if is_minimized else "-"
 	_apply_layout()
 
 func _is_touch() -> bool:
@@ -144,6 +131,13 @@ func _apply_layout() -> void:
 	var touch: bool = _is_touch()
 	var compact: bool = view_size.x < 750.0
 	var card_w: float = clampf(view_size.x * (0.30 if touch else 0.31), 240.0, 360.0)
+	var btn_h: float = 44.0 if touch else 30.0
+	if min_btn:
+		min_btn.custom_minimum_size = Vector2(44.0 if touch else 32.0, btn_h)
+	if next_btn:
+		next_btn.custom_minimum_size = Vector2(64.0, btn_h)
+	if skip_btn:
+		skip_btn.custom_minimum_size = Vector2(56.0, btn_h)
 
 	var x_pos: float = (view_size.x - card_w) * 0.5
 	if touch:
@@ -209,7 +203,7 @@ func _process(_delta: float) -> void:
 		_advance_to_step(7)
 	elif current_step == 7 and GameManager.furnace_burning:
 		GameManager.mark_tutorial_completed()
-		goal_label.text = "▶ Bertahanlah %d detik hingga pembakaran ritual selesai!" % int(GameManager.furnace_total_time)
+		goal_label.text = "Target: Bertahanlah %d detik hingga pembakaran ritual selesai." % int(GameManager.furnace_total_time)
 
 func _count_total_inventory_items(slots: Array) -> int:
 	var total: int = 0
@@ -274,36 +268,36 @@ func _refresh_step_content() -> void:
 	if not step_badge or not title_label or not body_label or not goal_label:
 		return
 	var touch: bool = _is_touch()
-	step_badge.text = "◆ TUTORIAL PEMULA · %d/%d" % [current_step, TOTAL_STEPS]
-	next_btn.text = "SELESAI" if current_step == TOTAL_STEPS else "LANJUT ▶"
+	step_badge.text = "TUTORIAL · %d/%d" % [current_step, TOTAL_STEPS]
+	next_btn.text = "SELESAI" if current_step == TOTAL_STEPS else "LANJUT"
 
 	match current_step:
 		1:
 			title_label.text = "1. Pergerakan & Senter"
 			body_label.text = "Joystick kiri untuk jalan, ikon Lari untuk sprint, dan ikon Senter untuk lampu." if touch else "[W/A/S/D] untuk jalan, [Shift] untuk lari, [Mouse] menoleh, dan [F] menyalakan Senter."
-			goal_label.text = "▶ Berjalanlah beberapa langkah di jalan desa."
+			goal_label.text = "Target: Berjalanlah beberapa langkah di jalan desa."
 		2:
 			title_label.text = "2. Ambil & Pakai Barang [E]"
 			body_label.text = "Ketuk ikon Tangan untuk semua interaksi: ambil barang, buka pintu, sembunyi, atau minum Jamu yang dipilih di hotbar." if touch else "Tekan [E] untuk semua interaksi: ambil barang, buka pintu, sembunyi, atau minum Jamu/Baterai di hotbar [1-5]."
-			goal_label.text = "▶ Ambil 1 barang di sekitar desa (Minyak / Papan)."
+			goal_label.text = "Target: Ambil 1 barang di sekitar desa (Minyak / Papan)."
 		3:
 			title_label.text = "3. Nyalakan 5 Obor Penolak Bala"
 			body_label.text = "Bawa Minyak Tanah & Korek, dekati obor padam di pinggir jalan, lalu tekan [E]. Cahaya obor memulihkan Waras."
-			goal_label.text = "▶ Nyalakan Obor Penolak Bala (%d/5)." % GameManager.torches_lit
+			goal_label.text = "Target: Nyalakan Obor Penolak Bala (%d/5)." % GameManager.torches_lit
 		4:
 			title_label.text = "4. Barikade 3 Pintu & Lemari Sembunyi"
 			body_label.text = "Pilih Papan & Paku di hotbar, berdiri di luar pintu rumah yang tertutup, lalu tekan [E]. Di dalam rumah ada Lemari untuk bersembunyi."
-			goal_label.text = "▶ Palang Pintu Rumah (%d/3)." % GameManager.doors_barricaded
+			goal_label.text = "Target: Palang Pintu Rumah (%d/3)." % GameManager.doors_barricaded
 		5:
 			title_label.text = "5. Selesaikan Pertahanan Babak I"
 			body_label.text = "Selesaikan 5 Obor dan 3 Barikade Pintu sebelum 02.30 WIB untuk memulai Babak II."
-			goal_label.text = "▶ Obor %d/5  ·  Barikade Pintu %d/3." % [GameManager.torches_lit, GameManager.doors_barricaded]
+			goal_label.text = "Target: Obor %d/5  ·  Barikade Pintu %d/3." % [GameManager.torches_lit, GameManager.doors_barricaded]
 		6:
-			title_label.text = "6. LARANGAN: Jangan Menatap Lampor!"
-			body_label.text = "DILARANG menatap Keranda Hijau Lampor! Saat lonceng dekat, palingkan pandangan, matikan senter [F], dan sembunyi sambil mencari 4 Benda Ritual."
-			goal_label.text = "▶ Kumpulkan 4 Benda Ritual (%d/4) tanpa menatap Lampor!" % GameManager.get_ritual_item_count()
+			title_label.text = "6. Jangan Menatap Lampor"
+			body_label.text = "Dilarang menatap Keranda Hijau Lampor. Saat lonceng dekat, palingkan pandangan, matikan senter [F], dan sembunyi sambil mencari 4 Benda Ritual."
+			goal_label.text = "Target: Kumpulkan 4 Benda Ritual (%d/4) tanpa menatap Lampor." % GameManager.get_ritual_item_count()
 		7:
-			title_label.text = "7. Bakar di Tungku Sebelum 05.00 WIB!"
-			body_label.text = "Bakar 4 Benda Ritual di Tungku Balai Desa [E] & bertahan %d detik. Jika pukul 05.00 WIB tiba sebelum tuntas, Lampor langsung melahapmu!" % int(GameManager.furnace_total_time)
-			goal_label.text = "▶ Bakar Benda Ritual di Tungku Balai Desa dengan [E]!"
+			title_label.text = "7. Bakar di Tungku Sebelum 05.00 WIB"
+			body_label.text = "Bakar 4 Benda Ritual di Tungku Balai Desa [E] dan bertahan %d detik sebelum pukul 05.00 WIB tiba." % int(GameManager.furnace_total_time)
+			goal_label.text = "Target: Bakar Benda Ritual di Tungku Balai Desa dengan [E]."
 	_apply_layout()

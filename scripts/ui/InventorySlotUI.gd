@@ -23,6 +23,7 @@ func setup(p_index: int, p_is_hotbar: bool = false, p_key_text: String = "") -> 
 	size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	size_flags_vertical = Control.SIZE_SHRINK_CENTER
 
+	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	_apply_normal_style()
 
 	var vbox := VBoxContainer.new()
@@ -108,15 +109,10 @@ func _refresh_visual_state() -> void:
 		return
 	style = style.duplicate() as StyleBoxFlat
 
-	var ornament_col := Color(HorrorTheme.OUTLINE_VARIANT.r, HorrorTheme.OUTLINE_VARIANT.g, HorrorTheme.OUTLINE_VARIANT.b, 0.45)
-	var show_diamond: bool = false
-
 	if is_selected_for_swap:
-		style.bg_color = Color(HorrorTheme.PRIMARY_CONTAINER.r, HorrorTheme.PRIMARY_CONTAINER.g, HorrorTheme.PRIMARY_CONTAINER.b, 0.96)
+		style.bg_color = Color(HorrorTheme.PRIMARY_CONTAINER.r, HorrorTheme.PRIMARY_CONTAINER.g, HorrorTheme.PRIMARY_CONTAINER.b, 0.92)
 		style.border_color = HorrorTheme.PRIMARY
 		style.set_border_width_all(2)
-		ornament_col = HorrorTheme.PRIMARY
-		show_diamond = true
 		if name_label:
 			name_label.add_theme_color_override("font_color", HorrorTheme.ON_PRIMARY_CONTAINER)
 		if qty_label:
@@ -124,11 +120,9 @@ func _refresh_visual_state() -> void:
 		if key_label:
 			key_label.add_theme_color_override("font_color", HorrorTheme.PRIMARY)
 	elif is_hotbar and is_equipped:
-		style.bg_color = Color(HorrorTheme.SECONDARY_CONTAINER.r, HorrorTheme.SECONDARY_CONTAINER.g, HorrorTheme.SECONDARY_CONTAINER.b, 0.95)
+		style.bg_color = Color(HorrorTheme.SECONDARY_CONTAINER.r, HorrorTheme.SECONDARY_CONTAINER.g, HorrorTheme.SECONDARY_CONTAINER.b, 0.88)
 		style.border_color = HorrorTheme.ACCENT
 		style.set_border_width_all(2)
-		ornament_col = HorrorTheme.PRIMARY
-		show_diamond = true
 		if name_label:
 			name_label.add_theme_color_override("font_color", HorrorTheme.ON_PRIMARY_CONTAINER if not item_data.is_empty() else HorrorTheme.ON_SURFACE_VARIANT)
 		if qty_label:
@@ -136,22 +130,19 @@ func _refresh_visual_state() -> void:
 		if key_label:
 			key_label.add_theme_color_override("font_color", HorrorTheme.PRIMARY)
 	elif item_data.is_empty():
-		style.bg_color = Color(HorrorTheme.SURFACE_LOWEST.r, HorrorTheme.SURFACE_LOWEST.g, HorrorTheme.SURFACE_LOWEST.b, 0.88)
-		style.border_color = Color(HorrorTheme.OUTLINE_VARIANT.r, HorrorTheme.OUTLINE_VARIANT.g, HorrorTheme.OUTLINE_VARIANT.b, 0.65)
+		style.bg_color = Color(HorrorTheme.SURFACE_LOWEST.r, HorrorTheme.SURFACE_LOWEST.g, HorrorTheme.SURFACE_LOWEST.b, 0.85)
+		style.border_color = Color(HorrorTheme.OUTLINE_VARIANT.r, HorrorTheme.OUTLINE_VARIANT.g, HorrorTheme.OUTLINE_VARIANT.b, 0.55)
 		style.set_border_width_all(1)
-		ornament_col = Color(HorrorTheme.OUTLINE_VARIANT.r, HorrorTheme.OUTLINE_VARIANT.g, HorrorTheme.OUTLINE_VARIANT.b, 0.35)
 		if name_label:
-			name_label.add_theme_color_override("font_color", Color(HorrorTheme.OUTLINE.r, HorrorTheme.OUTLINE.g, HorrorTheme.OUTLINE.b, 0.72))
+			name_label.add_theme_color_override("font_color", HorrorTheme.TEXT_MUTED)
 		if qty_label:
-			qty_label.add_theme_color_override("font_color", HorrorTheme.OUTLINE)
+			qty_label.add_theme_color_override("font_color", HorrorTheme.TEXT_MUTED)
 		if key_label:
-			key_label.add_theme_color_override("font_color", HorrorTheme.OUTLINE)
+			key_label.add_theme_color_override("font_color", HorrorTheme.TEXT_MUTED)
 	else:
-		style.bg_color = Color(HorrorTheme.SURFACE_LOW.r, HorrorTheme.SURFACE_LOW.g, HorrorTheme.SURFACE_LOW.b, 0.96)
-		style.border_color = HorrorTheme.OUTLINE
+		style.bg_color = Color(HorrorTheme.SURFACE_LOW.r, HorrorTheme.SURFACE_LOW.g, HorrorTheme.SURFACE_LOW.b, 0.94)
+		style.border_color = HorrorTheme.BORDER_INTERACTIVE
 		style.set_border_width_all(1)
-		style.border_width_bottom = 2
-		ornament_col = HorrorTheme.ACCENT
 		if name_label:
 			name_label.add_theme_color_override("font_color", HorrorTheme.ON_SURFACE)
 		if qty_label:
@@ -160,7 +151,6 @@ func _refresh_visual_state() -> void:
 			key_label.add_theme_color_override("font_color", HorrorTheme.SECONDARY)
 
 	add_theme_stylebox_override("panel", style)
-	HorrorTheme.attach_corner_ornaments(self, ornament_col, 7.0, 1.4, 3.0, show_diamond)
 
 func _get_drag_data(_at_position: Vector2) -> Variant:
 	if item_data.is_empty():
@@ -168,9 +158,8 @@ func _get_drag_data(_at_position: Vector2) -> Variant:
 
 	var preview := PanelContainer.new()
 	preview.custom_minimum_size = Vector2(92, 54)
-	var p_style := HorrorTheme.make_panel_style(HorrorTheme.SURFACE, HorrorTheme.ACCENT, 3, 2, 8, 6)
+	var p_style := HorrorTheme.make_minimal_panel_style(HorrorTheme.SURFACE, HorrorTheme.ACCENT, 2, 8, 6)
 	preview.add_theme_stylebox_override("panel", p_style)
-	HorrorTheme.attach_corner_ornaments(preview, HorrorTheme.PRIMARY, 7.0, 1.4, 3.0, false)
 
 	var pvbox := VBoxContainer.new()
 	pvbox.alignment = BoxContainer.ALIGNMENT_CENTER

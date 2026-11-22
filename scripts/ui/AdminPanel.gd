@@ -208,16 +208,14 @@ func _build_ui() -> void:
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	panel.add_theme_stylebox_override(
 		"panel",
-		HorrorTheme.make_panel_style(
-			Color(HorrorTheme.SURFACE.r, HorrorTheme.SURFACE.g, HorrorTheme.SURFACE.b, 0.88),
-			HorrorTheme.ACCENT,
-			3,
-			1,
+		HorrorTheme.make_minimal_panel_style(
+			Color(0.086, 0.045, 0.043, 0.94),
+			HorrorTheme.BORDER_INTERACTIVE,
+			2,
 			10,
 			8
 		)
 	)
-	HorrorTheme.attach_corner_ornaments(panel, HorrorTheme.PRIMARY, 7.0, 1.3, 3.0, false)
 	root_control.add_child(panel)
 
 	var main_vbox := VBoxContainer.new()
@@ -229,7 +227,7 @@ func _build_ui() -> void:
 	drag_header.mouse_default_cursor_shape = Control.CURSOR_MOVE
 	drag_header.add_theme_stylebox_override(
 		"panel",
-		HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOWEST, HorrorTheme.ACCENT, 2, 8, 4)
+		HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOWEST, HorrorTheme.BORDER_SUBTLE, 2, 8, 4)
 	)
 	drag_header.gui_input.connect(_on_header_gui_input)
 	main_vbox.add_child(drag_header)
@@ -240,7 +238,7 @@ func _build_ui() -> void:
 	drag_header.add_child(header_row)
 
 	var title := Label.new()
-	title.text = "◆ ADMIN [ALT+F2]"
+	title.text = "ADMIN [ALT+F2]"
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	HorrorTheme.style_label(title, "label-lg", HorrorTheme.PRIMARY, 10)
@@ -528,15 +526,14 @@ func _build_ui() -> void:
 
 	var flag_tut_btn := _make_admin_btn("MODE PEMULA: ON", "secondary")
 	flag_tut_btn.pressed.connect(func() -> void:
-		GameManager.tutorial_completed = false
-		GameManager.save_game_data()
+		GameManager.set_tutorial_completed_override(false)
 		_set_status("Tutorial Pemula aktif untuk permainan berikutnya.")
 	)
 	row_tut.add_child(flag_tut_btn)
 
 	var skip_tut_btn := _make_admin_btn("MODE PEMULA: OFF", "ghost")
 	skip_tut_btn.pressed.connect(func() -> void:
-		GameManager.mark_tutorial_completed()
+		GameManager.set_tutorial_completed_override(true)
 		_set_status("Tutorial Pemula dilewati (langsung pilih kesulitan).")
 	)
 	row_tut.add_child(skip_tut_btn)
@@ -550,8 +547,8 @@ func _build_ui() -> void:
 
 func _make_section_label(txt: String) -> Label:
 	var lbl := Label.new()
-	lbl.text = "── " + txt
-	HorrorTheme.style_label(lbl, "label-lg", HorrorTheme.ACCENT, 9)
+	lbl.text = txt
+	HorrorTheme.style_label(lbl, "label-lg", HorrorTheme.PRIMARY, 9)
 	return lbl
 
 func _make_admin_btn(txt: String, variant: String = "secondary", min_w: float = 0.0) -> Button:

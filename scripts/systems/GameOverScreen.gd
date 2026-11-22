@@ -11,10 +11,8 @@ extends Control
 
 var backdrop: Control
 var anim_time: float = 0.0
-var card_panel: PanelContainer
-var card_margin: MarginContainer
-var card_vbox: VBoxContainer
-var eyebrow_label: Label
+var content_vbox: VBoxContainer
+var rule_line: ColorRect
 var reward_label: Label
 
 func _ready() -> void:
@@ -37,19 +35,17 @@ func _ready() -> void:
 
 	get_viewport().size_changed.connect(_apply_layout)
 	_apply_layout()
-	HorrorTheme.animate_surface_enter(card_panel)
+	HorrorTheme.animate_surface_enter(content_vbox)
+	retry_btn.call_deferred("grab_focus")
 
 func _process(delta: float) -> void:
 	anim_time += delta
 	if backdrop:
 		backdrop.queue_redraw()
-	if title_label:
-		var pulse: float = 0.5 + 0.5 * sin(anim_time * 2.4)
-		title_label.modulate = Color(1.0, lerpf(0.84, 1.0, pulse), lerpf(0.84, 1.0, pulse), 1.0)
 
 func _build_horror_layout() -> void:
 	if background:
-		background.color = HorrorTheme.BACKGROUND
+		background.color = Color("100606")
 
 	backdrop = Control.new()
 	backdrop.name = "DeathBackdrop"
@@ -65,66 +61,45 @@ func _build_horror_layout() -> void:
 	center.mouse_filter = Control.MOUSE_FILTER_PASS
 	add_child(center)
 
-	card_panel = PanelContainer.new()
-	card_panel.name = "DeathRelicCard"
-	var p_style := HorrorTheme.make_panel_style(
-		Color(HorrorTheme.SURFACE.r, HorrorTheme.SURFACE.g, HorrorTheme.SURFACE.b, 0.94),
-		HorrorTheme.OUTLINE_VARIANT,
-		4,
-		2
-	)
-	card_panel.add_theme_stylebox_override("panel", p_style)
-	HorrorTheme.attach_corner_ornaments(card_panel, HorrorTheme.ACCENT, 14.0, 2.0, 5.0, true)
-	center.add_child(card_panel)
+	content_vbox = VBoxContainer.new()
+	content_vbox.name = "DeathContent"
+	content_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	content_vbox.add_theme_constant_override("separation", 16)
+	center.add_child(content_vbox)
 
-	card_margin = MarginContainer.new()
-	card_margin.add_theme_constant_override("margin_left", 32)
-	card_margin.add_theme_constant_override("margin_right", 32)
-	card_margin.add_theme_constant_override("margin_top", 28)
-	card_margin.add_theme_constant_override("margin_bottom", 28)
-	card_panel.add_child(card_margin)
-
-	card_vbox = VBoxContainer.new()
-	card_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	card_vbox.add_theme_constant_override("separation", 14)
-	card_margin.add_child(card_vbox)
-
-	eyebrow_label = Label.new()
-	eyebrow_label.text = "TAKDIR MALAM JAHANAM"
-	eyebrow_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	HorrorTheme.style_label(eyebrow_label, "label-lg", HorrorTheme.ACCENT, 12)
-	card_vbox.add_child(eyebrow_label)
-
-	title_box.reparent(card_vbox)
+	title_box.reparent(content_vbox)
+	title_box.alignment = BoxContainer.ALIGNMENT_CENTER
 	title_box.add_theme_constant_override("separation", 12)
-	HorrorTheme.style_label(title_label, "display", HorrorTheme.PRIMARY, 34)
+	HorrorTheme.style_label(title_label, "display", HorrorTheme.ACCENT, 34)
+	title_label.add_theme_constant_override("outline_size", 6)
 	title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+
+	rule_line = ColorRect.new()
+	rule_line.color = Color(HorrorTheme.ACCENT.r, HorrorTheme.ACCENT.g, HorrorTheme.ACCENT.b, 0.50)
+	rule_line.custom_minimum_size = Vector2(110.0, 1.0)
+	rule_line.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	rule_line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	title_box.add_child(rule_line)
+	title_box.move_child(rule_line, 1)
+
 	HorrorTheme.style_label(reason_label, "body-lg", HorrorTheme.ON_SURFACE, 16)
 	reason_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-
-	card_vbox.add_child(HorrorTheme.create_ritual_divider("◆", HorrorTheme.ACCENT))
-
-	var reward_chip := PanelContainer.new()
-	reward_chip.add_theme_stylebox_override(
-		"panel",
-		HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOW, HorrorTheme.OUTLINE_VARIANT, 3, 14, 8)
-	)
-	card_vbox.add_child(reward_chip)
 
 	reward_label = Label.new()
 	reward_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	reward_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	HorrorTheme.style_label(reward_label, "mono-sm", HorrorTheme.RELIC_BRASS, 13)
-	reward_chip.add_child(reward_label)
+	content_vbox.add_child(reward_label)
 
-	buttons_box.reparent(card_vbox)
+	buttons_box.reparent(content_vbox)
+	buttons_box.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	buttons_box.add_theme_constant_override("separation", 10)
 	retry_btn.text = "COBA LAGI"
-	retry_btn.custom_minimum_size = Vector2(0, 46)
+	retry_btn.custom_minimum_size = Vector2(240.0, 44.0)
 	HorrorTheme.style_button(retry_btn, "primary", 14, true)
 	menu_btn.text = "KEMBALI KE MENU"
-	menu_btn.custom_minimum_size = Vector2(0, 44)
-	HorrorTheme.style_button(menu_btn, "secondary", 14, true)
+	menu_btn.custom_minimum_size = Vector2(240.0, 44.0)
+	HorrorTheme.style_button(menu_btn, "ghost", 13, true)
 
 func _draw_death_backdrop() -> void:
 	if not backdrop:
@@ -133,15 +108,15 @@ func _draw_death_backdrop() -> void:
 	if s.x <= 0.0 or s.y <= 0.0:
 		return
 	var c: Vector2 = s * 0.5
-	var pulse: float = 0.5 + 0.5 * sin(anim_time * 1.8)
+	var pulse: float = 0.5 + 0.5 * sin(anim_time * 1.4)
 
-	# Kabut & aura merah darah di belakang panel
-	backdrop.draw_circle(c, minf(s.x, s.y) * 0.55, Color(HorrorTheme.SECONDARY_CONTAINER.r, HorrorTheme.SECONDARY_CONTAINER.g, HorrorTheme.SECONDARY_CONTAINER.b, 0.22 + pulse * 0.08))
-	backdrop.draw_circle(c, minf(s.x, s.y) * 0.34, Color(HorrorTheme.PRIMARY_CONTAINER.r, HorrorTheme.PRIMARY_CONTAINER.g, HorrorTheme.PRIMARY_CONTAINER.b, 0.14 + pulse * 0.06))
+	# Kabut gelap bernuansa darah redup di balik teks
+	backdrop.draw_circle(c, minf(s.x, s.y) * 0.52, Color(HorrorTheme.SECONDARY_CONTAINER.r, HorrorTheme.SECONDARY_CONTAINER.g, HorrorTheme.SECONDARY_CONTAINER.b, 0.14 + pulse * 0.04))
+	backdrop.draw_circle(c, minf(s.x, s.y) * 0.30, Color(HorrorTheme.PRIMARY_CONTAINER.r, HorrorTheme.PRIMARY_CONTAINER.g, HorrorTheme.PRIMARY_CONTAINER.b, 0.09 + pulse * 0.03))
 
-	# Siluet keranda samar di atas
-	var ky: float = s.y * 0.13 + sin(anim_time * 1.2) * 5.0
-	var kw: float = minf(s.x, s.y) * 0.14
+	# Siluet keranda samar di kegelapan atas
+	var ky: float = s.y * 0.14 + sin(anim_time * 1.1) * 4.0
+	var kw: float = minf(s.x, s.y) * 0.13
 	var kh: float = kw * 0.42
 	var keranda := PackedVector2Array([
 		Vector2(c.x - kw * 0.5, ky + kh * 0.35),
@@ -151,45 +126,27 @@ func _draw_death_backdrop() -> void:
 		Vector2(c.x + kw * 0.5, ky - kh * 0.10),
 		Vector2(c.x + kw * 0.5, ky + kh * 0.35)
 	])
-	backdrop.draw_colored_polygon(keranda, Color(HorrorTheme.KERANDA_GLOW.r, HorrorTheme.KERANDA_GLOW.g, HorrorTheme.KERANDA_GLOW.b, 0.22))
-	var eye_a: float = 0.45 + 0.45 * sin(anim_time * 3.2)
-	backdrop.draw_circle(Vector2(c.x - kw * 0.10, ky - kh * 0.02), 2.8, Color(HorrorTheme.ACCENT.r, HorrorTheme.ACCENT.g, HorrorTheme.ACCENT.b, eye_a))
-	backdrop.draw_circle(Vector2(c.x + kw * 0.10, ky - kh * 0.02), 2.8, Color(HorrorTheme.ACCENT.r, HorrorTheme.ACCENT.g, HorrorTheme.ACCENT.b, eye_a))
-
-	# Abu & percikan darah melayang
-	for i: int in range(18):
-		var seed_f: float = float(i) * 41.3
-		var px: float = fmod(seed_f * 23.0 + sin(anim_time * 0.7 + seed_f) * 24.0, s.x)
-		var py: float = fmod(anim_time * (14.0 + float(i % 4) * 5.0) + seed_f * 17.0, s.y)
-		backdrop.draw_circle(Vector2(px, py), 1.6 + float(i % 2), Color(HorrorTheme.ACCENT.r, HorrorTheme.ACCENT.g, HorrorTheme.ACCENT.b, 0.24))
-
-	# Vignette scrim di tepi layar
-	var scrim := Color(HorrorTheme.SCRIM.r, HorrorTheme.SCRIM.g, HorrorTheme.SCRIM.b, 0.72)
-	backdrop.draw_rect(Rect2(0.0, 0.0, s.x, 36.0), scrim)
-	backdrop.draw_rect(Rect2(0.0, s.y - 36.0, s.x, 36.0), scrim)
-	backdrop.draw_rect(Rect2(0.0, 0.0, 32.0, s.y), scrim)
-	backdrop.draw_rect(Rect2(s.x - 32.0, 0.0, 32.0, s.y), scrim)
-	backdrop.draw_rect(Rect2(14.0, 14.0, s.x - 28.0, s.y - 28.0), Color(HorrorTheme.OUTLINE_VARIANT.r, HorrorTheme.OUTLINE_VARIANT.g, HorrorTheme.OUTLINE_VARIANT.b, 0.35), false, 1.0)
+	backdrop.draw_colored_polygon(keranda, Color(HorrorTheme.KERANDA_GLOW.r, HorrorTheme.KERANDA_GLOW.g, HorrorTheme.KERANDA_GLOW.b, 0.16))
+	var eye_a: float = 0.35 + 0.35 * sin(anim_time * 2.8)
+	backdrop.draw_circle(Vector2(c.x - kw * 0.10, ky - kh * 0.02), 2.4, Color(HorrorTheme.ACCENT.r, HorrorTheme.ACCENT.g, HorrorTheme.ACCENT.b, eye_a))
+	backdrop.draw_circle(Vector2(c.x + kw * 0.10, ky - kh * 0.02), 2.4, Color(HorrorTheme.ACCENT.r, HorrorTheme.ACCENT.g, HorrorTheme.ACCENT.b, eye_a))
 
 func _apply_layout() -> void:
 	var view_size: Vector2 = get_viewport_rect().size
 	var compact: bool = view_size.x < 700.0
 	var short_screen: bool = view_size.y < 520.0
-	var card_w: float = clampf(view_size.x - 32.0, 280.0, 480.0)
-	var h_pad: int = 18 if compact else 24
-	var v_pad: int = 14 if short_screen else 20
-	if card_margin:
-		card_margin.add_theme_constant_override("margin_left", h_pad)
-		card_margin.add_theme_constant_override("margin_right", h_pad)
-		card_margin.add_theme_constant_override("margin_top", v_pad)
-		card_margin.add_theme_constant_override("margin_bottom", v_pad)
-	var inner_w: float = maxf(220.0, card_w - float(h_pad * 2))
-	title_label.custom_minimum_size.x = inner_w
-	reason_label.custom_minimum_size.x = inner_w
-	title_label.add_theme_font_size_override("font_size", 20 if compact else 28)
-	reason_label.add_theme_font_size_override("font_size", 13 if compact else 15)
-	if card_panel:
-		card_panel.custom_minimum_size = Vector2(card_w, 0.0)
-		card_panel.reset_size()
+	var max_text_w: float = clampf(view_size.x - 48.0, 260.0, 520.0)
+
+	if content_vbox:
+		content_vbox.add_theme_constant_override("separation", 10 if short_screen else 16)
+	title_label.custom_minimum_size.x = max_text_w
+	reason_label.custom_minimum_size.x = max_text_w
+	title_label.add_theme_font_size_override("font_size", 22 if short_screen else (26 if compact else 36))
+	reason_label.add_theme_font_size_override("font_size", 14 if compact or short_screen else 16)
+
+	var btn_w: float = minf(260.0, max_text_w)
+	retry_btn.custom_minimum_size = Vector2(btn_w, 44.0)
+	menu_btn.custom_minimum_size = Vector2(btn_w, 44.0)
+
 	if backdrop:
 		backdrop.queue_redraw()

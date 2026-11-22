@@ -62,6 +62,7 @@ var last_run_coin_reward: int = 0
 const WIN_COIN_REWARD: int = 120
 const LOSS_COIN_REWARD: int = 25
 const SAVE_PATH: String = "user://lampor_save.json"
+const SETTINGS_CONFIG_PATH: String = "user://lampor_settings.cfg"
 const RUN_SAVE_PATH: String = "user://lampor_run.json"
 const RUN_SAVE_TEMP_PATH: String = "user://lampor_run.json.tmp"
 const RUN_SAVE_BACKUP_PATH: String = "user://lampor_run.json.bak"
@@ -72,6 +73,9 @@ var has_saved_run_cache: bool = false
 var is_resuming_saved_run: bool = false
 var tutorial_completed: bool = false
 var is_tutorial_mode: bool = false
+var install_tutorial_state: String = ""
+var tutorial_origin_version: String = ""
+var tutorial_origin_commit: String = ""
 var admin_god_mode: bool = false
 var admin_panel: CanvasLayer = null
 
@@ -90,17 +94,37 @@ func _setup_admin_panel() -> void:
 		add_child(admin_panel)
 
 func load_save_data() -> void:
+	var current_version: String = str(ProjectSettings.get_setting("application/config/version", ""))
+	var current_commit: String = UpdateManager.BUILD_COMMIT
+	var has_prior_footprint: bool = UpdateManager.had_prior_user_data \
+		or UpdateManager.updated_on_this_boot \
+		or UpdateManager.pck_loaded_this_session \
+		or FileAccess.file_exists(SETTINGS_CONFIG_PATH) \
+		or not _read_run_snapshot().is_empty()
+
 	if not FileAccess.file_exists(SAVE_PATH):
 		total_wins = 0
 		coins = 0
 		extra_lives = 0
-		tutorial_completed = false
+		if has_prior_footprint:
+			tutorial_completed = true
+			install_tutorial_state = "skipped_on_update"
+		else:
+			tutorial_completed = false
+			install_tutorial_state = "fresh_pending"
+			tutorial_origin_version = current_version
+			tutorial_origin_commit = current_commit
+		save_game_data()
 		return
 	var file: FileAccess = FileAccess.open(SAVE_PATH, FileAccess.READ)
 	if not file:
+		tutorial_completed = true
+		install_tutorial_state = "skipped_on_update"
 		return
 	var json: JSON = JSON.new()
 	if json.parse(file.get_as_text()) != OK or not json.data is Dictionary:
+		tutorial_completed = true
+		install_tutorial_state = "skipped_on_update"
 		return
 	var data: Dictionary = json.data
 	total_wins = maxi(0, int(data.get("total_wins", 0)))
@@ -109,7 +133,6 @@ func load_save_data() -> void:
 		raw_coins = MAX_COINS if raw_coins < 0 else clampi(raw_coins, 0, MAX_COINS)
 	coins = clampi(raw_coins, 0, MAX_COINS)
 	extra_lives = clampi(int(data.get("extra_lives", 0)), 0, MAX_EXTRA_LIVES)
-	tutorial_completed = bool(data.get("tutorial_completed", false))
 	var saved_stash: Variant = data.get("item_stash", {})
 	if saved_stash is Dictionary:
 		item_stash["jamu"] = clampi(int(saved_stash.get("jamu", 0)), 0, MAX_SHOP_ITEM_QTY)
@@ -121,6 +144,43 @@ func load_save_data() -> void:
 			if not normalized.is_empty() and not redeemed_codes.has(normalized):
 				redeemed_codes.append(normalized)
 
+	var saved_tutorial_done: bool = bool(data.get("tutorial_completed", false))
+	var saved_tutorial_state: String = str(data.get("install_tutorial_state", ""))
+	tutorial_origin_version = str(data.get("tutorial_origin_version", ""))
+	tutorial_origin_commit = str(data.get("tutorial_origin_commit", ""))
+
+	var needs_migration_save: bool = false
+	if saved_tutorial_state == "admin_forced":
+		tutorial_completed = saved_tutorial_done
+		install_tutorial_state = "admin_forced"
+	elif saved_tutorial_state.is_empty():
+		# Save berasal dari versi sebelumnya (sebelum pelacakan fresh install): bukan fresh install.
+		tutorial_completed = true
+		install_tutorial_state = "completed" if saved_tutorial_done else "skipped_on_update"
+		needs_migration_save = true
+	elif saved_tutorial_done or saved_tutorial_state == "completed" or saved_tutorial_state == "skipped_on_update":
+		tutorial_completed = true
+		install_tutorial_state = "completed" if saved_tutorial_done else saved_tutorial_state
+	elif saved_tutorial_state == "fresh_pending":
+		var is_updated_build: bool = UpdateManager.updated_on_this_boot \
+			or UpdateManager.pck_loaded_this_session \
+			or (not tutorial_origin_version.is_empty() and tutorial_origin_version != current_version) \
+			or (not tutorial_origin_commit.is_empty() and tutorial_origin_commit != current_commit)
+		if is_updated_build or total_wins > 0:
+			tutorial_completed = true
+			install_tutorial_state = "skipped_on_update"
+			needs_migration_save = true
+		else:
+			tutorial_completed = false
+			install_tutorial_state = "fresh_pending"
+	else:
+		tutorial_completed = true
+		install_tutorial_state = "skipped_on_update"
+		needs_migration_save = true
+
+	if needs_migration_save:
+		save_game_data()
+
 func save_game_data() -> void:
 	coins = clampi(coins, 0, MAX_COINS)
 	var file: FileAccess = FileAccess.open(SAVE_PATH, FileAccess.WRITE)
@@ -131,6 +191,9 @@ func save_game_data() -> void:
 		"coins": coins,
 		"extra_lives": extra_lives,
 		"tutorial_completed": tutorial_completed,
+		"install_tutorial_state": install_tutorial_state,
+		"tutorial_origin_version": tutorial_origin_version,
+		"tutorial_origin_commit": tutorial_origin_commit,
 		"item_stash": item_stash,
 		"redeemed_codes": redeemed_codes
 	}
@@ -138,9 +201,15 @@ func save_game_data() -> void:
 	file.flush()
 
 func mark_tutorial_completed() -> void:
-	if not tutorial_completed:
+	if not tutorial_completed or install_tutorial_state != "completed":
 		tutorial_completed = true
+		install_tutorial_state = "completed"
 		save_game_data()
+
+func set_tutorial_completed_override(completed: bool) -> void:
+	tutorial_completed = completed
+	install_tutorial_state = "completed" if completed else "admin_forced"
+	save_game_data()
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_WM_GO_BACK_REQUEST or what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
@@ -650,12 +719,15 @@ func purchase_shop_item(item_id: String, quantity: int = 1) -> Dictionary:
 	return {"success": true, "message": "%s x%d berhasil dibeli." % [item_label, safe_quantity], "price": price}
 
 func redeem_code(raw_code: String) -> Dictionary:
-	var normalized: String = raw_code.strip_edges().to_upper()
+	var codes_script: Variant = ResourceLoader.load("res://scripts/systems/RedemptionCodes.gd", "", ResourceLoader.CACHE_MODE_IGNORE)
+	if codes_script == null:
+		codes_script = REDEMPTION_CODES
+	var normalized: String = codes_script.normalize_code(raw_code)
 	if normalized.is_empty():
 		return {"success": false, "message": "Masukkan kode redeem terlebih dahulu."}
 	if redeemed_codes.has(normalized):
 		return {"success": false, "message": "Kode ini sudah pernah digunakan."}
-	var reward: Dictionary = REDEMPTION_CODES.get_reward(normalized)
+	var reward: Dictionary = codes_script.get_reward(normalized)
 	if reward.is_empty():
 		return {"success": false, "message": "Kode redeem tidak valid."}
 	apply_reward(reward)
@@ -796,9 +868,6 @@ func start_tutorial_game() -> void:
 func start_new_game(diff: Difficulty = Difficulty.NORMAL, tutorial: bool = false) -> void:
 	clear_run_save()
 	is_resuming_saved_run = false
-	if not tutorial_completed and not tutorial:
-		tutorial = true
-		diff = Difficulty.EASY
 	is_tutorial_mode = tutorial
 	selected_difficulty = diff
 	run_reward_awarded = false
@@ -1126,6 +1195,8 @@ func _execute_player_death(reason: String, ignore_extra_lives: bool = false, byp
 		SignalBus.dialog_requested.emit("Nyawa tambahan terpakai! Kamu kembali ke desa. Sisa nyawa: %d" % extra_lives, 4.0)
 		return
 	# Koin kekalahan hanya diberikan ketika permainan benar-benar berakhir.
+	if is_tutorial_mode:
+		mark_tutorial_completed()
 	_award_run_coins(LOSS_COIN_REWARD)
 	clear_run_save()
 	current_state = GameState.GAMEOVER

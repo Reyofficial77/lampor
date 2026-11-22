@@ -21,6 +21,9 @@
 - **Fitur Tutorial Interaktif untuk Pemain Baru (Mode Easy) & Batas Aman Koin**:
   - Menambahkan sistem tutorial langkah-demi-langkah (7 tahap) pada mode `Easy` bagi pemain yang baru pertama kali bermain (dan dapat diakses kapan saja melalui menu pilihan tingkat kesulitan), mencakup latihan pergerakan & senter, pengambilan bekal, penyalaan obor, barikade pintu, larangan menatap Lampor, pengumpulan 4 benda ritual, hingga pembakaran di Tungku Balai Desa dengan panel ringkas yang dapat diperkecil (`[–]`).
   - Menambahkan batas maksimum penyimpanan koin (`999.999.999`) untuk mencegah *integer overflow* (nilai koin menjadi negatif) saat menerima hadiah kemenangan atau kekalahan.
+- **Perbaikan Redeem Kode `LAMPORGIFT` & Alur Mulai Permainan di Mobile**:
+  - Memastikan tombol **SAYA MENGERTI** setelah **MULAI PERMAINAN** selalu membuka modal **PILIH TINGKAT KESULITAN** (pemilihan mode permainan) alih-alih kembali ke menu utama atau langsung melompat ke tutorial.
+  - Memperbaiki sinkronisasi skrip kode redeem pada pembaruan `.pck` serta normalisasi input keyboard virtual mobile sehingga kode `LAMPORGIFT` terbaca valid dan langsung memberikan hadiah koin.
 
 ## v1.2.5
 

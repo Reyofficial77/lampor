@@ -50,6 +50,9 @@ const BUNDLED_FIX_NOTES: String = """# LAMPOR v1.2.6
 - **Fitur Tutorial Interaktif untuk Pemain Baru (Mode Easy) & Batas Aman Koin**:
   - Menambahkan sistem tutorial langkah-demi-langkah (7 tahap) pada mode `Easy` bagi pemain yang baru pertama kali bermain (dan dapat diakses kapan saja melalui menu pilihan tingkat kesulitan), mencakup latihan pergerakan & senter, pengambilan bekal, penyalaan obor, barikade pintu, larangan menatap Lampor, pengumpulan 4 benda ritual, hingga pembakaran di Tungku Balai Desa dengan panel ringkas yang dapat diperkecil (`[–]`).
   - Menambahkan batas maksimum penyimpanan koin (`999.999.999`) untuk mencegah *integer overflow* (nilai koin menjadi negatif) saat menerima hadiah kemenangan atau kekalahan.
+- **Perbaikan Redeem Kode `LAMPORGIFT` & Alur Mulai Permainan di Mobile**:
+  - Memastikan tombol **SAYA MENGERTI** setelah **MULAI PERMAINAN** selalu membuka modal **PILIH TINGKAT KESULITAN** (pemilihan mode permainan) alih-alih kembali ke menu utama atau langsung melompat ke tutorial.
+  - Memperbaiki sinkronisasi skrip kode redeem pada pembaruan `.pck` serta normalisasi input keyboard virtual mobile sehingga kode `LAMPORGIFT` terbaca valid dan langsung memberikan hadiah koin.
 
 ## v1.2.5
 
@@ -194,6 +197,8 @@ var is_downloading: bool = false
 var using_atom_fallback: bool = false
 var pck_loaded_this_session: bool = false
 var pck_pending_restart: bool = false
+var had_prior_user_data: bool = false
+var updated_on_this_boot: bool = false
 var _has_checked_this_session: bool = false
 var downloading_mode: String = ""
 var downloaded_path: String = ""
@@ -206,7 +211,33 @@ var fix_notes_request: HTTPRequest
 var periodic_check_timer: Timer
 
 func _init() -> void:
+	_detect_prior_user_data()
 	_prepare_and_mount_pck()
+
+func _detect_prior_user_data() -> void:
+	had_prior_user_data = FileAccess.file_exists(UPDATE_CONFIG_PATH) \
+		or FileAccess.file_exists(PCK_PATH) \
+		or FileAccess.file_exists(PENDING_PCK_PATH) \
+		or FileAccess.file_exists(TEMP_PCK_PATH) \
+		or FileAccess.file_exists(FIX_NOTES_CACHE_PATH) \
+		or DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(UPDATE_ROOT))
+	if FileAccess.file_exists(UPDATE_CONFIG_PATH):
+		var prev_cfg := ConfigFile.new()
+		if prev_cfg.load(UPDATE_CONFIG_PATH) == OK:
+			var cur_ver: String = str(ProjectSettings.get_setting("application/config/version", ""))
+			var prev_ver: String = str(prev_cfg.get_value("update", "base_version", prev_cfg.get_value("pck", "base_version", "")))
+			var prev_build: String = str(prev_cfg.get_value("pck", "base_build_commit", ""))
+			var prev_installed: String = str(prev_cfg.get_value("update", "installed_commit", ""))
+			var prev_active_pck: String = str(prev_cfg.get_value("pck", "active_commit", ""))
+			var prev_pending_pck: String = str(prev_cfg.get_value("pck", "pending_commit", ""))
+			if (not prev_ver.is_empty() and prev_ver != cur_ver) \
+				or (not prev_build.is_empty() and prev_build != BUILD_COMMIT) \
+				or (not _is_git_working_copy() and not prev_installed.is_empty() and prev_installed != BUILD_COMMIT) \
+				or not prev_active_pck.is_empty() \
+				or not prev_pending_pck.is_empty():
+				updated_on_this_boot = true
+	if FileAccess.file_exists(PENDING_PCK_PATH) or FileAccess.file_exists(PCK_PATH):
+		updated_on_this_boot = true
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -327,8 +358,29 @@ func _prepare_and_mount_pck() -> void:
 		if _is_valid_pck_file(PCK_PATH) and not active_pck_version.is_empty() and _compare_versions(active_pck_version, base_version) >= 0:
 			if ProjectSettings.load_resource_pack(PCK_PATH, true):
 				pck_loaded_this_session = true
+				_reload_patched_scripts()
 		else:
 			_remove_user_file(PCK_PATH)
+
+func _reload_patched_scripts() -> void:
+	for script_path: String in [
+		"res://scripts/systems/RedemptionCodes.gd",
+		"res://scripts/ui/HorrorTheme.gd"
+	]:
+		if not ResourceLoader.exists(script_path):
+			continue
+		var fresh_res: Resource = ResourceLoader.load(script_path, "", ResourceLoader.CACHE_MODE_IGNORE)
+		if fresh_res:
+			var gdc_path: String = script_path.get_basename() + ".gdc"
+			if ResourceLoader.exists(gdc_path):
+				fresh_res.take_over_path(gdc_path)
+			fresh_res.take_over_path(script_path)
+
+func _is_auto_update_enabled() -> bool:
+	var sm: Node = get_node_or_null("/root/SettingsManager")
+	if sm and "auto_update" in sm:
+		return bool(sm.get("auto_update"))
+	return true
 
 func _load_update_state() -> void:
 	var current_version: String = str(ProjectSettings.get_setting("application/config/version", ""))
@@ -389,7 +441,7 @@ func is_git_working_copy() -> bool:
 func _on_periodic_check_timeout() -> void:
 	if is_checking or is_downloading or is_fetching_pck_manifest:
 		return
-	if is_pck_update_mode() or (SettingsManager.auto_update and not _is_git_working_copy()):
+	if is_pck_update_mode() or (_is_auto_update_enabled() and not _is_git_working_copy()):
 		check_for_updates(true)
 
 func check_for_updates(force: bool = false) -> void:
@@ -567,7 +619,7 @@ func _handle_latest_commit(commit_sha: String, commit_message: String) -> void:
 	has_update = latest_commit != installed_commit
 	if has_update:
 		update_available.emit(latest_commit, latest_message)
-		if SettingsManager.auto_update and not _is_git_working_copy():
+		if _is_auto_update_enabled() and not _is_git_working_copy():
 			download_update()
 	else:
 		up_to_date.emit(latest_commit)
@@ -700,6 +752,9 @@ func _on_pck_downloaded(result: int, response_code: int) -> void:
 	pck_pending_restart = true
 	has_update = false
 	_save_update_state()
+	if not pck_loaded_this_session and ProjectSettings.load_resource_pack(PENDING_PCK_PATH, true):
+		pck_loaded_this_session = true
+		_reload_patched_scripts()
 	update_installed.emit(ProjectSettings.globalize_path(PENDING_PCK_PATH), applied_commit, true)
 
 func _is_valid_pck_file(path: String) -> bool:

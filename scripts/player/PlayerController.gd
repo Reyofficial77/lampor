@@ -50,6 +50,20 @@ var landing_dip: float = 0.0
 var look_sway: Vector2 = Vector2.ZERO
 var look_sway_target: Vector2 = Vector2.ZERO
 var equip_raise_blend: float = 1.0
+var visual_equipped_item_id: String = "flashlight"
+var _equip_prev_item_id: String = "flashlight"
+var _equip_switch_progress: float = 1.0
+var _equip_switch_duration: float = 0.44
+var _equip_swap_point: float = 0.44
+var _item_hold_blend: float = 1.0
+var _left_equip_blend: float = 0.0
+var _move_dir_local_smooth: Vector2 = Vector2.ZERO
+var _sprint_momentum: float = 0.0
+var _idle_fidget_wait: float = 4.5
+var _idle_fidget_timer: float = 0.0
+var _idle_fidget_duration: float = 1.25
+var _idle_fidget_kind: int = 0
+var _base_hand_prop_scale: Vector3 = Vector3.ONE
 
 # Footstep tracking
 var step_distance: float = 0.0
@@ -141,8 +155,13 @@ func _ready() -> void:
 	if not SignalBus.item_equipped.is_connected(_on_item_equipped):
 		SignalBus.item_equipped.connect(_on_item_equipped)
 	if inventory_system and inventory_system.has_method("get_equipped_item"):
-		_apply_equipped_item(inventory_system.get_equipped_item())
+		_apply_equipped_item(inventory_system.get_equipped_item(), true)
 	else:
+		visual_equipped_item_id = equipped_item_id
+		_equip_switch_progress = 1.0
+		_item_hold_blend = 1.0 if visual_equipped_item_id != "" else 0.0
+		_left_equip_blend = 1.0 if visual_equipped_item_id == "kentongan" else 0.0
+		_sync_hand_prop_visibility()
 		_sync_flashlight_state(true)
 
 	SignalBus.flashlight_battery_changed.emit(flashlight_battery, 100.0)
@@ -493,10 +512,36 @@ func _find_hotbar_slot_by_id(item_id: String) -> int:
 func _on_item_equipped(_slot_index: int, item_data: Dictionary) -> void:
 	_apply_equipped_item(item_data)
 
-func _apply_equipped_item(item_data: Dictionary) -> void:
+func _apply_equipped_item(item_data: Dictionary, instant: bool = false) -> void:
 	var next_id: String = str(item_data.get("id", ""))
+	if instant or not is_inside_tree():
+		equipped_item_id = next_id
+		visual_equipped_item_id = next_id
+		_equip_prev_item_id = next_id
+		_equip_switch_progress = 1.0
+		equip_raise_blend = 1.0
+		_item_hold_blend = 1.0 if next_id != "" else 0.0
+		_left_equip_blend = 1.0 if next_id == "kentongan" else 0.0
+		_sync_hand_prop_visibility()
+		_sync_flashlight_state(true)
+		if interaction_ray:
+			interaction_ray._update_prompt()
+		return
+
 	if next_id != equipped_item_id:
+		_equip_prev_item_id = visual_equipped_item_id
+		_equip_switch_progress = 0.0
 		equip_raise_blend = 0.0
+		_idle_fidget_timer = 0.0
+		if _equip_prev_item_id == "" and next_id != "":
+			_equip_switch_duration = 0.36
+			_equip_swap_point = 0.36
+		elif _equip_prev_item_id != "" and next_id == "":
+			_equip_switch_duration = 0.36
+			_equip_swap_point = 0.56
+		else:
+			_equip_switch_duration = 0.46
+			_equip_swap_point = 0.44
 	equipped_item_id = next_id
 	_sync_hand_prop_visibility()
 	_sync_flashlight_state(true)
@@ -513,6 +558,12 @@ func _sync_hand_prop_visibility() -> void:
 		var prop_node: Node3D = left_hand_item_props[prop_id] as Node3D
 		if prop_node:
 			prop_node.visible = show_prop and (prop_id == equipped_item_id)
+	var drawing_down: bool = (_equip_switch_progress < _equip_swap_point) and (equipped_item_id != "")
+	var prop_scale: Vector3 = _base_hand_prop_scale * 0.001 if drawing_down else _base_hand_prop_scale
+	if hand_prop_pivot and is_instance_valid(hand_prop_pivot):
+		hand_prop_pivot.scale = prop_scale
+	if left_hand_prop_pivot and is_instance_valid(left_hand_prop_pivot):
+		left_hand_prop_pivot.scale = prop_scale
 
 func _hide_all_hand_props() -> void:
 	for prop_id: String in hand_item_props.keys():
@@ -1179,7 +1230,8 @@ func _build_hand_item_holder(skel: Skeleton3D) -> void:
 	)
 	hand_prop_pivot = Node3D.new()
 	hand_prop_pivot.name = "HandPropPivot"
-	hand_prop_pivot.scale = inv_scale
+	_base_hand_prop_scale = inv_scale
+	hand_prop_pivot.scale = _base_hand_prop_scale
 	# Pada ordinaryMan.fbx, sumbu lokal X/Z hand.r berputar 90 derajat di sekitar sumbu jari (+Y)
 	if right_hand_bone == "hand.r":
 		hand_prop_pivot.rotation_degrees = Vector3(0.0, 90.0, 0.0)
@@ -1372,91 +1424,107 @@ func _apply_fpp_hand_override() -> void:
 	if not player_skeleton or in_cutscene or is_caught or is_hiding:
 		return
 
-	# Stabilkan tulang punggung di FPP dan sembunyikan vertex kepala agar tidak menghalangi kamera
-	for spine_bone: String in ["Hips", "Torso", "Chest", "Neck", "Head"]:
+	var pitch_deg: float = clampf(rad_to_deg(head.rotation.x) * 0.96, -78.0, 22.0) if head else 0.0
+	var walk_phase: float = bob_time * bob_freq * 0.5
+	var fatigue: float = 1.0 - clampf(current_stamina / maxf(1.0, max_stamina), 0.0, 1.0)
+	var s_ratio: float = 1.0
+	var lampor_near: float = 0.0
+	if sanity_system:
+		s_ratio = clampf(sanity_system.current_sanity / maxf(1.0, sanity_system.max_sanity), 0.0, 1.0)
+		lampor_near = clampf((22.0 - sanity_system.lampor_distance) / 16.0, 0.0, 1.0)
+	var tension: float = clampf(maxf((0.65 - s_ratio) / 0.65, lampor_near), 0.0, 1.0)
+
+	# Layered organic breathing (deeper asymmetric inhale/exhale + subtle weight shift)
+	var breath_wave: float = sin(idle_arm_time * 1.75) * 0.72 + sin(idle_arm_time * 3.5 - 0.5) * 0.18 + cos(idle_arm_time * 0.85) * 0.30
+	var weight_shift: float = sin(idle_arm_time * 0.54) * (1.0 - move_blend * 0.85)
+	var idle_breath: float = breath_wave * lerpf(1.35, 3.1, maxf(sprint_blend, fatigue * 0.7 + tension * 0.5))
+	var fear_tremor: float = 0.0
+	if tension > 0.1:
+		fear_tremor = tension * 2.2 * (sin(idle_arm_time * 18.5) * 0.65 + cos(idle_arm_time * 27.0) * 0.35)
+
+	# Subtle idle micro-fidgets (inspect/grip shift or relaxed shoulder stretch)
+	var fidget_curve: float = 0.0
+	if _idle_fidget_timer > 0.0:
+		var f_t: float = clampf(1.0 - (_idle_fidget_timer / maxf(0.01, _idle_fidget_duration)), 0.0, 1.0)
+		fidget_curve = sin(f_t * PI) * sin(f_t * PI)
+	var fidget_inspect_tilt: float = fidget_curve * (14.0 if _idle_fidget_kind == 0 else -6.0)
+	var fidget_roll: float = fidget_curve * (-16.0 if _idle_fidget_kind == 0 else 10.0)
+
+	# Spine dynamics: keep head tiny & behind camera, while torso/chest breath and twist naturally on stride
+	var spine_pitch: float = lerpf(0.0, 4.5, sprint_blend) * move_blend + breath_wave * 0.55 * (1.0 - move_blend * 0.4)
+	var spine_yaw: float = sin(walk_phase) * lerpf(1.4, 3.8, sprint_blend) * move_blend + weight_shift * 1.4
+	var spine_roll: float = -_move_dir_local_smooth.x * 2.4 * move_blend + weight_shift * 0.9
+	for spine_bone: String in ["Hips", "Neck", "Head"]:
 		var spine_idx: int = _find_bone_idx(player_skeleton, spine_bone)
 		if spine_idx >= 0:
 			player_skeleton.set_bone_pose_rotation(spine_idx, player_skeleton.get_bone_rest(spine_idx).basis.get_rotation_quaternion())
+	_set_skeleton_bone_rot("Torso", spine_pitch * 0.55, spine_roll * 0.6, spine_yaw * 0.55)
+	_set_skeleton_bone_rot("Chest", spine_pitch * 0.45, spine_roll * 0.4, spine_yaw * 0.45)
 	var head_idx: int = _find_bone_idx(player_skeleton, "Head")
 	if head_idx >= 0:
 		player_skeleton.set_bone_pose_scale(head_idx, Vector3(0.001, 0.001, 0.001))
-
-	var pitch_deg: float = clampf(rad_to_deg(head.rotation.x) * 0.96, -78.0, 22.0) if head else 0.0
-	var walk_phase: float = bob_time * bob_freq * 0.5
-	var breath_primary: float = sin(idle_arm_time * 1.85)
-	var breath_secondary: float = cos(idle_arm_time * 0.95) * 0.5
-	var idle_breath: float = (breath_primary + breath_secondary) * lerpf(1.35, 2.8, sprint_blend)
-	var fear_tremor: float = 0.0
-	if sanity_system:
-		var s_ratio: float = clampf(sanity_system.current_sanity / maxf(1.0, sanity_system.max_sanity), 0.0, 1.0)
-		if s_ratio < 0.5:
-			fear_tremor = (0.5 - s_ratio) * 2.4 * sin(idle_arm_time * 19.0)
 
 	var action_nudge: float = 0.0
 	if action_anim_timer > 0.0:
 		var progress: float = clampf(1.0 - (action_anim_timer / maxf(0.01, action_anim_duration)), 0.0, 1.0)
 		action_nudge = sin(progress * PI) * 16.0
 
+	# Trouser-pocket reach curve when switching hotbar items
+	var pocket_reach: float = 0.0
+	var pocket_settle: float = 0.0
+	if _equip_switch_progress < 1.0:
+		if _equip_switch_progress < _equip_swap_point:
+			var t_down: float = clampf(_equip_switch_progress / maxf(0.01, _equip_swap_point), 0.0, 1.0)
+			pocket_reach = t_down * t_down * (3.0 - 2.0 * t_down)
+		else:
+			var t_up: float = clampf((_equip_switch_progress - _equip_swap_point) / maxf(0.01, 1.0 - _equip_swap_point), 0.0, 1.0)
+			var smooth_up: float = t_up * t_up * (3.0 - 2.0 * t_up)
+			pocket_reach = 1.0 - smooth_up
+			pocket_settle = sin(t_up * PI) * 7.5
+
 	var hand_idx: int = _find_bone_idx(player_skeleton, "Hand.R")
 	var hand_l_idx: int = _find_bone_idx(player_skeleton, "Hand.L")
 
-	# 1. Mode TIDAK PEGANG BARANG (Empty-Handed): kedua lengan berayun & bernapas realistis
-	if equipped_item_id == "":
-		if hand_idx >= 0:
-			player_skeleton.set_bone_pose_scale(hand_idx, Vector3(0.86, 0.86, 0.86))
-		if hand_l_idx >= 0:
-			player_skeleton.set_bone_pose_scale(hand_l_idx, Vector3(0.86, 0.86, 0.86))
+	# Pose A: Empty-handed natural walk / interactive sprint / relaxed idle
+	var stride_r: float = sin(walk_phase) * lerpf(19.0, 46.0, sprint_blend) * move_blend
+	var stride_l: float = -sin(walk_phase) * lerpf(19.0, 46.0, sprint_blend) * move_blend
+	var elbow_pump_r: float = maxf(0.0, -sin(walk_phase - 0.38)) * lerpf(15.0, 38.0, sprint_blend) * move_blend
+	var elbow_pump_l: float = maxf(0.0, sin(walk_phase - 0.38)) * lerpf(15.0, 38.0, sprint_blend) * move_blend
+	var wrist_follow_r: float = sin(walk_phase - 0.72) * lerpf(5.0, 13.0, sprint_blend) * move_blend
+	var wrist_follow_l: float = -sin(walk_phase - 0.72) * lerpf(5.0, 13.0, sprint_blend) * move_blend
+	var guard_lift: float = lerpf(0.0, 29.0, sprint_blend) * move_blend
+	var shoulder_pump_r: float = -sin(walk_phase) * lerpf(2.2, 7.5, sprint_blend) * move_blend + breath_wave * 1.4
+	var shoulder_pump_l: float = sin(walk_phase) * lerpf(2.2, 7.5, sprint_blend) * move_blend + breath_wave * 1.4
+	var lunge_offset: float = _sprint_momentum * 10.0
 
-		var stride_r: float = sin(walk_phase) * lerpf(18.0, 42.0, sprint_blend) * move_blend
-		var stride_l: float = -sin(walk_phase) * lerpf(18.0, 42.0, sprint_blend) * move_blend
-		var elbow_pump_r: float = maxf(0.0, -sin(walk_phase - 0.35)) * lerpf(14.0, 34.0, sprint_blend) * move_blend
-		var elbow_pump_l: float = maxf(0.0, sin(walk_phase - 0.35)) * lerpf(14.0, 34.0, sprint_blend) * move_blend
-		var guard_lift: float = lerpf(0.0, 26.0, sprint_blend) * move_blend
+	var empty_sh_r := Vector3(shoulder_pump_r * 0.6 + tension * 3.0, -lerpf(0.0, 5.0, sprint_blend), lerp(-1.5, 4.0, sprint_blend) + fidget_roll * 0.18)
+	var empty_up_r := Vector3(
+		-20.0 - guard_lift - stride_r - idle_breath * 0.85 - action_nudge * 2.1 + lunge_offset + look_sway.y * 0.7 + weight_shift * 2.4,
+		-67.0 + sprint_blend * 9.5 - _move_dir_local_smooth.x * 4.5,
+		13.0 + sprint_blend * 7.0 + look_sway.x * 0.85 + sin(walk_phase) * 5.0 * move_blend + fidget_roll * 0.3
+	)
+	var empty_lo_r := Vector3(
+		-22.0 - guard_lift * 0.8 - elbow_pump_r - action_nudge * 1.15 - absf(breath_wave) * 2.2 - fidget_inspect_tilt * 0.5,
+		-8.0,
+		-6.0 + wrist_follow_r * 0.45 + look_sway.x * 0.65
+	)
+	var empty_ha_r := Vector3(
+		-4.0 - action_nudge * 0.8 + wrist_follow_r * 0.5 + fidget_inspect_tilt * 0.4,
+		wrist_follow_r * 0.45,
+		-6.0 + cos(walk_phase) * 6.0 * move_blend + fear_tremor * 0.6
+	)
 
-		# Lengan kanan (tidak pegang barang: ayunan langkah + guard saat lari + gerakan meraih saat interaksi)
-		_set_skeleton_bone_rot("Shoulder.R", 0.0, 0.0, 0.0)
-		_set_skeleton_bone_rot(
-			"UpperArm.R",
-			-22.0 - guard_lift - stride_r - idle_breath * 0.9 - action_nudge * 2.2 + look_sway.y * 0.6,
-			-66.0 + sprint_blend * 8.0,
-			14.0 + look_sway.x * 0.8 + sin(walk_phase) * 4.0 * move_blend
-		)
-		_set_skeleton_bone_rot(
-			"LowerArm.R",
-			-24.0 - guard_lift * 0.7 - elbow_pump_r - action_nudge * 1.1 - absf(breath_primary) * 2.0,
-			-8.0,
-			-6.0 + look_sway.x * 0.6
-		)
-		_set_skeleton_bone_rot("Hand.R", -4.0 - action_nudge * 0.8, 0.0, -6.0 + cos(walk_phase) * 5.0 * move_blend)
-
-		# Lengan kiri (penyeimbang alami saat jalan/lari & napas)
-		_set_skeleton_bone_rot("Shoulder.L", 0.0, 0.0, 0.0)
-		_set_skeleton_bone_rot(
-			"UpperArm.L",
-			-20.0 - guard_lift - stride_l - idle_breath * 0.8 + look_sway.y * 0.5,
-			66.0 - sprint_blend * 8.0,
-			-14.0 + look_sway.x * 0.7 - sin(walk_phase) * 4.0 * move_blend
-		)
-		_set_skeleton_bone_rot(
-			"LowerArm.L",
-			-24.0 - guard_lift * 0.7 - elbow_pump_l - absf(breath_primary) * 2.0,
-			8.0,
-			6.0 + look_sway.x * 0.5
-		)
-		_set_skeleton_bone_rot("Hand.L", -4.0, 0.0, 6.0 - cos(walk_phase) * 5.0 * move_blend)
-		return
-
-	# 2. Mode PEGANG BARANG (Holding Item): postur spesifik barang + inersia kamera + transisi angkat tangan
-	var sway_yaw: float = sin(walk_phase) * lerpf(2.8, 5.2, sprint_blend) * move_blend
-	var sway_lift: float = absf(cos(walk_phase)) * lerpf(1.8, 3.8, sprint_blend) * move_blend
-	var wrist_lag: float = cos(walk_phase - 0.35) * lerpf(2.2, 4.4, sprint_blend) * move_blend
-	var raise_drop: float = (1.0 - ease(equip_raise_blend, 0.35)) * 32.0
+	# Pose B: Holding item (flashlight / drink / jamu / kentongan / etc.) with fluid sprint pump
+	var sway_yaw: float = sin(walk_phase) * lerpf(3.2, 13.5, sprint_blend) * move_blend
+	var sway_pitch: float = cos(walk_phase * 2.0) * lerpf(1.6, 8.5, sprint_blend) * move_blend
+	var sway_lift: float = absf(cos(walk_phase)) * lerpf(1.8, 7.5, sprint_blend) * move_blend
+	var wrist_lag: float = cos(walk_phase - 0.38) * lerpf(2.4, 9.0, sprint_blend) * move_blend
 
 	var item_pitch_offset: float = 0.0
 	var item_drop_offset: float = 0.0
 	var item_yaw_offset: float = 0.0
-	var is_two_handed_kentongan: bool = (equipped_item_id == "kentongan")
-	match equipped_item_id:
+	var hold_id: String = visual_equipped_item_id if visual_equipped_item_id != "" else equipped_item_id
+	match hold_id:
 		"jamu", "baterai", "energy_drink":
 			item_pitch_offset = 6.0
 			item_drop_offset = 4.0
@@ -1472,81 +1540,109 @@ func _apply_fpp_hand_override() -> void:
 
 	var strike_swing: float = 0.0
 	var drink_lift: float = 0.0
-	if is_two_handed_kentongan and action_anim_timer > 0.0:
+	if hold_id == "kentongan" and action_anim_timer > 0.0:
 		var hit_p: float = clampf(1.0 - (action_anim_timer / maxf(0.01, action_anim_duration)), 0.0, 1.0)
 		strike_swing = absf(sin(hit_p * PI * 2.0)) * 28.0
-	elif equipped_item_id == "energy_drink" and action_anim_timer > 0.0:
+	elif hold_id == "energy_drink" and action_anim_timer > 0.0:
 		var drink_p: float = clampf(1.0 - (action_anim_timer / maxf(0.01, action_anim_duration)), 0.0, 1.0)
 		drink_lift = sin(drink_p * PI) * 26.0
 
-	_set_skeleton_bone_rot("Shoulder.R", -18.0, -8.0, 6.0)
-	_set_skeleton_bone_rot(
-		"UpperArm.R",
-		-95.0 - pitch_deg + item_pitch_offset + raise_drop - idle_breath - sway_lift * 0.65 - drink_lift + (0.0 if (is_two_handed_kentongan or drink_lift > 0.0) else action_nudge * 0.55) + look_sway.y * 0.85 + fear_tremor * 0.4,
-		-54.0 + item_drop_offset - sprint_blend * 4.5,
-		28.0 + item_yaw_offset + strike_swing + drink_lift * 0.6 + sway_yaw + sprint_blend * 6.5 + look_sway.x * 1.15
+	var item_sprint_drop: float = lerpf(0.0, 8.5, sprint_blend) * move_blend
+	var hold_sh_r := Vector3(-16.0 + shoulder_pump_r * 0.55 + tension * 2.5, -8.0 - sprint_blend * 3.0, 6.0 + sprint_blend * 2.0)
+	var hold_up_r := Vector3(
+		-95.0 - pitch_deg + item_pitch_offset + item_sprint_drop - idle_breath - sway_pitch - sway_lift * 0.55 - drink_lift + (0.0 if (hold_id == "kentongan" or drink_lift > 0.0) else action_nudge * 0.55) + lunge_offset * 0.65 + look_sway.y * 0.9 + fear_tremor * 0.45 + fidget_inspect_tilt * 0.45,
+		-54.0 + item_drop_offset - sprint_blend * 5.0 - _move_dir_local_smooth.x * 4.0,
+		28.0 + item_yaw_offset + strike_swing + drink_lift * 0.6 + sway_yaw + sprint_blend * 6.5 + look_sway.x * 1.15 + fidget_roll * 0.5
 	)
-	_set_skeleton_bone_rot(
-		"LowerArm.R",
-		-20.0 - sway_lift * 0.65 - sprint_blend * 9.0 - drink_lift * 1.2 + (action_nudge * 0.65 if (not is_two_handed_kentongan and drink_lift <= 0.0) else (-10.0 if is_two_handed_kentongan else 0.0)) + look_sway.y * 0.45,
+	var hold_lo_r := Vector3(
+		-20.0 - sway_lift * 0.7 - sprint_blend * 16.0 - drink_lift * 1.2 + (action_nudge * 0.65 if (hold_id != "kentongan" and drink_lift <= 0.0) else (-10.0 if hold_id == "kentongan" else 0.0)) + look_sway.y * 0.5 - fidget_inspect_tilt * 0.65,
 		-10.0,
-		wrist_lag + strike_swing * 0.5 + idle_breath * 0.55 + look_sway.x * 0.75 + fear_tremor * 0.6
+		wrist_lag + strike_swing * 0.5 + idle_breath * 0.55 + look_sway.x * 0.8 + fear_tremor * 0.6 + fidget_roll * 0.45
 	)
-	_set_skeleton_bone_rot(
-		"Hand.R",
-		-4.0 - action_nudge * 0.85 - drink_lift * 1.1 + look_sway.y * 0.35,
-		0.0,
-		-10.0 + strike_swing * 0.35 + wrist_lag * 0.8 + look_sway.x * 0.5 + fear_tremor
+	var hold_ha_r := Vector3(
+		-4.0 - action_nudge * 0.85 - drink_lift * 1.1 + look_sway.y * 0.35 + wrist_follow_r * 0.3 + fidget_inspect_tilt * 0.5,
+		wrist_follow_r * 0.25,
+		-10.0 + strike_swing * 0.35 + wrist_lag * 0.85 + look_sway.x * 0.55 + fear_tremor + fidget_roll * 0.65
 	)
 
-	if is_two_handed_kentongan:
-		# Tangan kiri mengangkat tabung kentongan di sisi kiri pandangan agar siap dipukul tangan kanan
-		_set_skeleton_bone_rot("Shoulder.L", -18.0, 8.0, -6.0)
-		_set_skeleton_bone_rot(
-			"UpperArm.L",
-			-95.0 - pitch_deg + raise_drop - idle_breath * 0.9 - sway_lift * 0.5 + look_sway.y * 0.8 + fear_tremor * 0.3,
-			52.0 + sprint_blend * 4.5,
-			-28.0 - sway_yaw * 0.6 - sprint_blend * 5.0 + look_sway.x * 1.0
-		)
-		_set_skeleton_bone_rot(
-			"LowerArm.L",
-			-20.0 - sway_lift * 0.5 - sprint_blend * 8.0 + look_sway.y * 0.4,
-			10.0,
-			-wrist_lag * 0.6 + idle_breath * 0.45 + look_sway.x * 0.65
-		)
-		_set_skeleton_bone_rot(
-			"Hand.L",
-			-4.0 + look_sway.y * 0.3,
-			0.0,
-			10.0 + look_sway.x * 0.45
-		)
-		if hand_l_idx >= 0:
-			player_skeleton.set_bone_pose_scale(hand_l_idx, Vector3(0.78, 0.78, 0.78))
-	else:
-		# Lengan kiri tetap mengayun sebagai penyeimbang tubuh saat memegang barang di tangan kanan
-		_set_skeleton_bone_rot("Shoulder.L", 0.0, 0.0, 0.0)
-		if hand_l_idx >= 0:
-			player_skeleton.set_bone_pose_scale(hand_l_idx, Vector3(0.86, 0.86, 0.86))
-		var left_stride: float = -sin(walk_phase) * lerpf(16.0, 36.0, sprint_blend) * move_blend
-		var left_pump: float = maxf(0.0, sin(walk_phase - 0.35)) * lerpf(12.0, 28.0, sprint_blend) * move_blend
-		_set_skeleton_bone_rot(
-			"UpperArm.L",
-			-18.0 - lerpf(0.0, 20.0, sprint_blend) * move_blend - left_stride - idle_breath * 0.7,
-			68.0 - sprint_blend * 6.0,
-			-12.0 + look_sway.x * 0.5
-		)
-		_set_skeleton_bone_rot("LowerArm.L", -22.0 - left_pump, 6.0, 5.0)
-		_set_skeleton_bone_rot("Hand.L", -4.0, 0.0, 6.0)
+	var hb: float = clampf(_item_hold_blend, 0.0, 1.0)
+	var target_sh_r: Vector3 = empty_sh_r.lerp(hold_sh_r, hb)
+	var target_up_r: Vector3 = empty_up_r.lerp(hold_up_r, hb)
+	var target_lo_r: Vector3 = empty_lo_r.lerp(hold_lo_r, hb)
+	var target_ha_r: Vector3 = empty_ha_r.lerp(hold_ha_r, hb)
+
+	# Blend cleanly toward right trouser pocket when switching items!
+	if pocket_reach > 0.001 or absf(pocket_settle) > 0.01:
+		var pocket_sh_r := Vector3(6.0, -4.0, -6.0)
+		var pocket_up_r := Vector3(12.0, -60.0, -16.0)
+		var pocket_lo_r := Vector3(-44.0, -8.0, -18.0)
+		var pocket_ha_r := Vector3(-12.0, -14.0, 16.0)
+		target_sh_r = target_sh_r.lerp(pocket_sh_r, pocket_reach)
+		target_up_r = target_up_r.lerp(pocket_up_r, pocket_reach) + Vector3(-pocket_settle, 0.0, pocket_settle * 0.45)
+		target_lo_r = target_lo_r.lerp(pocket_lo_r, pocket_reach) + Vector3(-pocket_settle * 0.7, 0.0, 0.0)
+		target_ha_r = target_ha_r.lerp(pocket_ha_r, pocket_reach) + Vector3(pocket_settle * 0.4, 0.0, 0.0)
+
+	_set_skeleton_bone_rot("Shoulder.R", target_sh_r.x, target_sh_r.y, target_sh_r.z)
+	_set_skeleton_bone_rot("UpperArm.R", target_up_r.x, target_up_r.y, target_up_r.z)
+	_set_skeleton_bone_rot("LowerArm.R", target_lo_r.x, target_lo_r.y, target_lo_r.z)
+	_set_skeleton_bone_rot("Hand.R", target_ha_r.x, target_ha_r.y, target_ha_r.z)
+
+	# Left arm: smooth transition between kentongan cradle <-> natural running/idle balance
+	var empty_sh_l := Vector3(shoulder_pump_l * 0.6 + tension * 3.0, lerpf(0.0, 5.0, sprint_blend), lerp(1.5, -4.0, sprint_blend) - fidget_roll * 0.12)
+	var empty_up_l := Vector3(
+		-18.0 - guard_lift - stride_l - idle_breath * 0.8 + lunge_offset + look_sway.y * 0.55 - weight_shift * 2.2,
+		67.0 - sprint_blend * 9.5 - _move_dir_local_smooth.x * 4.5,
+		-13.0 - sprint_blend * 7.0 + look_sway.x * 0.75 - sin(walk_phase) * 5.0 * move_blend
+	)
+	var empty_lo_l := Vector3(
+		-22.0 - guard_lift * 0.8 - elbow_pump_l - absf(breath_wave) * 2.0,
+		8.0,
+		6.0 + wrist_follow_l * 0.45 + look_sway.x * 0.55
+	)
+	var empty_ha_l := Vector3(-4.0 + wrist_follow_l * 0.5, wrist_follow_l * 0.45, 6.0 - cos(walk_phase) * 6.0 * move_blend + fear_tremor * 0.5)
+
+	var kent_sh_l := Vector3(-18.0 + shoulder_pump_l * 0.35, 8.0, -6.0)
+	var kent_up_l := Vector3(
+		-95.0 - pitch_deg - idle_breath * 0.9 - sway_lift * 0.5 + look_sway.y * 0.8 + fear_tremor * 0.3 + pocket_reach * 26.0,
+		52.0 + sprint_blend * 4.5,
+		-28.0 - sway_yaw * 0.6 - sprint_blend * 5.0 + look_sway.x * 1.0
+	)
+	var kent_lo_l := Vector3(-20.0 - sway_lift * 0.5 - sprint_blend * 9.0 + look_sway.y * 0.4, 10.0, -wrist_lag * 0.6 + idle_breath * 0.45 + look_sway.x * 0.65)
+	var kent_ha_l := Vector3(-4.0 + look_sway.y * 0.3, 0.0, 10.0 + look_sway.x * 0.45)
+
+	var lb: float = clampf(_left_equip_blend, 0.0, 1.0)
+	var target_sh_l: Vector3 = empty_sh_l.lerp(kent_sh_l, lb)
+	var target_up_l: Vector3 = empty_up_l.lerp(kent_up_l, lb)
+	var target_lo_l: Vector3 = empty_lo_l.lerp(kent_lo_l, lb)
+	var target_ha_l: Vector3 = empty_ha_l.lerp(kent_ha_l, lb)
+	_set_skeleton_bone_rot("Shoulder.L", target_sh_l.x, target_sh_l.y, target_sh_l.z)
+	_set_skeleton_bone_rot("UpperArm.L", target_up_l.x, target_up_l.y, target_up_l.z)
+	_set_skeleton_bone_rot("LowerArm.L", target_lo_l.x, target_lo_l.y, target_lo_l.z)
+	_set_skeleton_bone_rot("Hand.L", target_ha_l.x, target_ha_l.y, target_ha_l.z)
 
 	if hand_idx >= 0:
-		player_skeleton.set_bone_pose_scale(hand_idx, Vector3(0.78, 0.78, 0.78))
+		var hr_s: float = lerpf(0.86, 0.78, hb)
+		player_skeleton.set_bone_pose_scale(hand_idx, Vector3(hr_s, hr_s, hr_s))
+	if hand_l_idx >= 0:
+		var hl_s: float = lerpf(0.86, 0.78, lb)
+		player_skeleton.set_bone_pose_scale(hand_l_idx, Vector3(hl_s, hl_s, hl_s))
 
+	# Finger curls: relaxed breath curve in idle, clenched when empty-handed sprint, snug grip on held items
+	var relax_curl: float = lerpf(14.0, 34.0, sprint_blend * move_blend) + breath_wave * 2.5
+	var hold_curl: float = 44.0
+	var curl_r: float = lerpf(relax_curl, hold_curl, hb)
 	for finger_name: String in ["Index", "Middle", "Ring", "Pinky"]:
-		_set_skeleton_bone_rot(finger_name + "2.R", 0.0, -42.0, 0.0)
-		_set_skeleton_bone_rot(finger_name + "3.R", 0.0, -52.0, 0.0)
-		_set_skeleton_bone_rot(finger_name + "4.R", 0.0, -30.0, 0.0)
-	_set_skeleton_bone_rot("Thumb2.R", 14.0, -34.0, -18.0)
-	_set_skeleton_bone_rot("Thumb3.R", 8.0, -24.0, 0.0)
+		_set_skeleton_bone_rot(finger_name + "2.R", 0.0, -curl_r * 0.95, 0.0)
+		_set_skeleton_bone_rot(finger_name + "3.R", 0.0, -curl_r * 1.18, 0.0)
+		_set_skeleton_bone_rot(finger_name + "4.R", 0.0, -curl_r * 0.68, 0.0)
+		var curl_l: float = lerpf(relax_curl, hold_curl, lb)
+		_set_skeleton_bone_rot(finger_name + "2.L", 0.0, curl_l * 0.95, 0.0)
+		_set_skeleton_bone_rot(finger_name + "3.L", 0.0, curl_l * 1.18, 0.0)
+		_set_skeleton_bone_rot(finger_name + "4.L", 0.0, curl_l * 0.68, 0.0)
+	_set_skeleton_bone_rot("Thumb2.R", lerpf(6.0, 14.0, hb), lerpf(-14.0, -34.0, hb), lerpf(-8.0, -18.0, hb))
+	_set_skeleton_bone_rot("Thumb3.R", lerpf(4.0, 8.0, hb), lerpf(-10.0, -24.0, hb), 0.0)
+	_set_skeleton_bone_rot("Thumb2.L", lerpf(6.0, 14.0, lb), lerpf(14.0, 34.0, lb), lerpf(8.0, 18.0, lb))
+	_set_skeleton_bone_rot("Thumb3.L", lerpf(4.0, 8.0, lb), lerpf(10.0, 24.0, lb), 0.0)
 
 func _set_skeleton_bone_rot(canonical_bone_name: String, rot_x_deg: float, rot_z_deg: float, rot_y_deg: float) -> void:
 	var idx: int = _find_bone_idx(player_skeleton, canonical_bone_name)
@@ -1604,6 +1700,12 @@ func pose_abducted_dangle(phase: float) -> void:
 	_set_skeleton_bone_rot("LowerLeg.L", 18.0 + absf(sway_b) * 0.5, 0.0, 0.0)
 
 func trigger_action_animation(anim_name: String, duration: float = 0.45) -> void:
+	if _equip_switch_progress < 1.0:
+		visual_equipped_item_id = equipped_item_id
+		_equip_switch_progress = 1.0
+		_item_hold_blend = 1.0 if equipped_item_id != "" else 0.0
+		_left_equip_blend = 1.0 if equipped_item_id == "kentongan" else 0.0
+		_sync_hand_prop_visibility()
 	if not model_anim_player or not model_anim_player.has_animation(anim_name):
 		return
 	action_anim_duration = maxf(0.1, duration)
@@ -1652,13 +1754,44 @@ func _update_fpp_camera_and_arm(delta: float, is_moving: bool) -> void:
 	if model_head_mesh:
 		model_head_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
 
-	idle_arm_time += maxf(0.0, delta)
+	var fatigue_rate: float = 1.0 + (1.0 - clampf(current_stamina / maxf(1.0, max_stamina), 0.0, 1.0)) * 0.8
+	idle_arm_time += maxf(0.0, delta) * fatigue_rate
 	var target_move: float = 1.0 if (is_on_floor() and is_moving and not is_hiding and not is_caught) else 0.0
 	var target_sprint: float = 1.0 if (target_move > 0.5 and is_sprinting) else 0.0
 	if delta > 0.0:
 		move_blend = lerpf(move_blend, target_move, minf(1.0, delta * 8.5))
 		sprint_blend = lerpf(sprint_blend, target_sprint, minf(1.0, delta * 7.5))
-		equip_raise_blend = minf(1.0, equip_raise_blend + delta * 4.5)
+		_sprint_momentum = lerpf(_sprint_momentum, target_sprint - sprint_blend, minf(1.0, delta * 6.5))
+		var local_vel: Vector3 = transform.basis.inverse() * Vector3(velocity.x, 0.0, velocity.z)
+		var target_local := Vector2(
+			clampf(local_vel.x / maxf(1.0, sprint_speed), -1.0, 1.0),
+			clampf(local_vel.z / maxf(1.0, sprint_speed), -1.0, 1.0)
+		)
+		_move_dir_local_smooth = _move_dir_local_smooth.lerp(target_local, minf(1.0, delta * 8.0))
+
+		if _equip_switch_progress < 1.0:
+			_equip_switch_progress = minf(1.0, _equip_switch_progress + (delta / maxf(0.05, _equip_switch_duration)))
+			if _equip_switch_progress >= _equip_swap_point and visual_equipped_item_id != equipped_item_id:
+				visual_equipped_item_id = equipped_item_id
+				_sync_hand_prop_visibility()
+		equip_raise_blend = _equip_switch_progress
+		_item_hold_blend = move_toward(_item_hold_blend, 1.0 if visual_equipped_item_id != "" else 0.0, delta * 7.5)
+		_left_equip_blend = move_toward(_left_equip_blend, 1.0 if visual_equipped_item_id == "kentongan" else 0.0, delta * 6.5)
+
+		if target_move < 0.1 and not is_hiding and not is_caught and _equip_switch_progress >= 1.0 and action_anim_timer <= 0.0:
+			if _idle_fidget_timer > 0.0:
+				_idle_fidget_timer = maxf(0.0, _idle_fidget_timer - delta)
+			else:
+				_idle_fidget_wait -= delta
+				if _idle_fidget_wait <= 0.0:
+					_idle_fidget_duration = randf_range(1.05, 1.4)
+					_idle_fidget_timer = _idle_fidget_duration
+					_idle_fidget_kind = (_idle_fidget_kind + 1) % 2
+					_idle_fidget_wait = randf_range(4.5, 7.5)
+		else:
+			_idle_fidget_timer = maxf(0.0, _idle_fidget_timer - delta * 4.0)
+			_idle_fidget_wait = randf_range(3.8, 6.5)
+
 		landing_dip = move_toward(landing_dip, 0.0, delta * 0.24)
 		look_sway_target = look_sway_target.lerp(Vector2.ZERO, minf(1.0, delta * 10.0))
 		look_sway = look_sway.lerp(look_sway_target, minf(1.0, delta * 14.0))
@@ -1666,8 +1799,12 @@ func _update_fpp_camera_and_arm(delta: float, is_moving: bool) -> void:
 		move_blend = target_move
 		sprint_blend = target_sprint
 		equip_raise_blend = 1.0
+		_equip_switch_progress = 1.0
+		visual_equipped_item_id = equipped_item_id
+		_item_hold_blend = 1.0 if visual_equipped_item_id != "" else 0.0
+		_left_equip_blend = 1.0 if visual_equipped_item_id == "kentongan" else 0.0
 
-	var breath_cam_y: float = sin(idle_arm_time * 1.85) * 0.004 * (1.0 - move_blend * 0.6)
+	var breath_cam_y: float = sin(idle_arm_time * 1.75) * 0.0045 * (1.0 - move_blend * 0.6)
 	var walk_bob_x: float = cos(bob_time * bob_freq * 0.5) * bob_amp * 0.65 * lerpf(1.0, 1.35, sprint_blend) * move_blend
 	var walk_bob_y: float = sin(bob_time * bob_freq) * bob_amp * lerpf(1.0, 1.4, sprint_blend) * move_blend
 	var target_cam_pos := Vector3(
@@ -1691,7 +1828,7 @@ func _update_fpp_camera_and_arm(delta: float, is_moving: bool) -> void:
 
 	if player_model:
 		var cam_bob_offset: Vector3 = head.transform.basis * (camera.position - initial_camera_pos)
-		player_model.position = PLAYER_MODEL_FPP_POS + cam_bob_offset
+		player_model.position = PLAYER_MODEL_FPP_POS + cam_bob_offset + Vector3(0.0, 0.0, sprint_blend * 0.045)
 	if model_anim_player and not model_anim_player.is_playing():
 		_apply_fpp_hand_override()
 
@@ -1726,6 +1863,12 @@ func revive_from_extra_life() -> void:
 	current_stamina = max_stamina
 	flashlight_battery = 100.0
 	flashlight_preferred_on = true
+	visual_equipped_item_id = equipped_item_id
+	_equip_prev_item_id = equipped_item_id
+	_equip_switch_progress = 1.0
+	equip_raise_blend = 1.0
+	_item_hold_blend = 1.0 if visual_equipped_item_id != "" else 0.0
+	_left_equip_blend = 1.0 if visual_equipped_item_id == "kentongan" else 0.0
 	_sync_hand_prop_visibility()
 	_sync_flashlight_state(true)
 	_play_player_anim("idle", 0.05, 1.0)

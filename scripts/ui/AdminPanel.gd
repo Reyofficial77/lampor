@@ -19,6 +19,7 @@ var status_label: Label
 var god_mode_btn: Button
 var min_btn: Button
 var coins_input: LineEdit
+var wins_input: LineEdit
 var is_authenticated: bool = false
 var is_dragging: bool = false
 var is_minimized: bool = false
@@ -94,6 +95,8 @@ func toggle_panel() -> void:
 			password_input.release_focus()
 		if coins_input and coins_input.has_focus():
 			coins_input.release_focus()
+		if wins_input and wins_input.has_focus():
+			wins_input.release_focus()
 		_restore_mouse_mode_if_playing()
 
 func _sync_auth_view() -> void:
@@ -461,16 +464,20 @@ func _build_ui() -> void:
 	coins_input.add_theme_font_size_override("font_size", 10)
 	row_coins.add_child(coins_input)
 
-	var set_coin_btn := _make_admin_btn("SET", "primary", 42.0)
-	set_coin_btn.pressed.connect(func() -> void:
-		var parsed: int = int(coins_input.text.strip_edges().to_int())
-		if parsed < 0 or parsed > GameManager.MAX_COINS:
-			parsed = GameManager.MAX_COINS
+	var apply_coins := func() -> void:
+		var raw_c: String = coins_input.text.strip_edges()
+		if not raw_c.is_valid_int():
+			_set_status("Masukkan angka koin yang valid (0-%d)." % GameManager.MAX_COINS)
+			return
+		var parsed: int = clampi(int(raw_c.to_int()), 0, GameManager.MAX_COINS)
 		GameManager.admin_set_coins(parsed)
 		_refresh_panel_state()
 		_notify_main_menu_refresh()
 		_set_status("Koin: %d (Maks %d)" % [GameManager.coins, GameManager.MAX_COINS])
-	)
+	coins_input.text_submitted.connect(func(_t: String) -> void: apply_coins.call())
+
+	var set_coin_btn := _make_admin_btn("SET", "primary", 42.0)
+	set_coin_btn.pressed.connect(apply_coins)
 	row_coins.add_child(set_coin_btn)
 
 	var add500_btn := _make_admin_btn("+500", "secondary", 46.0)
@@ -481,6 +488,50 @@ func _build_ui() -> void:
 		_set_status("Koin: %d" % GameManager.coins)
 	)
 	row_coins.add_child(add500_btn)
+
+	var row_wins := HBoxContainer.new()
+	row_wins.add_theme_constant_override("separation", 4)
+	body_vbox.add_child(row_wins)
+
+	var wins_lbl := Label.new()
+	wins_lbl.text = "Win:"
+	HorrorTheme.style_label(wins_lbl, "label-sm", HorrorTheme.ON_SURFACE, 10)
+	row_wins.add_child(wins_lbl)
+
+	wins_input = LineEdit.new()
+	wins_input.max_length = 6
+	wins_input.placeholder_text = "Maks 999999"
+	wins_input.text = str(GameManager.total_wins)
+	wins_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	wins_input.custom_minimum_size.y = 24.0
+	HorrorTheme.style_line_edit(wins_input)
+	wins_input.add_theme_font_size_override("font_size", 10)
+	row_wins.add_child(wins_input)
+
+	var apply_wins := func() -> void:
+		var raw_w: String = wins_input.text.strip_edges()
+		if not raw_w.is_valid_int():
+			_set_status("Masukkan jumlah win yang valid (0-999999).")
+			return
+		var parsed_w: int = clampi(int(raw_w.to_int()), 0, 999999)
+		GameManager.admin_set_total_wins(parsed_w)
+		_refresh_panel_state()
+		_notify_main_menu_refresh()
+		_set_status("Total Win: %d" % GameManager.total_wins)
+	wins_input.text_submitted.connect(func(_t: String) -> void: apply_wins.call())
+
+	var set_win_btn := _make_admin_btn("SET", "primary", 42.0)
+	set_win_btn.pressed.connect(apply_wins)
+	row_wins.add_child(set_win_btn)
+
+	var add1_win_btn := _make_admin_btn("+1", "secondary", 46.0)
+	add1_win_btn.pressed.connect(func() -> void:
+		GameManager.admin_set_total_wins(GameManager.total_wins + 1)
+		_refresh_panel_state()
+		_notify_main_menu_refresh()
+		_set_status("Total Win: %d" % GameManager.total_wins)
+	)
+	row_wins.add_child(add1_win_btn)
 
 	var row_lives := HBoxContainer.new()
 	row_lives.add_theme_constant_override("separation", 4)
@@ -507,14 +558,16 @@ func _build_ui() -> void:
 	var unlock_nm_btn := _make_admin_btn("BUKA NIGHTMARE", "primary")
 	unlock_nm_btn.pressed.connect(func() -> void:
 		GameManager.admin_set_total_wins(maxi(5, GameManager.total_wins))
+		_refresh_panel_state()
 		_notify_main_menu_refresh()
-		_set_status("Nightmare terbuka (5 Win).")
+		_set_status("Nightmare terbuka (%d Win)." % GameManager.total_wins)
 	)
 	row_nm.add_child(unlock_nm_btn)
 
 	var reset_nm_btn := _make_admin_btn("KUNCI NIGHTMARE", "secondary")
 	reset_nm_btn.pressed.connect(func() -> void:
 		GameManager.admin_set_total_wins(0)
+		_refresh_panel_state()
 		_notify_main_menu_refresh()
 		_set_status("Nightmare dikunci (0 Win).")
 	)
@@ -527,6 +580,7 @@ func _build_ui() -> void:
 	var flag_tut_btn := _make_admin_btn("MODE PEMULA: ON", "secondary")
 	flag_tut_btn.pressed.connect(func() -> void:
 		GameManager.set_tutorial_completed_override(false)
+		_notify_main_menu_refresh()
 		_set_status("Tutorial Pemula aktif untuk permainan berikutnya.")
 	)
 	row_tut.add_child(flag_tut_btn)
@@ -534,6 +588,7 @@ func _build_ui() -> void:
 	var skip_tut_btn := _make_admin_btn("MODE PEMULA: OFF", "ghost")
 	skip_tut_btn.pressed.connect(func() -> void:
 		GameManager.set_tutorial_completed_override(true)
+		_notify_main_menu_refresh()
 		_set_status("Tutorial Pemula dilewati (langsung pilih kesulitan).")
 	)
 	row_tut.add_child(skip_tut_btn)
@@ -580,6 +635,8 @@ func _refresh_panel_state() -> void:
 		HorrorTheme.style_button(god_mode_btn, "primary" if GameManager.admin_god_mode else "secondary", 9, true)
 	if coins_input:
 		coins_input.text = str(GameManager.coins)
+	if wins_input:
+		wins_input.text = str(GameManager.total_wins)
 
 func _set_status(msg: String) -> void:
 	if status_label:
@@ -593,3 +650,5 @@ func _notify_main_menu_refresh() -> void:
 		current_sc.call("_refresh_shop_display")
 	if current_sc and current_sc.has_method("_update_nightmare_status"):
 		current_sc.call("_update_nightmare_status")
+	if current_sc and current_sc.has_method("_refresh_tutorial_button_visibility"):
+		current_sc.call("_refresh_tutorial_button_visibility")

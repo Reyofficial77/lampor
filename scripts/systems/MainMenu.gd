@@ -25,6 +25,8 @@ var continue_button: Button
 var modal_overlays: Array[ColorRect] = []
 var modal_panels: Array[PanelContainer] = []
 var difficulty_buttons: Array[Button] = []
+var tutorial_button: Button
+var tutorial_divider: Control
 var warning_overlay: ColorRect
 var warning_panel: PanelContainer
 var difficulty_overlay: ColorRect
@@ -315,6 +317,7 @@ func _build_warning_modal() -> void:
 	cont_btn.pressed.connect(func() -> void:
 		warning_overlay.visible = false
 		_update_nightmare_status()
+		_refresh_tutorial_button_visibility()
 		_open_modal(difficulty_overlay, difficulty_panel)
 	)
 	buttons.add_child(cont_btn)
@@ -335,9 +338,9 @@ func _build_difficulty_modal() -> void:
 	body.add_child(hint)
 	difficulty_buttons.clear()
 
-	var tutorial_btn := _make_button(LocScript.pick("TUTORIAL PEMULA  ·  Panduan Interaktif (Easy)", "BEGINNER TUTORIAL  ·  Interactive Guide (Easy)"), false, "ghost")
-	tutorial_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	tutorial_btn.pressed.connect(func() -> void:
+	tutorial_button = _make_button(LocScript.pick("TUTORIAL PEMULA  ·  Panduan Interaktif (Easy)", "BEGINNER TUTORIAL  ·  Interactive Guide (Easy)"), false, "ghost")
+	tutorial_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	tutorial_button.pressed.connect(func() -> void:
 		for overlay: ColorRect in modal_overlays:
 			overlay.visible = false
 		if GameManager.has_method("start_tutorial_game"):
@@ -345,10 +348,12 @@ func _build_difficulty_modal() -> void:
 		else:
 			GameManager.start_new_game(GameManager.Difficulty.EASY)
 	)
-	body.add_child(tutorial_btn)
-	difficulty_buttons.append(tutorial_btn)
+	body.add_child(tutorial_button)
+	difficulty_buttons.append(tutorial_button)
 
-	body.add_child(HorrorTheme.make_hairline_divider())
+	tutorial_divider = HorrorTheme.make_hairline_divider()
+	body.add_child(tutorial_divider)
+	_refresh_tutorial_button_visibility()
 
 	var easy := _make_button(LocScript.pick("EASY  ·  Malam Sunyi (1 mnt = 4,5 dtk)", "EASY  ·  Quiet Night (1 min = 4.5s)"))
 	easy.alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -981,8 +986,11 @@ func _show_update_restart_prompt(commit_sha: String) -> void:
 func _restart_after_update() -> void:
 	if update_restart_status:
 		update_restart_status.text = LocScript.pick("Menyimpan progres dan memulai ulang...", "Saving progress and restarting...")
-	GameManager.save_active_run()
-	GameManager.save_game_data()
+	if GameManager.has_method("prepare_for_update_restart"):
+		GameManager.prepare_for_update_restart()
+	else:
+		GameManager.save_active_run()
+		GameManager.save_game_data()
 	if OS.has_feature("web"):
 		if Engine.has_singleton("JavaScriptBridge"):
 			var js: Object = Engine.get_singleton("JavaScriptBridge")
@@ -1685,6 +1693,15 @@ func _sync_menu_anchor_position() -> void:
 	menu_anchor.position = Vector2(left_pad, top_y)
 	menu_anchor.size = Vector2(col_w, content_h)
 	main_content.size = Vector2(col_w, content_h)
+
+func _refresh_tutorial_button_visibility() -> void:
+	var show_tutorial: bool = not GameManager.tutorial_completed
+	if is_instance_valid(tutorial_button):
+		tutorial_button.visible = show_tutorial
+	if is_instance_valid(tutorial_divider):
+		tutorial_divider.visible = show_tutorial
+	if is_instance_valid(difficulty_panel):
+		difficulty_panel.reset_size()
 
 func _update_nightmare_status() -> void:
 	var unlocked: bool = GameManager.is_nightmare_unlocked()

@@ -38,13 +38,13 @@ fog_sky_affect = 0.8
 albedo_color = Color(0.35, 0.32, 0.25, 1)
 albedo_texture = ExtResource("1_mud")
 roughness = 0.95
-uv1_scale = Vector3(20, 20, 1)
+uv1_scale = Vector3(5, 5, 1)
 
 [sub_resource type="BoxMesh" id="BoxMesh_ground"]
 material = SubResource("Mat_Ground")
-size = Vector3(100, 1, 100)
-subdivide_width = 32
-subdivide_depth = 32
+size = Vector3(25, 1, 25)
+subdivide_width = 8
+subdivide_depth = 8
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_ground"]
 size = Vector3(100, 1, 100)
@@ -91,7 +91,68 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.5, 0)
 collision_layer = 1
 collision_mask = 7
 
-[node name="Mesh" type="MeshInstance3D" parent="Ground"]
+[node name="Mesh_0_0" type="MeshInstance3D" parent="Ground"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -37.5, 0, -37.5)
+mesh = SubResource("BoxMesh_ground")
+
+[node name="Mesh_1_0" type="MeshInstance3D" parent="Ground"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -12.5, 0, -37.5)
+mesh = SubResource("BoxMesh_ground")
+
+[node name="Mesh_2_0" type="MeshInstance3D" parent="Ground"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 12.5, 0, -37.5)
+mesh = SubResource("BoxMesh_ground")
+
+[node name="Mesh_3_0" type="MeshInstance3D" parent="Ground"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 37.5, 0, -37.5)
+mesh = SubResource("BoxMesh_ground")
+
+[node name="Mesh_0_1" type="MeshInstance3D" parent="Ground"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -37.5, 0, -12.5)
+mesh = SubResource("BoxMesh_ground")
+
+[node name="Mesh_1_1" type="MeshInstance3D" parent="Ground"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -12.5, 0, -12.5)
+mesh = SubResource("BoxMesh_ground")
+
+[node name="Mesh_2_1" type="MeshInstance3D" parent="Ground"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 12.5, 0, -12.5)
+mesh = SubResource("BoxMesh_ground")
+
+[node name="Mesh_3_1" type="MeshInstance3D" parent="Ground"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 37.5, 0, -12.5)
+mesh = SubResource("BoxMesh_ground")
+
+[node name="Mesh_0_2" type="MeshInstance3D" parent="Ground"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -37.5, 0, 12.5)
+mesh = SubResource("BoxMesh_ground")
+
+[node name="Mesh_1_2" type="MeshInstance3D" parent="Ground"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -12.5, 0, 12.5)
+mesh = SubResource("BoxMesh_ground")
+
+[node name="Mesh_2_2" type="MeshInstance3D" parent="Ground"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 12.5, 0, 12.5)
+mesh = SubResource("BoxMesh_ground")
+
+[node name="Mesh_3_2" type="MeshInstance3D" parent="Ground"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 37.5, 0, 12.5)
+mesh = SubResource("BoxMesh_ground")
+
+[node name="Mesh_0_3" type="MeshInstance3D" parent="Ground"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -37.5, 0, 37.5)
+mesh = SubResource("BoxMesh_ground")
+
+[node name="Mesh_1_3" type="MeshInstance3D" parent="Ground"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -12.5, 0, 37.5)
+mesh = SubResource("BoxMesh_ground")
+
+[node name="Mesh_2_3" type="MeshInstance3D" parent="Ground"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 12.5, 0, 37.5)
+mesh = SubResource("BoxMesh_ground")
+
+[node name="Mesh_3_3" type="MeshInstance3D" parent="Ground"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 37.5, 0, 37.5)
 mesh = SubResource("BoxMesh_ground")
 
 [node name="Collision" type="CollisionShape3D" parent="Ground"]

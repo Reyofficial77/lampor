@@ -17,6 +17,13 @@
   - Memperbaiki kondisi karakter terus berlari setelah `Shift` dilepas akibat fokus jendela hilang, buka tas/jeda, atau tombol sentuh pada laptop berlayar sentuh melalui sinkronisasi status tombol fisik dan reset input otomatis.
 - **Pembaruan Ikon Game Baru (`180x180` & `.ico`)**:
   - Memperbarui ikon aplikasi untuk Android/Web (`180x180`) dan desktop Windows (`.ico` multi-resolusi) menggunakan desain ikon terbaru.
+- **Perbaikan Pencahayaan (Lighting) Grafik Low, Anti-Reset Koin, & Deteksi Tutorial Pemula**:
+  - Memperbaiki pencahayaan preset `Low` dengan bayangan arah ringan (`SHADOW_ORTHOGONAL`), menonaktifkan `shadow_enabled` pada `OmniLight3D`/`SpotLight3D` saat `positional_shadow_atlas_size = 0`, membagi mesh tanah `Ground` menjadi grid `4x4` agar tidak melampaui batas lampu OpenGL/GLES3, serta menambahkan *distance fade* pada `ItemLight`.
+  - Memperkuat ketahanan penyimpanan koin lintas update melalui `lampor_save_shadow.json`, `lampor_install.cfg`, pencegahan penulisan save kosong saat boot/reconcile Web, fallback direct write saat rename gagal, dan penghentian double-save saat restart pembaruan.
+  - Menyembunyikan opsi **Tutorial Pemula** secara otomatis apabila pemain terdeteksi sudah menyelesaikan tutorial atau merupakan pemain lama/update (tutorial hanya muncul pada instalasi baru / fresh install).
+- **Set Win di Admin Panel & Animasi FPP Lebih Realistis**:
+  - Menambahkan input **Win + SET + [+1]** di Admin Panel (`Alt+F2`).
+  - Menambahkan animasi tangan mengambil/menyimpan barang dari saku celana kanan saat berganti slot hotbar, serta animasi lari (`sprint`), napas & *fidget* diam (`idle`), ayunan bahu, dan *follow-through* pergelangan tangan yang jauh lebih alami dan tidak kaku.
 
 ## v1.2.8
 

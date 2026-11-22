@@ -32,8 +32,12 @@ func _update_ritual_visibility(act_number: int) -> void:
 	set_process(unlocked)
 	if item_light:
 		item_light.visible = unlocked
+		item_light.distance_fade_enabled = true
+		var quality: String = SettingsManager.get_effective_graphics_quality()
+		item_light.distance_fade_begin = 14.0 if quality == "low" else 22.0
+		item_light.distance_fade_length = 5.0
 		if unlocked:
-			item_light.light_energy = 1.1 if SettingsManager.get_effective_graphics_quality() == "low" else 1.5
+			item_light.light_energy = 1.1 if quality == "low" else 1.5
 
 func _update_model_appearance() -> void:
 	var target_name: String = "GenericVisual"

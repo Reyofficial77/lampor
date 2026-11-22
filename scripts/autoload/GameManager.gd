@@ -66,7 +66,10 @@ const LOSS_COIN_REWARD: int = 25
 const SAVE_PATH: String = "user://lampor_save.json"
 const SAVE_TEMP_PATH: String = "user://lampor_save.json.tmp"
 const SAVE_BACKUP_PATH: String = "user://lampor_save.json.bak"
+const SAVE_SHADOW_PATH: String = "user://lampor_save_shadow.json"
+const INSTALL_STATE_PATH: String = "user://lampor_install.cfg"
 const WEB_SAVE_STORAGE_KEY: String = "lampor_save_v1"
+const WEB_INSTALL_STORAGE_KEY: String = "lampor_install_v1"
 const SETTINGS_CONFIG_PATH: String = "user://lampor_settings.cfg"
 const RUN_SAVE_PATH: String = "user://lampor_run.json"
 const RUN_SAVE_TEMP_PATH: String = "user://lampor_run.json.tmp"
@@ -86,6 +89,8 @@ var admin_panel: CanvasLayer = null
 var save_seq: int = 0
 var _save_load_failed: bool = false
 var _web_save_sync_pending: bool = false
+var _web_save_sync_dirty: bool = false
+var _skip_shutdown_resave: bool = false
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -132,14 +137,14 @@ func _read_save_dict_from_web_storage() -> Dictionary:
 		return {}
 	var js_code: String = """(function(){
 		try {
-			var v = window.localStorage.getItem('%s');
+			var v = window.localStorage.getItem('%s') || window.sessionStorage.getItem('%s') || '';
 			if (!v) return '';
 			var bytes = new TextEncoder().encode(v);
 			var bin = '';
 			for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
 			return btoa(bin);
 		} catch (e) { return ''; }
-	})()""" % WEB_SAVE_STORAGE_KEY
+	})()""" % [WEB_SAVE_STORAGE_KEY, WEB_SAVE_STORAGE_KEY]
 	var b64: Variant = JavaScriptBridge.eval(js_code)
 	if not (b64 is String) or (b64 as String).is_empty():
 		return {}
@@ -155,15 +160,67 @@ func _mirror_save_to_web_storage(json_text: String) -> void:
 			var bytes = new Uint8Array(bin.length);
 			for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
 			var txt = new TextDecoder('utf-8').decode(bytes);
-			window.localStorage.setItem('%s', txt);
+			try { window.localStorage.setItem('%s', txt); } catch (e1) {}
+			try { window.sessionStorage.setItem('%s', txt); } catch (e2) {}
 		} catch (e) {}
-	})()""" % [b64, WEB_SAVE_STORAGE_KEY]
+	})()""" % [b64, WEB_SAVE_STORAGE_KEY, WEB_SAVE_STORAGE_KEY]
 	JavaScriptBridge.eval(js_code)
 
+func _has_web_storage_footprint() -> bool:
+	if not OS.has_feature("web"):
+		return false
+	var res: Variant = JavaScriptBridge.eval("""(function(){
+		try {
+			return !!(window.localStorage.getItem('%s') || window.localStorage.getItem('%s') || window.localStorage.getItem('%s'));
+		} catch (e) { return false; }
+	})()""" % [WEB_SAVE_STORAGE_KEY, WEB_INSTALL_STORAGE_KEY, SettingsManager.WEB_SETTINGS_STORAGE_KEY])
+	return bool(res)
+
+func _read_install_marker() -> Dictionary:
+	var cfg := ConfigFile.new()
+	if cfg.load(INSTALL_STATE_PATH) == OK:
+		return {
+			"tutorial_completed": bool(cfg.get_value("install", "tutorial_completed", false)),
+			"install_tutorial_state": str(cfg.get_value("install", "install_tutorial_state", "")),
+			"origin_version": str(cfg.get_value("install", "origin_version", "")),
+			"origin_commit": str(cfg.get_value("install", "origin_commit", ""))
+		}
+	if OS.has_feature("web"):
+		var raw: Variant = JavaScriptBridge.eval("try{window.localStorage.getItem('%s')||'';}catch(e){'';}" % WEB_INSTALL_STORAGE_KEY)
+		if raw is String and not (raw as String).is_empty():
+			return _parse_save_dict_text(raw as String)
+	return {}
+
+func _write_install_marker() -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value("install", "tutorial_completed", tutorial_completed)
+	cfg.set_value("install", "install_tutorial_state", install_tutorial_state)
+	cfg.set_value("install", "origin_version", tutorial_origin_version)
+	cfg.set_value("install", "origin_commit", tutorial_origin_commit)
+	cfg.save(INSTALL_STATE_PATH)
+	if OS.has_feature("web"):
+		var marker_json: String = JSON.stringify({
+			"tutorial_completed": tutorial_completed,
+			"install_tutorial_state": install_tutorial_state,
+			"origin_version": tutorial_origin_version,
+			"origin_commit": tutorial_origin_commit
+		})
+		var b64: String = Marshalls.utf8_to_base64(marker_json)
+		JavaScriptBridge.eval("""(function(){
+			try {
+				var txt = new TextDecoder('utf-8').decode(Uint8Array.from(atob('%s'), function(c){return c.charCodeAt(0);}));
+				window.localStorage.setItem('%s', txt);
+			} catch (e) {}
+		})()""" % [b64, WEB_INSTALL_STORAGE_KEY])
+
 func _sync_web_save_idbfs() -> void:
-	if not OS.has_feature("web") or _web_save_sync_pending:
+	if not OS.has_feature("web"):
+		return
+	if _web_save_sync_pending:
+		_web_save_sync_dirty = true
 		return
 	_web_save_sync_pending = true
+	_web_save_sync_dirty = false
 	JavaScriptBridge.eval("""(function(){
 		try {
 			if (typeof FS !== 'undefined' && typeof FS.syncfs === 'function') {
@@ -173,54 +230,103 @@ func _sync_web_save_idbfs() -> void:
 	})()""")
 	get_tree().create_timer(0.25, true, false, true).timeout.connect(func() -> void:
 		_web_save_sync_pending = false
+		if _web_save_sync_dirty:
+			_web_save_sync_dirty = false
+			_sync_web_save_idbfs()
 	)
+
+func _stash_has_any_item(stash: Variant = null) -> bool:
+	var src: Dictionary = stash if stash is Dictionary else item_stash
+	for k: Variant in src.keys():
+		if int(src.get(k, 0)) > 0:
+			return true
+	return false
+
+func _save_progress_score(entry: Dictionary) -> int:
+	var c: int = clampi(int(entry.get("coins", 0)), 0, MAX_COINS)
+	var w: int = maxi(0, int(entry.get("total_wins", 0)))
+	var l: int = clampi(int(entry.get("extra_lives", 0)), 0, MAX_EXTRA_LIVES)
+	var codes: Variant = entry.get("redeemed_codes", [])
+	var code_cnt: int = (codes as Array).size() if codes is Array else 0
+	var stash_cnt: int = 0
+	var st: Variant = entry.get("item_stash", {})
+	if st is Dictionary:
+		for k: Variant in (st as Dictionary).keys():
+			stash_cnt += maxi(0, int((st as Dictionary).get(k, 0)))
+	return c + w * 1000 + l * 100 + code_cnt * 50 + stash_cnt * 10
 
 func _pick_best_save_candidate() -> Dictionary:
 	var candidates: Array[Dictionary] = []
 	var primary: Dictionary = _read_save_dict_from_file(SAVE_PATH)
 	var backup: Dictionary = _read_save_dict_from_file(SAVE_BACKUP_PATH)
+	var shadow: Dictionary = _read_save_dict_from_file(SAVE_SHADOW_PATH)
 	var web_data: Dictionary = _read_save_dict_from_web_storage()
-	for cand: Dictionary in [primary, backup, web_data]:
+	for cand: Dictionary in [primary, backup, shadow, web_data]:
 		if not cand.is_empty():
 			candidates.append(cand)
 	if candidates.is_empty():
 		return {}
 	var best: Dictionary = candidates[0]
 	var best_seq: int = int(best.get("save_seq", 0))
-	var best_score: int = int(best.get("coins", 0)) + int(best.get("total_wins", 0)) * 1000 + int(best.get("extra_lives", 0)) * 100
+	var best_score: int = _save_progress_score(best)
+	var best_explicit_zero: bool = bool(best.get("explicit_zero", false))
 	for i: int in range(1, candidates.size()):
 		var c: Dictionary = candidates[i]
 		var c_seq: int = int(c.get("save_seq", 0))
-		var c_score: int = int(c.get("coins", 0)) + int(c.get("total_wins", 0)) * 1000 + int(c.get("extra_lives", 0)) * 100
+		var c_score: int = _save_progress_score(c)
+		var c_explicit_zero: bool = bool(c.get("explicit_zero", false))
+		# Never replace a save with real coins/wins with an implicit 0-progress save (e.g. from a transient boot write).
+		if best_score > 0 and c_score == 0 and not c_explicit_zero:
+			continue
+		if c_score > 0 and best_score == 0 and not best_explicit_zero:
+			best = c
+			best_seq = c_seq
+			best_score = c_score
+			best_explicit_zero = c_explicit_zero
+			continue
 		if c_seq > best_seq or (c_seq == best_seq and c_score > best_score):
 			best = c
 			best_seq = c_seq
 			best_score = c_score
+			best_explicit_zero = c_explicit_zero
 	return best
 
 func _schedule_web_save_reconcile() -> void:
 	if not OS.has_feature("web"):
 		return
 	await get_tree().create_timer(0.75, true, false, true).timeout
-	var disk_cand: Dictionary = _read_save_dict_from_file(SAVE_PATH)
-	if disk_cand.is_empty():
-		disk_cand = _read_save_dict_from_file(SAVE_BACKUP_PATH)
-	if disk_cand.is_empty():
+	var best_cand: Dictionary = _pick_best_save_candidate()
+	if best_cand.is_empty():
 		return
-	var disk_seq: int = int(disk_cand.get("save_seq", 0))
-	var disk_coins: int = clampi(int(disk_cand.get("coins", 0)), 0, MAX_COINS)
-	if disk_seq > save_seq or (save_seq <= 1 and coins == 0 and disk_coins > 0):
+	var best_seq: int = int(best_cand.get("save_seq", 0))
+	var best_coins: int = clampi(int(best_cand.get("coins", 0)), 0, MAX_COINS)
+	var best_wins: int = maxi(0, int(best_cand.get("total_wins", 0)))
+	if best_seq > save_seq or (coins == 0 and best_coins > 0) or (total_wins == 0 and best_wins > 0):
 		load_save_data()
 		SignalBus.coins_changed.emit(coins)
+		var cur_sc: Node = get_tree().current_scene
+		if cur_sc and cur_sc.has_method("_refresh_currency_display"):
+			cur_sc.call("_refresh_currency_display")
+		if cur_sc and cur_sc.has_method("_refresh_tutorial_button_visibility"):
+			cur_sc.call("_refresh_tutorial_button_visibility")
 
 func load_save_data() -> void:
 	var current_version: String = str(ProjectSettings.get_setting("application/config/version", ""))
 	var current_commit: String = UpdateManager.BUILD_COMMIT
+	var marker: Dictionary = _read_install_marker()
+	var marker_done: bool = bool(marker.get("tutorial_completed", false)) or str(marker.get("install_tutorial_state", "")) in ["completed", "skipped_on_update"]
+	var marker_ver: String = str(marker.get("origin_version", ""))
+	var marker_commit: String = str(marker.get("origin_commit", ""))
+	var marker_updated: bool = (not marker.is_empty()) and ((not marker_ver.is_empty() and marker_ver != current_version) or (not marker_commit.is_empty() and marker_commit != current_commit))
 	var has_prior_footprint: bool = UpdateManager.had_prior_user_data \
 		or UpdateManager.updated_on_this_boot \
 		or UpdateManager.pck_loaded_this_session \
 		or FileAccess.file_exists(SETTINGS_CONFIG_PATH) \
 		or FileAccess.file_exists(SAVE_BACKUP_PATH) \
+		or FileAccess.file_exists(SAVE_SHADOW_PATH) \
+		or _has_web_storage_footprint() \
+		or marker_done \
+		or marker_updated \
 		or not _read_run_snapshot().is_empty()
 
 	_save_load_failed = false
@@ -238,7 +344,10 @@ func load_save_data() -> void:
 		coins = 0
 		extra_lives = 0
 		save_seq = 0
-		if has_prior_footprint:
+		if str(marker.get("install_tutorial_state", "")) == "admin_forced":
+			tutorial_completed = false
+			install_tutorial_state = "admin_forced"
+		elif has_prior_footprint:
 			tutorial_completed = true
 			install_tutorial_state = "skipped_on_update"
 		else:
@@ -246,7 +355,8 @@ func load_save_data() -> void:
 			install_tutorial_state = "fresh_pending"
 			tutorial_origin_version = current_version
 			tutorial_origin_commit = current_commit
-		save_game_data()
+		# Only write the lightweight install marker at boot — never stamp an empty 0-coin save over user data!
+		_write_install_marker()
 		return
 
 	save_seq = maxi(save_seq, int(data.get("save_seq", 0)))
@@ -271,26 +381,28 @@ func load_save_data() -> void:
 
 	var saved_tutorial_done: bool = bool(data.get("tutorial_completed", false))
 	var saved_tutorial_state: String = str(data.get("install_tutorial_state", ""))
-	tutorial_origin_version = str(data.get("tutorial_origin_version", ""))
-	tutorial_origin_commit = str(data.get("tutorial_origin_commit", ""))
+	tutorial_origin_version = str(data.get("tutorial_origin_version", marker_ver))
+	tutorial_origin_commit = str(data.get("tutorial_origin_commit", marker_commit))
 
 	var needs_migration_save: bool = not primary_exists
-	if saved_tutorial_state == "admin_forced":
+	if saved_tutorial_state == "admin_forced" or str(marker.get("install_tutorial_state", "")) == "admin_forced":
 		tutorial_completed = saved_tutorial_done
-		install_tutorial_state = "admin_forced"
+		install_tutorial_state = "completed" if saved_tutorial_done else "admin_forced"
+	elif marker_done or saved_tutorial_done or saved_tutorial_state == "completed" or saved_tutorial_state == "skipped_on_update":
+		tutorial_completed = true
+		install_tutorial_state = "completed" if (saved_tutorial_done or str(marker.get("install_tutorial_state", "")) == "completed") else "skipped_on_update"
 	elif saved_tutorial_state.is_empty():
 		tutorial_completed = true
-		install_tutorial_state = "completed" if saved_tutorial_done else "skipped_on_update"
+		install_tutorial_state = "skipped_on_update"
 		needs_migration_save = true
-	elif saved_tutorial_done or saved_tutorial_state == "completed" or saved_tutorial_state == "skipped_on_update":
-		tutorial_completed = true
-		install_tutorial_state = "completed" if saved_tutorial_done else saved_tutorial_state
 	elif saved_tutorial_state == "fresh_pending":
 		var is_updated_build: bool = UpdateManager.updated_on_this_boot \
 			or UpdateManager.pck_loaded_this_session \
+			or marker_updated \
 			or (not tutorial_origin_version.is_empty() and tutorial_origin_version != current_version) \
 			or (not tutorial_origin_commit.is_empty() and tutorial_origin_commit != current_commit)
-		if is_updated_build or total_wins > 0:
+		var has_prior_activity: bool = total_wins > 0 or coins > 0 or extra_lives > 0 or not redeemed_codes.is_empty() or _stash_has_any_item() or save_seq > 1
+		if is_updated_build or has_prior_activity:
 			tutorial_completed = true
 			install_tutorial_state = "skipped_on_update"
 			needs_migration_save = true
@@ -302,26 +414,38 @@ func load_save_data() -> void:
 		install_tutorial_state = "skipped_on_update"
 		needs_migration_save = true
 
-	if needs_migration_save:
+	_write_install_marker()
+	if needs_migration_save and (_save_progress_score(data) > 0 or primary_exists):
 		save_game_data()
 
-func save_game_data() -> void:
+func _write_json_file_direct(path: String, json_text: String) -> bool:
+	var f: FileAccess = FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		return false
+	f.store_string(json_text)
+	f.flush()
+	f.close()
+	return true
+
+func save_game_data(explicit_write: bool = false) -> void:
 	coins = clampi(coins, 0, MAX_COINS)
 	var disk_best: Dictionary = _pick_best_save_candidate()
 	if not disk_best.is_empty():
 		var disk_seq: int = int(disk_best.get("save_seq", 0))
-		if _save_load_failed and coins == 0 and int(disk_best.get("coins", 0)) > 0:
+		if not explicit_write and (_save_load_failed or (coins == 0 and total_wins == 0)) and _save_progress_score(disk_best) > 0:
 			push_warning("[GameManager] Mencegah save kosong menimpa data koin yang tersimpan.")
 			return
 		save_seq = maxi(save_seq, disk_seq)
 	_save_load_failed = false
 	save_seq += 1
+	var is_explicit_zero: bool = explicit_write and coins == 0 and total_wins == 0 and extra_lives == 0
 	var data: Dictionary = {
 		"save_version": 2,
 		"save_seq": save_seq,
 		"total_wins": total_wins,
 		"coins": coins,
 		"extra_lives": extra_lives,
+		"explicit_zero": is_explicit_zero,
 		"tutorial_completed": tutorial_completed,
 		"install_tutorial_state": install_tutorial_state,
 		"tutorial_origin_version": tutorial_origin_version,
@@ -330,53 +454,60 @@ func save_game_data() -> void:
 		"redeemed_codes": redeemed_codes
 	}
 	var json_text: String = JSON.stringify(data)
-	var temp_file: FileAccess = FileAccess.open(SAVE_TEMP_PATH, FileAccess.WRITE)
-	if temp_file == null:
-		push_warning("[GameManager] Gagal membuka file save sementara: %s" % FileAccess.get_open_error())
-		return
-	temp_file.store_string(json_text)
-	temp_file.flush()
-	temp_file.close()
+	_write_install_marker()
+	if OS.has_feature("web"):
+		_mirror_save_to_web_storage(json_text)
 
 	var save_abs: String = ProjectSettings.globalize_path(SAVE_PATH)
 	var temp_abs: String = ProjectSettings.globalize_path(SAVE_TEMP_PATH)
 	var backup_abs: String = ProjectSettings.globalize_path(SAVE_BACKUP_PATH)
-	if FileAccess.file_exists(SAVE_PATH):
-		if FileAccess.file_exists(SAVE_BACKUP_PATH):
-			DirAccess.remove_absolute(backup_abs)
-		var backup_err: Error = DirAccess.rename_absolute(save_abs, backup_abs)
-		if backup_err != OK:
-			push_warning("[GameManager] Gagal memindahkan cadangan save: %d" % backup_err)
-			return
-	var commit_err: Error = DirAccess.rename_absolute(temp_abs, save_abs)
-	if commit_err != OK:
-		if FileAccess.file_exists(SAVE_BACKUP_PATH) and not FileAccess.file_exists(SAVE_PATH):
-			DirAccess.rename_absolute(backup_abs, save_abs)
-		push_warning("[GameManager] Gagal memasang save baru: %d" % commit_err)
-		return
+	var wrote_primary: bool = false
+	if _write_json_file_direct(SAVE_TEMP_PATH, json_text):
+		var backup_ok: bool = true
+		if FileAccess.file_exists(SAVE_PATH):
+			if FileAccess.file_exists(SAVE_BACKUP_PATH):
+				DirAccess.remove_absolute(backup_abs)
+			if DirAccess.rename_absolute(save_abs, backup_abs) != OK:
+				backup_ok = false
+		if backup_ok and DirAccess.rename_absolute(temp_abs, save_abs) == OK:
+			wrote_primary = true
+	if not wrote_primary:
+		# Fallback if DirAccess.rename_absolute is unavailable/locked on Web IDBFS/Android
+		var prev_raw: Dictionary = _read_save_dict_from_file(SAVE_PATH)
+		if not prev_raw.is_empty():
+			_write_json_file_direct(SAVE_BACKUP_PATH, JSON.stringify(prev_raw))
+		_write_json_file_direct(SAVE_PATH, json_text)
 	if not FileAccess.file_exists(SAVE_BACKUP_PATH):
-		var bak_file: FileAccess = FileAccess.open(SAVE_BACKUP_PATH, FileAccess.WRITE)
-		if bak_file != null:
-			bak_file.store_string(json_text)
-			bak_file.flush()
-			bak_file.close()
+		_write_json_file_direct(SAVE_BACKUP_PATH, json_text)
+	if _save_progress_score(data) > 0 or is_explicit_zero:
+		_write_json_file_direct(SAVE_SHADOW_PATH, json_text)
 
 	if OS.has_feature("web"):
-		_mirror_save_to_web_storage(json_text)
 		_sync_web_save_idbfs()
 
 func mark_tutorial_completed() -> void:
 	if not tutorial_completed or install_tutorial_state != "completed":
 		tutorial_completed = true
 		install_tutorial_state = "completed"
-		save_game_data()
+		_write_install_marker()
+		if _save_progress_score({"coins": coins, "total_wins": total_wins, "extra_lives": extra_lives, "redeemed_codes": redeemed_codes, "item_stash": item_stash}) > 0 or FileAccess.file_exists(SAVE_PATH):
+			save_game_data(true)
 
 func set_tutorial_completed_override(completed: bool) -> void:
 	tutorial_completed = completed
 	install_tutorial_state = "completed" if completed else "admin_forced"
+	_write_install_marker()
+	save_game_data(true)
+
+func prepare_for_update_restart() -> void:
+	save_active_run()
 	save_game_data()
+	SettingsManager._save_settings()
+	_skip_shutdown_resave = true
 
 func _notification(what: int) -> void:
+	if _skip_shutdown_resave:
+		return
 	if what == NOTIFICATION_WM_CLOSE_REQUEST or what == NOTIFICATION_WM_GO_BACK_REQUEST or what == NOTIFICATION_APPLICATION_PAUSED or what == NOTIFICATION_APPLICATION_FOCUS_OUT:
 		# Flush a final checkpoint when Android backgrounds the app or the user exits.
 		save_active_run()
@@ -897,7 +1028,7 @@ func purchase_shop_item(item_id: String, quantity: int = 1) -> Dictionary:
 		extra_lives += safe_quantity
 	else:
 		item_stash[item_id] = maxi(0, int(item_stash.get(item_id, 0))) + safe_quantity
-	save_game_data()
+	save_game_data(true)
 	var item_label: String = LocScript.item_name(item_id, item_id)
 	return {"success": true, "message": LocScript.pick("%s x%d berhasil dibeli." % [item_label, safe_quantity], "%s x%d purchased." % [item_label, safe_quantity]), "price": price}
 
@@ -1409,7 +1540,7 @@ func trigger_victory() -> void:
 	victory_sequence_active = true
 	furnace_burning = false
 	clear_run_save()
-	if is_tutorial_mode:
+	if is_tutorial_mode or install_tutorial_state != "admin_forced":
 		mark_tutorial_completed()
 	current_state = GameState.PAUSED
 	get_tree().paused = true
@@ -1481,7 +1612,7 @@ func _execute_player_death(reason: String, ignore_extra_lives: bool = false, byp
 		death_sequence_active = false
 		return
 	# Koin kekalahan hanya diberikan ketika permainan benar-benar berakhir.
-	if is_tutorial_mode:
+	if is_tutorial_mode or install_tutorial_state != "admin_forced":
 		mark_tutorial_completed()
 	_award_run_coins(LOSS_COIN_REWARD)
 	clear_run_save()
@@ -1516,15 +1647,15 @@ func admin_instant_lose() -> bool:
 
 func admin_set_coins(new_coins: int) -> void:
 	coins = clampi(new_coins, 0, MAX_COINS)
-	save_game_data()
+	save_game_data(true)
 
 func admin_set_extra_lives(new_lives: int) -> void:
 	extra_lives = clampi(new_lives, 0, MAX_EXTRA_LIVES)
-	save_game_data()
+	save_game_data(true)
 
 func admin_set_total_wins(new_wins: int) -> void:
 	total_wins = clampi(new_wins, 0, 999999)
-	save_game_data()
+	save_game_data(true)
 
 func admin_set_time(hour: int, minute: int) -> bool:
 	if not is_in_active_gameplay():

@@ -507,13 +507,13 @@ func _apply_graphics_quality() -> void:
 	var is_compat: bool = RenderingServer.get_current_rendering_method() == "gl_compatibility"
 	match effective:
 		"low":
-			viewport.scaling_3d_scale = 0.68
+			viewport.scaling_3d_scale = 0.75
 			viewport.msaa_3d = Viewport.MSAA_DISABLED
 			viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
 			viewport.positional_shadow_atlas_size = 0
-			RenderingServer.directional_shadow_atlas_set_size(256, false)
+			RenderingServer.directional_shadow_atlas_set_size(512, false)
 		"medium":
-			viewport.scaling_3d_scale = 0.80
+			viewport.scaling_3d_scale = 0.85
 			viewport.msaa_3d = Viewport.MSAA_DISABLED
 			viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED if is_compat else Viewport.SCREEN_SPACE_AA_FXAA
 			viewport.positional_shadow_atlas_size = 1024
@@ -550,26 +550,38 @@ func _apply_scene_graphics_optimizations(quality: String) -> void:
 	for dir_node: Node in root_node.find_children("*", "DirectionalLight3D", true, false):
 		var dlight: DirectionalLight3D = dir_node as DirectionalLight3D
 		if dlight:
-			dlight.shadow_enabled = (quality != "low")
+			dlight.shadow_enabled = true
+			dlight.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL if quality == "low" else DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+			dlight.directional_shadow_max_distance = 55.0 if quality == "low" else 95.0
+			dlight.shadow_bias = 0.08 if quality == "low" else 0.04
+			dlight.shadow_normal_bias = 1.5 if quality == "low" else 1.0
 			dlight.light_energy = 0.55
 
 	for spot_node: Node in root_node.find_children("*", "SpotLight3D", true, false):
 		var slight: SpotLight3D = spot_node as SpotLight3D
 		if slight:
-			slight.shadow_enabled = (quality == "high")
+			if not slight.has_meta("_base_shadow"):
+				slight.set_meta("_base_shadow", slight.shadow_enabled)
+			slight.shadow_enabled = (quality == "high") and bool(slight.get_meta("_base_shadow", true))
 
-	for omni_node: Node in root_node.find_children("ItemLight", "OmniLight3D", true, false):
-		var ilight: OmniLight3D = omni_node as OmniLight3D
-		if not ilight:
+	for omni_node: Node in root_node.find_children("*", "OmniLight3D", true, false):
+		var olight: OmniLight3D = omni_node as OmniLight3D
+		if not olight:
 			continue
-		var visuals_node: Node = ilight.get_parent()
-		var item_node: Node = visuals_node.get_parent() if visuals_node else null
-		var is_ritual: bool = item_node != null and "is_ritual_item" in item_node and bool(item_node.get("is_ritual_item"))
-		var is_unlocked_ritual: bool = is_ritual and item_node is Node3D and (item_node as Node3D).visible
-		ilight.shadow_enabled = false if quality == "low" else ilight.shadow_enabled
-		ilight.visible = (not is_ritual) or is_unlocked_ritual
-		if is_unlocked_ritual:
-			ilight.light_energy = 1.1 if quality == "low" else 1.5
+		if not olight.has_meta("_base_shadow"):
+			olight.set_meta("_base_shadow", olight.shadow_enabled)
+		olight.shadow_enabled = false if quality == "low" else bool(olight.get_meta("_base_shadow", false))
+		if olight.name == "ItemLight":
+			var visuals_node: Node = olight.get_parent()
+			var item_node: Node = visuals_node.get_parent() if visuals_node else null
+			var is_ritual: bool = item_node != null and "is_ritual_item" in item_node and bool(item_node.get("is_ritual_item"))
+			var is_unlocked_ritual: bool = is_ritual and item_node is Node3D and (item_node as Node3D).visible
+			olight.visible = (not is_ritual) or is_unlocked_ritual
+			olight.distance_fade_enabled = true
+			olight.distance_fade_begin = 14.0 if quality == "low" else 22.0
+			olight.distance_fade_length = 5.0
+			if is_unlocked_ritual:
+				olight.light_energy = 1.1 if quality == "low" else 1.5
 
 	for env_node: Node in root_node.find_children("*", "WorldEnvironment", true, false):
 		var we: WorldEnvironment = env_node as WorldEnvironment
@@ -596,7 +608,7 @@ func _apply_brightness_overlay() -> void:
 func _on_node_added(node: Node) -> void:
 	if node.name == "BrightnessOverlay":
 		call_deferred("_apply_brightness_overlay")
-	if node is WorldEnvironment or node is DirectionalLight3D or node is Camera3D or node.name == "HorrorOverlay" or "is_ritual_item" in node:
+	if node is WorldEnvironment or node is DirectionalLight3D or node is OmniLight3D or node is SpotLight3D or node is Camera3D or node.name == "HorrorOverlay" or "is_ritual_item" in node:
 		if not _pending_graphics_apply:
 			_pending_graphics_apply = true
 			call_deferred("_apply_graphics_deferred")

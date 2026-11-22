@@ -104,13 +104,11 @@ func _ready() -> void:
 	UpdateManager.fix_notes_updated.connect(_on_fix_notes_updated)
 	SettingsManager.keybinds_changed.connect(_on_settings_keybinds_changed)
 	get_viewport().size_changed.connect(_apply_layout)
-	if main_content:
-		main_content.minimum_size_changed.connect(_sync_menu_anchor_position)
 	_apply_layout()
 	call_deferred("_apply_layout")
 	HorrorTheme.animate_surface_enter(menu_anchor)
 	if start_button:
-		start_button.call_deferred("grab_focus")
+		call_deferred("_focus_control_safely", start_button)
 	call_deferred("_check_for_game_updates")
 
 func _process(delta: float) -> void:
@@ -143,6 +141,7 @@ func _build_menu() -> void:
 	main_content.add_theme_constant_override("separation", 10)
 	main_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	menu_anchor.add_child(main_content)
+	main_content.minimum_size_changed.connect(_sync_menu_anchor_position)
 
 	var header_block := VBoxContainer.new()
 	header_block.add_theme_constant_override("separation", 3)
@@ -256,7 +255,11 @@ func _open_modal(overlay: ColorRect, panel: PanelContainer) -> void:
 		HorrorTheme.animate_surface_enter(panel)
 	var first_btn: Button = _find_first_focusable_button(panel)
 	if first_btn:
-		first_btn.call_deferred("grab_focus")
+		call_deferred("_focus_control_safely", first_btn)
+
+func _focus_control_safely(ctrl: Control) -> void:
+	if is_instance_valid(ctrl) and ctrl.is_inside_tree() and ctrl.is_visible_in_tree():
+		ctrl.grab_focus()
 
 func _close_topmost_modal() -> bool:
 	_cancel_keybind_listening()
@@ -620,11 +623,18 @@ func _rebuild_for_language_change() -> void:
 	modal_overlays.clear()
 	modal_panels.clear()
 	difficulty_buttons.clear()
+	fix_notes_rendered_markdown = ""
+	fix_notes_sections.clear()
+	fix_notes_loaded_sections = 0
+	_active_drag_scroll = null
+	_drag_moved = false
+	_drag_pressed_button = null
 	for child: Node in get_children():
 		remove_child(child)
 		child.queue_free()
 	_build_menu()
 	_apply_layout()
+	call_deferred("_apply_layout")
 	_select_settings_tab(0)
 	_open_modal(settings_overlay, settings_panel)
 
@@ -1066,12 +1076,15 @@ func _build_fix_notes_modal() -> void:
 	fix_notes_view.add_theme_constant_override("line_separation", 7)
 	notes_column.add_child(fix_notes_view)
 
-	fix_notes_more_label = _make_label("Gulir ke bawah untuk memuat catatan versi sebelumnya...", 12, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_CENTER, "label-sm")
+	fix_notes_more_label = _make_label(
+		LocScript.pick("Gulir ke bawah untuk memuat catatan versi sebelumnya...", "Scroll down to load earlier version notes..."),
+		12, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_CENTER, "label-sm"
+	)
 	fix_notes_more_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	fix_notes_more_label.visible = false
 	notes_column.add_child(fix_notes_more_label)
 
-	var close := _make_button("TUTUP", false, "ghost")
+	var close := _make_button(LocScript.pick("TUTUP", "CLOSE"), false, "ghost")
 	close.pressed.connect(func() -> void: fix_notes_overlay.visible = false)
 	body.add_child(close)
 
@@ -1123,7 +1136,7 @@ func _split_fix_notes_sections(markdown: String) -> Array[String]:
 	return sections
 
 func _render_initial_fix_notes(markdown: String) -> void:
-	if markdown == fix_notes_rendered_markdown and fix_notes_loaded_sections > 0:
+	if markdown == fix_notes_rendered_markdown and fix_notes_loaded_sections > 0 and fix_notes_view and not fix_notes_view.get_parsed_text().is_empty():
 		return
 	fix_notes_rendered_markdown = markdown
 	fix_notes_sections = _split_fix_notes_sections(markdown)
@@ -1270,7 +1283,10 @@ func _show_fix_notes() -> void:
 		return
 	var markdown: String = UpdateManager.get_fix_notes_markdown()
 	if markdown.strip_edges().is_empty():
-		markdown = "# Catatan Pembaruan\n\nBelum ada catatan untuk versi ini."
+		markdown = LocScript.pick(
+			"# Catatan Pembaruan\n\nBelum ada catatan untuk versi ini.",
+			"# Patch Notes\n\nNo release notes available for this version yet."
+		)
 	_render_initial_fix_notes(markdown)
 	_open_modal(fix_notes_overlay, fix_notes_panel)
 	UpdateManager.fetch_latest_fix_notes(true)
@@ -1278,7 +1294,10 @@ func _show_fix_notes() -> void:
 func _on_fix_notes_updated(markdown: String, commit_sha: String) -> void:
 	if fix_notes_hint_label and not commit_sha.is_empty():
 		var short_ref: String = commit_sha.substr(0, 10) if commit_sha.length() > 10 else commit_sha
-		fix_notes_hint_label.text = "Menampilkan FIX_NOTES.md terbaru dari repository (%s)." % short_ref
+		fix_notes_hint_label.text = LocScript.pick(
+			"Menampilkan FIX_NOTES.md terbaru dari repository (%s)." % short_ref,
+			"Showing latest FIX_NOTES.md from repository (%s)." % short_ref
+		)
 	if fix_notes_view and fix_notes_overlay and fix_notes_overlay.visible:
 		var clean_md: String = UpdateManager.get_fix_notes_markdown()
 		if clean_md.strip_edges().is_empty():
@@ -1415,7 +1434,7 @@ func _build_credits_modal() -> void:
 	copy.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_child(copy)
 
-	var close := _make_button("TUTUP", false, "ghost")
+	var close := _make_button(LocScript.pick("TUTUP", "CLOSE"), false, "ghost")
 	close.pressed.connect(func() -> void: credits_overlay.visible = false)
 	body.add_child(close)
 

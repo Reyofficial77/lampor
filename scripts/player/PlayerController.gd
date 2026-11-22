@@ -1240,6 +1240,7 @@ func _apply_fpp_hand_override() -> void:
 		var guard_lift: float = lerpf(0.0, 26.0, sprint_blend) * move_blend
 
 		# Lengan kanan (tidak pegang barang: ayunan langkah + guard saat lari + gerakan meraih saat interaksi)
+		_set_skeleton_bone_rot("Shoulder.R", 0.0, 0.0, 0.0)
 		_set_skeleton_bone_rot(
 			"UpperArm.R",
 			-22.0 - guard_lift - stride_r - idle_breath * 0.9 - action_nudge * 2.2 + look_sway.y * 0.6,
@@ -1255,6 +1256,7 @@ func _apply_fpp_hand_override() -> void:
 		_set_skeleton_bone_rot("Hand.R", -4.0 - action_nudge * 0.8, 0.0, -6.0 + cos(walk_phase) * 5.0 * move_blend)
 
 		# Lengan kiri (penyeimbang alami saat jalan/lari & napas)
+		_set_skeleton_bone_rot("Shoulder.L", 0.0, 0.0, 0.0)
 		_set_skeleton_bone_rot(
 			"UpperArm.L",
 			-20.0 - guard_lift - stride_l - idle_breath * 0.8 + look_sway.y * 0.5,
@@ -1344,6 +1346,7 @@ func _apply_fpp_hand_override() -> void:
 			player_skeleton.set_bone_pose_scale(hand_l_idx, Vector3(0.78, 0.78, 0.78))
 	else:
 		# Lengan kiri tetap mengayun sebagai penyeimbang tubuh saat memegang barang di tangan kanan
+		_set_skeleton_bone_rot("Shoulder.L", 0.0, 0.0, 0.0)
 		if hand_l_idx >= 0:
 			player_skeleton.set_bone_pose_scale(hand_l_idx, Vector3(0.86, 0.86, 0.86))
 		var left_stride: float = -sin(walk_phase) * lerpf(16.0, 36.0, sprint_blend) * move_blend
@@ -1355,6 +1358,7 @@ func _apply_fpp_hand_override() -> void:
 			-12.0 + look_sway.x * 0.5
 		)
 		_set_skeleton_bone_rot("LowerArm.L", -22.0 - left_pump, 6.0, 5.0)
+		_set_skeleton_bone_rot("Hand.L", -4.0, 0.0, 6.0)
 
 	if hand_idx >= 0:
 		player_skeleton.set_bone_pose_scale(hand_idx, Vector3(0.78, 0.78, 0.78))

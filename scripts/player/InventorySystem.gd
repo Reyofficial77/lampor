@@ -194,6 +194,14 @@ func consume_equipped_item() -> bool:
 	var item: Dictionary = get_equipped_item()
 	if item.is_empty():
 		return false
+	if active_slot >= 0 and active_slot < HOTBAR_SLOTS and active_slot < slots.size():
+		if slots[active_slot].has("quantity") and int(slots[active_slot]["quantity"]) > 1:
+			slots[active_slot]["quantity"] = int(slots[active_slot]["quantity"]) - 1
+		else:
+			slots[active_slot] = {}
+		SignalBus.inventory_updated.emit(slots)
+		SignalBus.item_equipped.emit(active_slot, get_equipped_item())
+		return true
 	return consume_item_by_id(item.get("id", ""))
 
 func drop_equipped_item(drop_position: Vector3) -> bool:

@@ -700,7 +700,7 @@ func purchase_shop_item(item_id: String, quantity: int = 1) -> Dictionary:
 		"baterai":
 			price = 20 * safe_quantity
 		"kentongan":
-			price = 50 * safe_quantity
+			price = 250 * safe_quantity
 		"extra_life":
 			price = 80 if safe_quantity == 1 else (150 if safe_quantity == 2 else 210)
 		_:

@@ -36,7 +36,7 @@ const BUNDLED_FIX_NOTES: String = """# LAMPOR v1.2.8
 ## v1.2.8
 
 - **Item Baru: Kentongan (Pengusir Lampor)**:
-  - Menambahkan item konsumabel baru **Kentongan** (`1x pakai`, batas maksimal **5** di inventaris) yang tersedia di peta desa dan **Toko Bekal**.
+  - Menambahkan item konsumabel baru **Kentongan** (`1x pakai`, batas maksimal **5** di inventaris) yang hanya tersedia di **Toko Bekal** seharga **250 Koin**.
   - Saat digunakan ketika Lampor mengejar, Lampor berhenti mengejar dan menjauh selama **5 detik** sebelum kembali mengejar.
   - Dilengkapi model 3D dengan pegangan **dua tangan** (tangan kanan memegang **pemukul**, tangan kiri memegang **kentongan**), animasi pukulan, serta efek suara **kentongan**.
 - **Sinkronisasi Jam & Babak Permainan**:

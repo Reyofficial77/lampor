@@ -1,7 +1,7 @@
 class_name MainMenu
 extends Control
 
-const GAME_VERSION: String = "v1.2.6"
+const GAME_VERSION: String = "v1.2.7"
 const FALLBACK_REDEEM_CODES: Dictionary = {
 	"LAMPORGIFT": {"type": "coins", "quantity": 2500, "description": "hadiah untuk kalian!"}
 }
@@ -96,7 +96,10 @@ func _ready() -> void:
 	UpdateManager.up_to_date.connect(_on_update_up_to_date)
 	UpdateManager.fix_notes_updated.connect(_on_fix_notes_updated)
 	get_viewport().size_changed.connect(_apply_layout)
+	if main_content:
+		main_content.minimum_size_changed.connect(_sync_menu_anchor_position)
 	_apply_layout()
+	call_deferred("_apply_layout")
 	HorrorTheme.animate_surface_enter(menu_anchor)
 	if start_button:
 		start_button.call_deferred("grab_focus")
@@ -1354,7 +1357,7 @@ func _apply_layout() -> void:
 	var left_pad: float = 24.0 if narrow else (34.0 if short_screen else 64.0)
 	var col_w: float = clampf(view_size.x - left_pad * 2.0, 260.0, 340.0) if narrow else clampf(view_size.x * 0.34, 280.0, 360.0)
 
-	title_label.add_theme_font_size_override("font_size", 32 if short_screen else (38 if narrow else 52))
+	title_label.add_theme_font_size_override("font_size", 30 if short_screen else (38 if narrow else 52))
 	subtitle_label.add_theme_font_size_override("font_size", 11 if short_screen else 13)
 	if stats_label:
 		stats_label.visible = not (short_screen and view_size.y < 380.0)
@@ -1363,7 +1366,7 @@ func _apply_layout() -> void:
 
 	var menu_buttons: VBoxContainer = main_content.get_node("MenuButtons") as VBoxContainer
 	menu_buttons.add_theme_constant_override("separation", 2 if short_screen else 4)
-	var btn_h: float = 36.0 if (short_screen and view_size.y < 430.0) else 44.0
+	var btn_h: float = 34.0 if (short_screen and view_size.y < 430.0 and continue_button and continue_button.visible) else (36.0 if (short_screen and view_size.y < 430.0) else 44.0)
 	for button: Node in menu_buttons.get_children():
 		if button is Button:
 			var b: Button = button as Button
@@ -1372,13 +1375,7 @@ func _apply_layout() -> void:
 
 	main_content.custom_minimum_size = Vector2(col_w, 0.0)
 	main_content.reset_size()
-	var content_h: float = main_content.get_combined_minimum_size().y
-	var top_y: float = maxf(24.0 if short_screen else 48.0, (view_size.y - content_h) * (0.62 if narrow else 0.50))
-	if narrow:
-		top_y = clampf(top_y, 24.0, maxf(24.0, view_size.y - content_h - 68.0))
-	menu_anchor.position = Vector2(left_pad, top_y)
-	menu_anchor.size = Vector2(col_w, content_h)
-	main_content.size = Vector2(col_w, content_h)
+	_sync_menu_anchor_position()
 
 	for d_btn: Button in difficulty_buttons:
 		if is_instance_valid(d_btn):
@@ -1418,8 +1415,29 @@ func _apply_layout() -> void:
 		shop_scroll.custom_minimum_size.y = maxf(140.0, minf(310.0, view_size.y - 260.0))
 	if fix_notes_scroll:
 		fix_notes_scroll.custom_minimum_size.y = maxf(160.0, minf(450.0, view_size.y - 200.0))
+	_sync_menu_anchor_position()
 	if horror_backdrop:
 		horror_backdrop.queue_redraw()
+
+func _sync_menu_anchor_position() -> void:
+	if not menu_anchor or not main_content:
+		return
+	var view_size: Vector2 = get_viewport_rect().size
+	if view_size.x <= 0.0 or view_size.y <= 0.0:
+		view_size = Vector2(1280.0, 720.0)
+	var narrow: bool = view_size.x < 700.0
+	var short_screen: bool = view_size.y < 520.0
+	var left_pad: float = 24.0 if narrow else (34.0 if short_screen else 64.0)
+	var col_w: float = clampf(view_size.x - left_pad * 2.0, 260.0, 340.0) if narrow else clampf(view_size.x * 0.34, 280.0, 360.0)
+	var content_h: float = main_content.get_combined_minimum_size().y
+	var footer_clear: float = 44.0 if short_screen else (66.0 if narrow else 68.0)
+	var min_top: float = 16.0 if short_screen else 36.0
+	var avail_h: float = maxf(content_h, view_size.y - footer_clear)
+	var max_top: float = maxf(min_top, view_size.y - content_h - footer_clear)
+	var top_y: float = clampf((avail_h - content_h) * 0.44, min_top, max_top)
+	menu_anchor.position = Vector2(left_pad, top_y)
+	menu_anchor.size = Vector2(col_w, content_h)
+	main_content.size = Vector2(col_w, content_h)
 
 func _update_nightmare_status() -> void:
 	var unlocked: bool = GameManager.is_nightmare_unlocked()

@@ -11,7 +11,7 @@ const REPO_NAME: String = "lampor"
 const BRANCH: String = "main"
 const FULL_TREE_SYNC_VERSION: int = 1
 const PCK_COMPAT_GENERATION: int = 2
-const BUILD_COMMIT: String = "a0d04650082593714d3d5404b8e783ef74802a90"
+const BUILD_COMMIT: String = "9cc5e09a2e8a8b45e799d49cd0de81b975755384"
 const API_URL: String = "https://api.github.com/repos/Reyofficial77/lampor/commits/main"
 const ATOM_URL: String = "https://github.com/Reyofficial77/lampor/commits/main.atom"
 const ARCHIVE_URL: String = "https://codeload.github.com/Reyofficial77/lampor/zip/"
@@ -27,7 +27,16 @@ const FIX_NOTES_CACHE_PATH: String = "user://lampor_fix_notes.md"
 const AUTO_CHECK_INTERVAL_SEC: float = 300.0
 const REQUIRED_UPDATE_FILES: PackedStringArray = ["project.godot", "scripts/autoload/UpdateManager.gd", "FIX_NOTES.md"]
 
-const BUNDLED_FIX_NOTES: String = """# LAMPOR v1.2.6
+const BUNDLED_FIX_NOTES: String = """# LAMPOR v1.2.7
+
+## v1.2.7
+
+- **Perbaikan Redeem Kode `LAMPORGIFT` & Alur Mulai Permainan di Mobile**:
+  - Memastikan tombol **SAYA MENGERTI** setelah **MULAI PERMAINAN** selalu membuka modal **PILIH TINGKAT KESULITAN** (pemilihan mode permainan) alih-alih kembali ke menu utama atau langsung melompat ke tutorial.
+  - Memperbaiki sinkronisasi skrip kode redeem pada pembaruan `.pck` serta normalisasi input keyboard virtual mobile sehingga kode `LAMPORGIFT` terbaca valid dan langsung memberikan hadiah koin.
+- **Penyederhanaan Antarmuka Minimalis & Fitur Lanjutkan Malam (Autosave)**:
+  - Merampingkan navigasi Menu Utama bergaya horor minimalis, menggabungkan modal **Pengaturan & Panduan** dalam tab terpadu, serta menyempurnakan tampilan `HUD`, `GameOverScreen`, `VictoryScreen`, `TutorialOverlay`, dan `InventorySlotUI`.
+  - Menambahkan sistem *autosave* progres permainan berjalan dan tombol **LANJUTKAN MALAM** di Menu Utama untuk melanjutkan sesi permainan sebelumnya.
 
 ## v1.2.6
 
@@ -50,9 +59,6 @@ const BUNDLED_FIX_NOTES: String = """# LAMPOR v1.2.6
 - **Fitur Tutorial Interaktif untuk Pemain Baru (Mode Easy) & Batas Aman Koin**:
   - Menambahkan sistem tutorial langkah-demi-langkah (7 tahap) pada mode `Easy` bagi pemain yang baru pertama kali bermain (dan dapat diakses kapan saja melalui menu pilihan tingkat kesulitan), mencakup latihan pergerakan & senter, pengambilan bekal, penyalaan obor, barikade pintu, larangan menatap Lampor, pengumpulan 4 benda ritual, hingga pembakaran di Tungku Balai Desa dengan panel ringkas yang dapat diperkecil (`[–]`).
   - Menambahkan batas maksimum penyimpanan koin (`999.999.999`) untuk mencegah *integer overflow* (nilai koin menjadi negatif) saat menerima hadiah kemenangan atau kekalahan.
-- **Perbaikan Redeem Kode `LAMPORGIFT` & Alur Mulai Permainan di Mobile**:
-  - Memastikan tombol **SAYA MENGERTI** setelah **MULAI PERMAINAN** selalu membuka modal **PILIH TINGKAT KESULITAN** (pemilihan mode permainan) alih-alih kembali ke menu utama atau langsung melompat ke tutorial.
-  - Memperbaiki sinkronisasi skrip kode redeem pada pembaruan `.pck` serta normalisasi input keyboard virtual mobile sehingga kode `LAMPORGIFT` terbaca valid dan langsung memberikan hadiah koin.
 
 ## v1.2.5
 

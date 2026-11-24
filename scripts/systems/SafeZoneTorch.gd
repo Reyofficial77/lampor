@@ -32,6 +32,12 @@ func get_interaction_prompt(player: Node) -> String:
 	else:
 		return LocScript.pick("Obor Padam (Butuh Minyak Tanah & Korek Api)", "Unlit Torch (Requires Kerosene & Matches)")
 
+func _get_scene_node_path() -> String:
+	var root: Node = get_tree().current_scene
+	if root and root.is_ancestor_of(self):
+		return str(root.get_path_to(self))
+	return name
+
 func interact(player: Node) -> void:
 	if is_lit:
 		return
@@ -44,11 +50,31 @@ func interact(player: Node) -> void:
 		_update_visuals()
 		AudioManager.play_sound("lighter_ignite", 2.0)
 		SignalBus.torch_lit.emit(torch_id, GameManager.torches_lit, GameManager.REQUIRED_TORCHES)
+		if MultiplayerManager.is_online_session:
+			MultiplayerManager.push_event("torch_lit", {
+				"torch_id": torch_id,
+				"node_path": _get_scene_node_path(),
+				"is_lit": true
+			})
 		
 		# Pemain berdiri dekat obor (jangkauan interaksi < radius area), jadi langsung aman
 		var pc: PlayerController = player as PlayerController
 		if pc and pc.sanity_system:
 			pc.sanity_system.set_safe_source(self, true)
+
+func apply_network_lit(lit: bool) -> void:
+	if is_lit == lit:
+		return
+	is_lit = lit
+	_update_visuals()
+	if is_lit:
+		AudioManager.play_sound("lighter_ignite", 0.0)
+	if safe_area:
+		for body: Node3D in safe_area.get_overlapping_bodies():
+			if body is PlayerController:
+				var pc: PlayerController = body as PlayerController
+				if pc.sanity_system:
+					pc.sanity_system.set_safe_source(self, is_lit)
 
 func _on_safe_area_entered(body: Node3D) -> void:
 	if is_lit and body is PlayerController:

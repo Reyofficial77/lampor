@@ -1,0 +1,681 @@
+extends Node
+
+const LocScript = preload("res://scripts/systems/Loc.gd")
+
+const ACCOUNT_CFG_PATH: String = "user://lampor_account.cfg"
+const WEB_ACCOUNT_KEY: String = "lampor_account_v1"
+const REQUEST_TIMEOUT_SEC: float = 10.0
+const POW_YIELD_INTERVAL: int = 250
+const POW_MAX_ITERATIONS: int = 250000
+
+var is_logged_in: bool = false
+var is_guest_mode: bool = false
+var account_gate_resolved: bool = false
+var user_id: String = ""
+var username: String = ""
+var role: String = "player"
+var session_token: String = ""
+var is_busy: bool = false
+var last_error: String = ""
+var server_base_url: String = ""
+
+var _is_syncing_profile: bool = false
+var _pending_profile_sync: bool = false
+var _applying_cloud_profile: bool = false
+var _web_sync_pending: bool = false
+var _rx_username: RegEx = null
+var _rx_letter: RegEx = null
+var _rx_digit: RegEx = null
+
+func _ready() -> void:
+	process_mode = Node.PROCESS_MODE_ALWAYS
+	_ensure_regexes()
+	server_base_url = SettingsManager.server_base_url
+	_load_account_storage()
+	if OS.has_feature("web"):
+		call_deferred("_schedule_web_account_reconcile")
+
+func _ensure_regexes() -> void:
+	if _rx_username == null:
+		_rx_username = RegEx.new()
+		_rx_username.compile("^[a-zA-Z0-9_]{3,24}$")
+	if _rx_letter == null:
+		_rx_letter = RegEx.new()
+		_rx_letter.compile("[a-zA-Z]")
+	if _rx_digit == null:
+		_rx_digit = RegEx.new()
+		_rx_digit.compile("[0-9]")
+
+func can_access_online_modes() -> bool:
+	return is_logged_in and not is_guest_mode and not session_token.is_empty()
+
+func validate_credentials_format(uname: String, pwd: String, is_register: bool) -> String:
+	_ensure_regexes()
+	var clean_uname: String = uname.strip_edges()
+	if clean_uname.is_empty():
+		return LocScript.pick("Username wajib diisi.", "Username is required.")
+	if _rx_username.search(clean_uname) == null:
+		return LocScript.pick(
+			"Username harus 3-24 karakter (huruf, angka, atau underscore _).",
+			"Username must be 3-24 characters (letters, numbers, or underscore _)."
+		)
+	if pwd.is_empty():
+		return LocScript.pick("Password wajib diisi.", "Password is required.")
+	if is_register:
+		if pwd.length() < 8 or pwd.length() > 72:
+			return LocScript.pick(
+				"Password minimal 8 karakter dan maksimal 72 karakter.",
+				"Password must be between 8 and 72 characters."
+			)
+		if _rx_letter.search(pwd) == null:
+			return LocScript.pick(
+				"Password wajib mengandung minimal 1 huruf.",
+				"Password must include at least 1 letter."
+			)
+		if _rx_digit.search(pwd) == null:
+			return LocScript.pick(
+				"Password wajib mengandung minimal 1 angka.",
+				"Password must include at least 1 digit."
+			)
+	elif pwd.length() > 72:
+		return LocScript.pick(
+			"Password maksimal 72 karakter.",
+			"Password must be at most 72 characters."
+		)
+	return ""
+
+func _get_effective_base_url() -> String:
+	var base: String = server_base_url.strip_edges()
+	if base.is_empty():
+		base = SettingsManager.server_base_url
+	while base.ends_with("/"):
+		base = base.left(base.length() - 1)
+	if base.is_empty():
+		base = SettingsManager.DEFAULT_SERVER_URL
+	return base
+
+func _transport_error_message(result_code: int) -> String:
+	match result_code:
+		HTTPRequest.RESULT_TIMEOUT:
+			return LocScript.pick(
+				"Koneksi ke server timeout (melebihi 10 detik).",
+				"Server request timed out (exceeded 10 seconds)."
+			)
+		HTTPRequest.RESULT_CANT_RESOLVE:
+			return LocScript.pick(
+				"Alamat server tidak dapat ditemukan (DNS gagal).",
+				"Could not resolve server host name."
+			)
+		HTTPRequest.RESULT_TLS_HANDSHAKE_ERROR:
+			return LocScript.pick(
+				"Koneksi aman HTTPS/TLS ke server gagal.",
+				"Secure HTTPS/TLS handshake failed."
+			)
+		HTTPRequest.RESULT_CANT_CONNECT:
+			return LocScript.pick(
+				"Tidak dapat terhubung ke server. Pastikan server aktif atau URL benar.",
+				"Cannot connect to server. Verify server status or URL."
+			)
+		_:
+			return LocScript.pick(
+				"Koneksi jaringan terganggu (kode %d)." % result_code,
+				"Network connection failed (code %d)." % result_code
+			)
+
+func api_request(method: String, path: String, body: Variant = null, use_auth: bool = true) -> Dictionary:
+	var method_upper: String = method.strip_edges().to_upper()
+	var http_method: HTTPClient.Method = HTTPClient.METHOD_GET
+	match method_upper:
+		"POST":
+			http_method = HTTPClient.METHOD_POST
+		"PUT":
+			http_method = HTTPClient.METHOD_PUT
+		"DELETE":
+			http_method = HTTPClient.METHOD_DELETE
+		"PATCH":
+			http_method = HTTPClient.METHOD_PATCH
+		_:
+			http_method = HTTPClient.METHOD_GET
+
+	var url: String = path
+	if not (path.begins_with("http://") or path.begins_with("https://")):
+		var normalized_path: String = path if path.begins_with("/") else "/" + path
+		url = _get_effective_base_url() + normalized_path
+
+	var headers := PackedStringArray([
+		"Content-Type: application/json",
+		"Accept: application/json",
+		"X-Lampor-Client-Version: 1.3.0"
+	])
+	var used_token: String = session_token if (use_auth and not session_token.is_empty()) else ""
+	if not used_token.is_empty():
+		headers.append("Authorization: Bearer " + used_token)
+
+	var payload_str: String = ""
+	if body != null:
+		payload_str = body if body is String else JSON.stringify(body)
+	elif http_method in [HTTPClient.METHOD_POST, HTTPClient.METHOD_PUT, HTTPClient.METHOD_PATCH]:
+		payload_str = "{}"
+
+	var req := HTTPRequest.new()
+	req.timeout = REQUEST_TIMEOUT_SEC
+	req.max_redirects = 8
+	req.use_threads = not OS.has_feature("web")
+	add_child(req)
+
+	var start_err: Error = req.request(url, headers, http_method, payload_str)
+	if start_err != OK:
+		req.queue_free()
+		return {
+			"ok": false,
+			"status": 0,
+			"data": {},
+			"message": LocScript.pick(
+				"Gagal memulai permintaan ke server (kode %d)." % start_err,
+				"Failed to initiate request (code %d)." % start_err
+			)
+		}
+
+	var completed: Array = await req.request_completed
+	if is_instance_valid(req):
+		req.queue_free()
+
+	var result_code: int = int(completed[0]) if completed.size() > 0 else HTTPRequest.RESULT_CONNECTION_ERROR
+	var status_code: int = int(completed[1]) if completed.size() > 1 else 0
+	var raw_bytes: PackedByteArray = completed[3] if completed.size() > 3 and completed[3] is PackedByteArray else PackedByteArray()
+
+	if result_code != HTTPRequest.RESULT_SUCCESS:
+		return {
+			"ok": false,
+			"status": status_code,
+			"data": {},
+			"message": _transport_error_message(result_code)
+		}
+
+	var body_text: String = raw_bytes.get_string_from_utf8()
+	var parsed_data: Dictionary = {}
+	if not body_text.strip_edges().is_empty():
+		var json := JSON.new()
+		if json.parse(body_text) == OK and json.data is Dictionary:
+			parsed_data = json.data as Dictionary
+
+	var http_ok: bool = status_code >= 200 and status_code < 300
+	var body_ok: bool = bool(parsed_data.get("ok", http_ok)) if not parsed_data.is_empty() else http_ok
+	var final_ok: bool = http_ok and body_ok
+
+	var msg: String = str(parsed_data.get("message", parsed_data.get("error", ""))).strip_edges()
+	var ban_reason: String = str(parsed_data.get("reason", "")).strip_edges()
+	if not ban_reason.is_empty() and not msg.contains(ban_reason):
+		msg = (msg + " (" + ban_reason + ")") if not msg.is_empty() else ban_reason
+	if msg.is_empty() and not final_ok:
+		msg = LocScript.network_error_label(status_code)
+
+	if status_code == 401 and not used_token.is_empty() and session_token == used_token:
+		_handle_session_expired(msg)
+
+	return {
+		"ok": final_ok,
+		"status": status_code,
+		"data": parsed_data,
+		"message": msg
+	}
+
+func _handle_session_expired(reason_msg: String) -> void:
+	is_logged_in = false
+	is_guest_mode = false
+	account_gate_resolved = false
+	session_token = ""
+	user_id = ""
+	username = ""
+	role = "player"
+	last_error = reason_msg if not reason_msg.is_empty() else LocScript.network_error_label(401)
+	_clear_account_storage()
+	SignalBus.account_state_changed.emit()
+
+func solve_pow_challenge() -> Dictionary:
+	var res: Dictionary = await api_request("GET", "/api/auth/challenge", null, false)
+	if not bool(res.get("ok", false)):
+		return {
+			"ok": false,
+			"message": str(res.get("message", LocScript.pick("Gagal mengambil verifikasi anti-bot.", "Failed to fetch anti-bot challenge.")))
+		}
+	var d: Dictionary = res.get("data", {})
+	var challenge_id: String = str(d.get("challengeId", ""))
+	var salt: String = str(d.get("salt", ""))
+	var difficulty: int = clampi(int(d.get("difficulty", 3)), 1, 6)
+	var expires_at: int = int(d.get("expiresAt", 0))
+	var signature: String = str(d.get("signature", ""))
+	if challenge_id.is_empty() or salt.is_empty() or signature.is_empty() or expires_at <= 0:
+		return {
+			"ok": false,
+			"message": LocScript.pick("Format tantangan anti-bot dari server tidak valid.", "Invalid anti-bot challenge payload from server.")
+		}
+
+	var prefix: String = "0".repeat(difficulty)
+	var nonce: int = 0
+	while nonce < POW_MAX_ITERATIONS:
+		var ctx := HashingContext.new()
+		ctx.start(HashingContext.HASH_SHA256)
+		ctx.update(("%s:%d" % [salt, nonce]).to_utf8_buffer())
+		var digest_hex: String = ctx.finish().hex_encode()
+		if digest_hex.begins_with(prefix):
+			return {
+				"ok": true,
+				"challengeId": challenge_id,
+				"salt": salt,
+				"difficulty": difficulty,
+				"expiresAt": expires_at,
+				"signature": signature,
+				"nonce": nonce
+			}
+		nonce += 1
+		if nonce % POW_YIELD_INTERVAL == 0:
+			if not is_inside_tree():
+				return {"ok": false, "message": LocScript.pick("Verifikasi dibatalkan.", "Verification cancelled.")}
+			await get_tree().process_frame
+
+	return {
+		"ok": false,
+		"message": LocScript.pick("Verifikasi anti-bot melebihi batas percobaan.", "Anti-bot proof-of-work exceeded iteration limit.")
+	}
+
+func _submit_auth_request(endpoint: String, uname: String, pwd: String, is_register: bool) -> Dictionary:
+	if is_busy:
+		return {
+			"ok": false,
+			"status": 0,
+			"message": LocScript.pick("Permintaan akun sedang diproses, tunggu sebentar...", "An account request is already in progress...")
+		}
+	var clean_uname: String = uname.strip_edges()
+	var format_err: String = validate_credentials_format(clean_uname, pwd, is_register)
+	if not format_err.is_empty():
+		last_error = format_err
+		return {"ok": false, "status": 400, "message": format_err}
+
+	is_busy = true
+	last_error = ""
+
+	var pow_res: Dictionary = await solve_pow_challenge()
+	if not bool(pow_res.get("ok", false)):
+		is_busy = false
+		last_error = str(pow_res.get("message", ""))
+		return {"ok": false, "status": 0, "message": last_error}
+
+	var challenge_payload: Dictionary = {
+		"challengeId": str(pow_res.get("challengeId", "")),
+		"salt": str(pow_res.get("salt", "")),
+		"difficulty": int(pow_res.get("difficulty", 3)),
+		"expiresAt": int(pow_res.get("expiresAt", 0)),
+		"signature": str(pow_res.get("signature", "")),
+		"nonce": int(pow_res.get("nonce", 0))
+	}
+	var body: Dictionary = {
+		"username": clean_uname,
+		"password": pwd,
+		"challenge": challenge_payload,
+		"website": ""
+	}
+	var res: Dictionary = await api_request("POST", endpoint, body, false)
+	is_busy = false
+
+	if not bool(res.get("ok", false)):
+		last_error = str(res.get("message", ""))
+		return {
+			"ok": false,
+			"status": int(res.get("status", 0)),
+			"message": last_error,
+			"data": res.get("data", {})
+		}
+
+	var data: Dictionary = res.get("data", {})
+	var token: String = str(data.get("token", "")).strip_edges()
+	var user_dict: Dictionary = data.get("user", {}) if data.get("user") is Dictionary else {}
+	if token.is_empty() or user_dict.is_empty():
+		last_error = LocScript.pick("Respons sesi server tidak lengkap.", "Incomplete session response from server.")
+		return {"ok": false, "status": int(res.get("status", 500)), "message": last_error}
+
+	session_token = token
+	is_logged_in = true
+	is_guest_mode = false
+	account_gate_resolved = true
+	last_error = ""
+	_extract_identity_from_user(user_dict)
+	_save_account_storage()
+	_apply_server_user_to_game_manager(user_dict)
+	SignalBus.account_state_changed.emit()
+
+	return {
+		"ok": true,
+		"status": int(res.get("status", 200)),
+		"message": str(res.get("message", "")),
+		"user": user_dict
+	}
+
+func register_account(uname: String, pwd: String) -> Dictionary:
+	return await _submit_auth_request("/api/auth/register", uname, pwd, true)
+
+func login_account(uname: String, pwd: String) -> Dictionary:
+	return await _submit_auth_request("/api/auth/login", uname, pwd, false)
+
+func verify_saved_session() -> bool:
+	if session_token.is_empty():
+		return false
+	is_busy = true
+	var res: Dictionary = await api_request("GET", "/api/auth/me", null, true)
+	is_busy = false
+
+	if bool(res.get("ok", false)):
+		var data: Dictionary = res.get("data", {})
+		var user_dict: Dictionary = data.get("user", {}) if data.get("user") is Dictionary else {}
+		if not user_dict.is_empty():
+			is_logged_in = true
+			is_guest_mode = false
+			account_gate_resolved = true
+			last_error = ""
+			_extract_identity_from_user(user_dict)
+			_save_account_storage()
+			_apply_server_user_to_game_manager(user_dict)
+			SignalBus.account_state_changed.emit()
+			return true
+
+	var status_code: int = int(res.get("status", 0))
+	if status_code == 401 or status_code == 403:
+		_handle_session_expired(str(res.get("message", "")))
+		return false
+
+	last_error = str(res.get("message", ""))
+	is_logged_in = false
+	account_gate_resolved = false
+	return false
+
+func enter_guest_mode() -> void:
+	is_logged_in = false
+	is_guest_mode = true
+	account_gate_resolved = true
+	session_token = ""
+	user_id = ""
+	username = "Guest"
+	role = "player"
+	last_error = ""
+	_save_account_storage()
+	SignalBus.account_state_changed.emit()
+
+func logout_account() -> void:
+	var mp: Node = get_node_or_null("/root/MultiplayerManager")
+	if mp and bool(mp.get("is_online_session")) and mp.has_method("leave_room"):
+		await mp.call("leave_room")
+	elif mp and mp.has_method("reset_to_singleplayer"):
+		mp.call("reset_to_singleplayer")
+
+	if not session_token.is_empty():
+		is_busy = true
+		await api_request("POST", "/api/auth/logout", {}, true)
+		is_busy = false
+
+	session_token = ""
+	user_id = ""
+	username = ""
+	role = "player"
+	is_logged_in = false
+	is_guest_mode = false
+	account_gate_resolved = false
+	last_error = ""
+	_clear_account_storage()
+	SignalBus.account_state_changed.emit()
+
+func sync_profile_to_cloud() -> void:
+	if not can_access_online_modes() or _applying_cloud_profile:
+		return
+	if _is_syncing_profile:
+		_pending_profile_sync = true
+		return
+
+	_is_syncing_profile = true
+	last_error = ""
+	while true:
+		_pending_profile_sync = false
+		if not can_access_online_modes():
+			break
+		var stash_payload: Dictionary = {
+			"jamu": clampi(int(GameManager.item_stash.get("jamu", 0)), 0, GameManager.MAX_SHOP_ITEM_QTY),
+			"baterai": clampi(int(GameManager.item_stash.get("baterai", 0)), 0, GameManager.MAX_SHOP_ITEM_QTY),
+			"energy_drink": clampi(int(GameManager.item_stash.get("energy_drink", 0)), 0, GameManager.MAX_SHOP_ITEM_QTY),
+			"kentongan": clampi(int(GameManager.item_stash.get("kentongan", 0)), 0, GameManager.MAX_SHOP_ITEM_QTY)
+		}
+		var codes_payload: Array = []
+		for code_entry: String in GameManager.redeemed_codes:
+			codes_payload.append(code_entry)
+		var body: Dictionary = {
+			"coins": clampi(GameManager.coins, 0, GameManager.MAX_COINS),
+			"totalWins": maxi(0, GameManager.total_wins),
+			"extraLives": clampi(GameManager.extra_lives, 0, GameManager.MAX_EXTRA_LIVES),
+			"itemStash": stash_payload,
+			"redeemedCodes": codes_payload,
+			"saveSeq": maxi(0, GameManager.save_seq),
+			"tutorialCompleted": GameManager.tutorial_completed
+		}
+		var res: Dictionary = await api_request("POST", "/api/auth/sync", body, true)
+		if bool(res.get("ok", false)):
+			last_error = ""
+			var data: Dictionary = res.get("data", {})
+			if data.get("user") is Dictionary and not _pending_profile_sync:
+				var server_user: Dictionary = data["user"] as Dictionary
+				var server_seq: int = int(server_user.get("saveSeq", server_user.get("save_seq", 0)))
+				if server_seq > GameManager.save_seq:
+					_apply_server_user_to_game_manager(server_user)
+					SignalBus.account_state_changed.emit()
+		else:
+			last_error = str(res.get("message", LocScript.pick("Gagal menyinkronkan profil ke cloud.", "Failed to sync profile to cloud.")))
+		if not _pending_profile_sync:
+			break
+	_is_syncing_profile = false
+
+func redeem_cloud_code(code: String) -> Dictionary:
+	if not can_access_online_modes():
+		return {
+			"ok": false,
+			"success": false,
+			"message": LocScript.pick("Masuk ke akun LAMPOR untuk menukar kode cloud.", "Log in to a LAMPOR account to redeem cloud codes.")
+		}
+	var cleaned: String = code.strip_edges().to_upper()
+	if cleaned.is_empty():
+		return {
+			"ok": false,
+			"success": false,
+			"message": LocScript.pick("Masukkan kode redeem terlebih dahulu.", "Enter a redeem code first.")
+		}
+	var res: Dictionary = await api_request("POST", "/api/redeem", {"code": cleaned}, true)
+	if not bool(res.get("ok", false)):
+		return {
+			"ok": false,
+			"success": false,
+			"status": int(res.get("status", 0)),
+			"message": str(res.get("message", LocScript.pick("Kode redeem gagal diproses.", "Failed to redeem code.")))
+		}
+
+	var data: Dictionary = res.get("data", {})
+	var user_dict: Variant = data.get("user", null)
+	if user_dict is Dictionary:
+		_apply_server_user_to_game_manager(user_dict as Dictionary)
+	elif data.get("reward") is Dictionary:
+		var raw_reward: Dictionary = data["reward"] as Dictionary
+		var normalized_reward: Dictionary = {
+			"type": str(raw_reward.get("type", raw_reward.get("rewardType", ""))),
+			"item_id": str(raw_reward.get("item_id", raw_reward.get("itemId", ""))),
+			"quantity": int(raw_reward.get("quantity", 1))
+		}
+		GameManager.apply_reward(normalized_reward)
+		if not GameManager.redeemed_codes.has(cleaned):
+			GameManager.redeemed_codes.append(cleaned)
+		_applying_cloud_profile = true
+		GameManager.save_game_data(true)
+		_applying_cloud_profile = false
+		SignalBus.coins_changed.emit(GameManager.coins)
+	SignalBus.account_state_changed.emit()
+
+	return {
+		"ok": true,
+		"success": true,
+		"status": int(res.get("status", 200)),
+		"message": str(res.get("message", data.get("message", LocScript.pick("Kode berhasil ditukarkan.", "Code redeemed successfully.")))),
+		"reward": data.get("reward", {}),
+		"data": data
+	}
+
+func _extract_identity_from_user(user_data: Dictionary) -> void:
+	var uid_val: String = str(user_data.get("id", user_data.get("userId", user_id))).strip_edges()
+	if not uid_val.is_empty():
+		user_id = uid_val
+	var uname_val: String = str(user_data.get("username", username)).strip_edges()
+	if not uname_val.is_empty():
+		username = uname_val
+	role = str(user_data.get("role", "player")).strip_edges().to_lower()
+	if role.is_empty():
+		role = "player"
+
+func _apply_server_user_to_game_manager(user_data: Dictionary) -> void:
+	if user_data.is_empty():
+		return
+	_applying_cloud_profile = true
+	GameManager.coins = clampi(int(user_data.get("coins", 0)), 0, GameManager.MAX_COINS)
+	GameManager.total_wins = maxi(0, int(user_data.get("totalWins", user_data.get("total_wins", 0))))
+	GameManager.extra_lives = clampi(int(user_data.get("extraLives", user_data.get("extra_lives", 0))), 0, GameManager.MAX_EXTRA_LIVES)
+	var server_seq: int = maxi(0, int(user_data.get("saveSeq", user_data.get("save_seq", 0))))
+	GameManager.save_seq = server_seq
+
+	var stash_raw: Variant = user_data.get("itemStash", user_data.get("item_stash", {}))
+	for item_key: String in ["jamu", "baterai", "energy_drink", "kentongan"]:
+		var qty: int = 0
+		if stash_raw is Dictionary:
+			qty = clampi(int((stash_raw as Dictionary).get(item_key, 0)), 0, GameManager.MAX_SHOP_ITEM_QTY)
+		GameManager.item_stash[item_key] = qty
+
+	GameManager.redeemed_codes.clear()
+	var codes_raw: Variant = user_data.get("redeemedCodes", user_data.get("redeemed_codes", []))
+	if codes_raw is Array:
+		for c: Variant in (codes_raw as Array):
+			var norm_code: String = str(c).strip_edges().to_upper()
+			if not norm_code.is_empty() and not GameManager.redeemed_codes.has(norm_code):
+				GameManager.redeemed_codes.append(norm_code)
+
+	GameManager.save_game_data(true)
+	_applying_cloud_profile = false
+	SignalBus.coins_changed.emit(GameManager.coins)
+
+func _save_account_storage() -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value("account", "token", session_token)
+	cfg.set_value("account", "user_id", user_id)
+	cfg.set_value("account", "username", username)
+	cfg.set_value("account", "role", role)
+	cfg.set_value("account", "is_guest", is_guest_mode)
+	cfg.save(ACCOUNT_CFG_PATH)
+	if OS.has_feature("web"):
+		_mirror_account_to_web_storage(cfg.encode_to_text())
+		_sync_web_idbfs()
+
+func _load_account_storage() -> void:
+	var cfg := ConfigFile.new()
+	var loaded_ok: bool = (cfg.load(ACCOUNT_CFG_PATH) == OK)
+	if not loaded_ok and OS.has_feature("web"):
+		loaded_ok = _restore_account_from_web_storage(cfg)
+	if not loaded_ok:
+		return
+
+	var saved_token: String = str(cfg.get_value("account", "token", "")).strip_edges()
+	var saved_uid: String = str(cfg.get_value("account", "user_id", "")).strip_edges()
+	var saved_uname: String = str(cfg.get_value("account", "username", "")).strip_edges()
+	var saved_role: String = str(cfg.get_value("account", "role", "player")).strip_edges().to_lower()
+	var saved_guest: bool = bool(cfg.get_value("account", "is_guest", false))
+
+	if not saved_token.is_empty():
+		session_token = saved_token
+		user_id = saved_uid
+		username = saved_uname
+		role = saved_role if not saved_role.is_empty() else "player"
+		is_logged_in = false
+		is_guest_mode = false
+		account_gate_resolved = false
+	elif saved_guest:
+		session_token = ""
+		user_id = ""
+		username = "Guest"
+		role = "player"
+		is_logged_in = false
+		is_guest_mode = true
+		account_gate_resolved = true
+
+func _clear_account_storage() -> void:
+	if FileAccess.file_exists(ACCOUNT_CFG_PATH):
+		var abs_path: String = ProjectSettings.globalize_path(ACCOUNT_CFG_PATH)
+		if DirAccess.remove_absolute(abs_path) != OK:
+			var empty_cfg := ConfigFile.new()
+			empty_cfg.set_value("account", "token", "")
+			empty_cfg.set_value("account", "is_guest", false)
+			empty_cfg.save(ACCOUNT_CFG_PATH)
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("try{window.localStorage.removeItem('%s');}catch(e){}" % WEB_ACCOUNT_KEY)
+		_sync_web_idbfs()
+
+func _mirror_account_to_web_storage(cfg_text: String) -> void:
+	if not OS.has_feature("web") or cfg_text.is_empty():
+		return
+	var b64: String = Marshalls.utf8_to_base64(cfg_text)
+	var js_code: String = """(function(){
+		try {
+			var bin = atob('%s');
+			var bytes = new Uint8Array(bin.length);
+			for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+			var txt = new TextDecoder('utf-8').decode(bytes);
+			window.localStorage.setItem('%s', txt);
+		} catch (e) {}
+	})()""" % [b64, WEB_ACCOUNT_KEY]
+	JavaScriptBridge.eval(js_code)
+
+func _restore_account_from_web_storage(cfg: ConfigFile) -> bool:
+	if not OS.has_feature("web"):
+		return false
+	var js_code: String = """(function(){
+		try {
+			var v = window.localStorage.getItem('%s');
+			if (!v) return '';
+			var bytes = new TextEncoder().encode(v);
+			var bin = '';
+			for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+			return btoa(bin);
+		} catch (e) { return ''; }
+	})()""" % WEB_ACCOUNT_KEY
+	var b64: Variant = JavaScriptBridge.eval(js_code)
+	if not (b64 is String) or (b64 as String).is_empty():
+		return false
+	var decoded: String = Marshalls.base64_to_utf8(b64 as String)
+	if decoded.is_empty():
+		return false
+	return cfg.parse(decoded) == OK
+
+func _sync_web_idbfs() -> void:
+	if not OS.has_feature("web") or _web_sync_pending:
+		return
+	_web_sync_pending = true
+	JavaScriptBridge.eval("""(function(){
+		try {
+			if (typeof FS !== 'undefined' && typeof FS.syncfs === 'function') {
+				FS.syncfs(false, function(err){});
+			}
+		} catch (e) {}
+	})()""")
+	get_tree().create_timer(0.25, true, false, true).timeout.connect(func() -> void:
+		_web_sync_pending = false
+	)
+
+func _schedule_web_account_reconcile() -> void:
+	if not OS.has_feature("web"):
+		return
+	await get_tree().create_timer(0.65, true, false, true).timeout
+	if not is_inside_tree() or account_gate_resolved or is_busy or not session_token.is_empty():
+		return
+	var disk_cfg := ConfigFile.new()
+	if disk_cfg.load(ACCOUNT_CFG_PATH) == OK:
+		_load_account_storage()
+		if account_gate_resolved:
+			SignalBus.account_state_changed.emit()

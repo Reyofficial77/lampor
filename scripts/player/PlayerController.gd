@@ -73,6 +73,7 @@ var step_interval: float = 2.2
 var flashlight_on: bool = true
 var flashlight_battery: float = 100.0
 var flashlight_drain_rate: float = 0.25
+const BASE_FLASHLIGHT_RANGE: float = 34.0
 
 # Hiding
 var is_hiding: bool = false
@@ -96,6 +97,8 @@ var player_model: Node3D = null
 var player_skeleton: Skeleton3D = null
 var model_anim_player: AnimationPlayer = null
 var model_head_mesh: GeometryInstance3D = null
+var _using_legacy_fbx_model: bool = false
+const LOOPING_ANIMATIONS: Array[String] = ["idle", "walk", "sprint", "fall", "crouch", "abducted"]
 var hand_item_holder: BoneAttachment3D = null
 var hand_prop_pivot: Node3D = null
 var hand_item_props: Dictionary = {}
@@ -151,6 +154,11 @@ func _ready() -> void:
 	SettingsManager.apply_player_settings(self)
 	var sanity_cfg: Dictionary = GameManager.get_sanity_settings_for_difficulty(GameManager.selected_difficulty)
 	flashlight_drain_rate = sanity_cfg.get("flash_drain", 0.25)
+	_apply_fate_flashlight_range()
+	if not SignalBus.fate_card_applied.is_connected(_on_fate_cards_changed):
+		SignalBus.fate_card_applied.connect(_on_fate_cards_changed)
+	if not SignalBus.fate_cards_reset.is_connected(_on_fate_cards_reset):
+		SignalBus.fate_cards_reset.connect(_on_fate_cards_reset)
 	_setup_player_model()
 	if not SignalBus.item_equipped.is_connected(_on_item_equipped):
 		SignalBus.item_equipped.connect(_on_item_equipped)
@@ -326,6 +334,8 @@ func _physics_process(delta: float) -> void:
 		velocity.y -= gravity * delta
 
 	var god_mode: bool = ("admin_god_mode" in GameManager) and bool(GameManager.get("admin_god_mode"))
+	var inf_stamina: bool = ("sandbox_infinite_stamina" in GameManager) and bool(GameManager.get("sandbox_infinite_stamina"))
+	var inf_battery: bool = ("sandbox_infinite_battery" in GameManager) and bool(GameManager.get("sandbox_infinite_battery"))
 
 	if energy_drink_cooldown > 0.0:
 		energy_drink_cooldown = maxf(0.0, energy_drink_cooldown - delta)
@@ -333,7 +343,7 @@ func _physics_process(delta: float) -> void:
 		energy_drink_timer = maxf(0.0, energy_drink_timer - delta)
 		current_stamina = max_stamina
 
-	var unlimited_stamina: bool = god_mode or (energy_drink_timer > 0.0)
+	var unlimited_stamina: bool = god_mode or inf_stamina or (energy_drink_timer > 0.0)
 
 	# Sync hardware Shift/sprint state so releasing Shift never leaves player stuck running on desktop
 	var is_real_desktop: bool = OS.has_feature("pc") and not DisplayServer.get_name().containsn("headless")
@@ -351,18 +361,20 @@ func _physics_process(delta: float) -> void:
 		input_dir = virtual_move_input
 	var is_moving: bool = input_dir.length_squared() > 0.01
 
+	var fate_stamina_drain: float = GameManager.get_fate_modifier("stamina_drain_mult", 1.0)
+	var fate_stamina_regen: float = GameManager.get_fate_modifier("stamina_regen_mult", 1.0)
 	if wants_sprint and is_moving:
 		is_sprinting = true
 		if not unlimited_stamina:
-			current_stamina = max(0.0, current_stamina - stamina_drain_rate * delta)
+			current_stamina = max(0.0, current_stamina - stamina_drain_rate * fate_stamina_drain * delta)
 		else:
 			current_stamina = max_stamina
 	else:
 		is_sprinting = false
-		if energy_drink_timer > 0.0:
+		if energy_drink_timer > 0.0 or inf_stamina or god_mode:
 			current_stamina = max_stamina
 		else:
-			current_stamina = min(max_stamina, current_stamina + stamina_recovery_rate * delta)
+			current_stamina = min(max_stamina, current_stamina + stamina_recovery_rate * fate_stamina_regen * delta)
 
 	if not unlimited_stamina and is_moving and _stamina_dialog_cooldown <= 0.0:
 		if sprint_held and grounded and current_stamina <= 5.0:
@@ -384,7 +396,10 @@ func _physics_process(delta: float) -> void:
 
 	# Movement calculation
 	var direction: Vector3 = (transform.basis * Vector3(input_dir.x, 0, input_dir.y)).normalized()
-	var speed: float = sprint_speed if is_sprinting else walk_speed
+	var speed_mult: float = float(GameManager.get("sandbox_speed_multiplier")) if ("sandbox_speed_multiplier" in GameManager) else 1.0
+	speed_mult = clampf(speed_mult, 0.5, 3.0)
+	var fate_speed_mult: float = GameManager.get_fate_modifier("player_speed_mult", 1.0)
+	var speed: float = (sprint_speed if is_sprinting else walk_speed) * speed_mult * fate_speed_mult
 
 	if direction:
 		velocity.x = direction.x * speed
@@ -400,12 +415,13 @@ func _physics_process(delta: float) -> void:
 	was_on_floor = is_on_floor()
 
 	# Noise generation
+	var fate_noise_mult: float = GameManager.get_fate_modifier("noise_mult", 1.0)
 	if not is_moving:
 		current_noise_level = 0.0
 	elif is_sprinting:
-		current_noise_level = 0.95
+		current_noise_level = 0.95 * fate_noise_mult
 	else:
-		current_noise_level = 0.35
+		current_noise_level = 0.35 * fate_noise_mult
 
 	if current_noise_level > 0.1:
 		SignalBus.player_noise_made.emit(current_noise_level, global_position)
@@ -424,9 +440,13 @@ func _physics_process(delta: float) -> void:
 	_update_player_animation(delta, is_moving)
 
 	# Flashlight battery drain
+	if inf_battery and flashlight_battery < 100.0:
+		flashlight_battery = 100.0
+		SignalBus.flashlight_battery_changed.emit(flashlight_battery, 100.0)
 	if flashlight_on and equipped_item_id == "flashlight":
-		if not god_mode:
-			flashlight_battery = max(0.0, flashlight_battery - flashlight_drain_rate * delta)
+		if not god_mode and not inf_battery:
+			var fate_flash_drain: float = GameManager.get_fate_modifier("flashlight_drain_mult", 1.0)
+			flashlight_battery = max(0.0, flashlight_battery - flashlight_drain_rate * fate_flash_drain * delta)
 		else:
 			flashlight_battery = 100.0
 		SignalBus.flashlight_battery_changed.emit(flashlight_battery, 100.0)
@@ -580,12 +600,23 @@ func _sync_flashlight_state(emit_signal: bool = true) -> void:
 	flashlight_on = beam_active
 	if flashlight:
 		flashlight.visible = beam_active
+		_apply_fate_flashlight_range()
 	if handheld_flashlight_lens and handheld_flashlight_lens.material_override is StandardMaterial3D:
 		var lens_mat: StandardMaterial3D = handheld_flashlight_lens.material_override as StandardMaterial3D
 		lens_mat.emission_enabled = beam_active
 		lens_mat.emission_energy_multiplier = 1.6 if beam_active else 0.0
 	if emit_signal:
 		SignalBus.flashlight_toggled.emit(flashlight_on)
+
+func _apply_fate_flashlight_range() -> void:
+	if flashlight:
+		flashlight.spot_range = BASE_FLASHLIGHT_RANGE * GameManager.get_fate_modifier("flashlight_range_mult", 1.0)
+
+func _on_fate_cards_changed(_card_data: Dictionary) -> void:
+	_apply_fate_flashlight_range()
+
+func _on_fate_cards_reset() -> void:
+	_apply_fate_flashlight_range()
 
 func enter_hiding(spot: Node) -> void:
 	release_all_held_inputs()
@@ -710,20 +741,51 @@ func _try_use_equipped_item() -> bool:
 		inventory_system.consume_equipped_item()
 		trigger_action_animation("kentongan_hit", 0.55)
 		AudioManager.play_sound("kentongan", 2.0)
-		SignalBus.dialog_requested.emit(LocScript.pick(
-			"Kentongan dibunyikan! Lampor terusir selama 5 detik!",
-			"Kentongan struck! Lampor driven back for 5 seconds!"
-		), 3.0)
+		var repel_secs: float = 5.0 * GameManager.get_fate_modifier("lampor_repel_mult", 1.0)
+		if is_equal_approx(repel_secs, 5.0):
+			SignalBus.dialog_requested.emit(LocScript.pick(
+				"Kentongan dibunyikan! Lampor terusir selama 5 detik!",
+				"Kentongan struck! Lampor driven back for 5 seconds!"
+			), 3.0)
+		else:
+			var sec_str: String = str(int(roundf(repel_secs))) if is_equal_approx(repel_secs, roundf(repel_secs)) else ("%.1f" % repel_secs)
+			SignalBus.dialog_requested.emit(LocScript.pick(
+				"Kentongan dibunyikan! Lampor terusir selama %s detik!" % sec_str,
+				"Kentongan struck! Lampor driven back for %s seconds!" % sec_str
+			), 3.0)
 		SignalBus.item_used.emit(item)
 		if interaction_ray:
 			interaction_ray._update_prompt()
 		return true
 	return false
 
-func _setup_player_model() -> void:
-	if not PLAYER_MODEL_SCENE:
+func _load_selected_player_model_scene() -> PackedScene:
+	var model_path: String = SettingsManager.get_character_model_path()
+	if not model_path.is_empty() and ResourceLoader.exists(model_path):
+		var loaded: PackedScene = ResourceLoader.load(model_path) as PackedScene
+		if loaded != null:
+			_using_legacy_fbx_model = false
+			return loaded
+	_using_legacy_fbx_model = true
+	return PLAYER_MODEL_SCENE
+
+func _ensure_looping_animations(anim_player: AnimationPlayer) -> void:
+	if not anim_player:
 		return
-	player_model = PLAYER_MODEL_SCENE.instantiate() as Node3D
+	for anim_name: String in LOOPING_ANIMATIONS:
+		if anim_player.has_animation(anim_name):
+			var anim: Animation = anim_player.get_animation(anim_name)
+			if anim:
+				anim.loop_mode = Animation.LOOP_LINEAR
+
+func _setup_player_model() -> void:
+	var model_scene: PackedScene = _load_selected_player_model_scene()
+	if not model_scene:
+		return
+	player_model = model_scene.instantiate() as Node3D
+	if not player_model and not _using_legacy_fbx_model and PLAYER_MODEL_SCENE:
+		_using_legacy_fbx_model = true
+		player_model = PLAYER_MODEL_SCENE.instantiate() as Node3D
 	if not player_model:
 		return
 	player_model.name = "PlayerModel"
@@ -743,16 +805,25 @@ func _setup_player_model() -> void:
 		if mi_node is GeometryInstance3D:
 			(mi_node as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
+	model_head_mesh = null
 	var head_node: Node = player_model.find_child("Suit_Head", true, false)
-	if not (head_node is GeometryInstance3D):
+	if head_node == null:
 		head_node = player_model.find_child("head-mesh", true, false)
 	if head_node is GeometryInstance3D:
 		model_head_mesh = head_node as GeometryInstance3D
+	elif head_node != null:
+		for child_mi: Node in head_node.find_children("*", "GeometryInstance3D", true, false):
+			model_head_mesh = child_mi as GeometryInstance3D
+			break
 
 	player_skeleton = player_model.find_child("Skeleton3D", true, false) as Skeleton3D
 	model_anim_player = player_model.find_child("AnimationPlayer", true, false) as AnimationPlayer
-	if not model_anim_player and player_skeleton:
+	if (not model_anim_player or not model_anim_player.has_animation("idle")) and player_skeleton:
+		if model_anim_player:
+			model_anim_player.queue_free()
+			model_anim_player = null
 		_build_suit_animations(player_skeleton)
+	_ensure_looping_animations(model_anim_player)
 	if model_anim_player and not model_anim_player.mixer_applied.is_connected(_apply_fpp_hand_override):
 		model_anim_player.mixer_applied.connect(_apply_fpp_hand_override)
 
@@ -770,12 +841,12 @@ func _apply_dark_visibility_floor(root_node: Node) -> void:
 			continue
 		for surf_idx: int in range(mi.mesh.get_surface_count()):
 			var base_mat: Material = mi.get_active_material(surf_idx)
-			var cloned: StandardMaterial3D = null
-			if base_mat is StandardMaterial3D:
-				cloned = base_mat.duplicate() as StandardMaterial3D
+			var cloned: BaseMaterial3D = null
+			if base_mat is BaseMaterial3D:
+				cloned = base_mat.duplicate() as BaseMaterial3D
 			else:
 				cloned = StandardMaterial3D.new()
-			if PLAYER_TEXTURE_1024 and (cloned.albedo_texture != null or mi.name == "Cube"):
+			if _using_legacy_fbx_model and PLAYER_TEXTURE_1024 and (cloned.albedo_texture != null or mi.name == "Cube"):
 				cloned.albedo_texture = PLAYER_TEXTURE_1024
 			cloned.roughness = 0.78
 			cloned.emission_enabled = true
@@ -848,14 +919,17 @@ func _bone_pose_quat(skel: Skeleton3D, canonical_bone_name: String, rot_x_deg: f
 	var g_rest_b: Basis = skel.get_bone_global_rest(idx).basis
 	var inv_g: Basis = g_rest_b.inverse()
 	var q: Quaternion = rest_b.get_rotation_quaternion()
+	var use_gltf_yup_axes: bool = (not _using_legacy_fbx_model) and skel.find_bone("Hips") >= 0
 	if not is_zero_approx(rot_y_deg):
-		var axis_yaw: Vector3 = (inv_g * Vector3(0.0, 0.0, 1.0)).normalized()
+		var raw_yaw: Vector3 = Vector3(0.0, 1.0, 0.0) if use_gltf_yup_axes else Vector3(0.0, 0.0, 1.0)
+		var axis_yaw: Vector3 = (inv_g * raw_yaw).normalized()
 		q = q * Quaternion(axis_yaw, deg_to_rad(rot_y_deg))
 	if not is_zero_approx(rot_x_deg):
 		var axis_swing: Vector3 = (inv_g * Vector3(1.0, 0.0, 0.0)).normalized()
 		q = q * Quaternion(axis_swing, deg_to_rad(rot_x_deg))
 	if not is_zero_approx(rot_z_deg):
-		var axis_drop: Vector3 = (inv_g * Vector3(0.0, 1.0, 0.0)).normalized()
+		var raw_drop: Vector3 = Vector3(0.0, 0.0, -1.0) if use_gltf_yup_axes else Vector3(0.0, 1.0, 0.0)
+		var axis_drop: Vector3 = (inv_g * raw_drop).normalized()
 		q = q * Quaternion(axis_drop, deg_to_rad(rot_z_deg))
 	return q.normalized()
 
@@ -1203,6 +1277,20 @@ func _build_suit_animations(skel: Skeleton3D) -> void:
 		"UpperArm.R": [[0.0, Vector3(6.0, -76.0, 0.0)], [0.7, Vector3(18.0, -62.0, 0.0)]]
 	})
 
+func _orient_hand_prop_pivot(pivot: Node3D, skel: Skeleton3D, bone_name: String, skel_to_model_basis: Basis, is_right: bool) -> void:
+	if _using_legacy_fbx_model or bone_name == "hand.r" or bone_name == "hand.l":
+		if bone_name == "hand.r":
+			pivot.rotation_degrees = Vector3(0.0, 90.0, 0.0)
+		elif bone_name == "hand.l":
+			pivot.rotation_degrees = Vector3(0.0, -90.0, 0.0)
+		return
+	var bone_idx: int = skel.find_bone(bone_name)
+	if bone_idx < 0:
+		return
+	var hand_model_basis: Basis = (skel_to_model_basis * skel.get_bone_global_rest(bone_idx).basis).orthonormalized()
+	var desired_basis := Basis(Vector3(0.0, 0.0, -1.0), Vector3(-1.0, 0.0, 0.0), Vector3(0.0, 1.0, 0.0)) if is_right else Basis(Vector3(0.0, 0.0, 1.0), Vector3(1.0, 0.0, 0.0), Vector3(0.0, 1.0, 0.0))
+	pivot.quaternion = (hand_model_basis.inverse() * desired_basis).orthonormalized().get_rotation_quaternion()
+
 func _build_hand_item_holder(skel: Skeleton3D) -> void:
 	if not skel:
 		return
@@ -1222,19 +1310,26 @@ func _build_hand_item_holder(skel: Skeleton3D) -> void:
 	hand_item_holder.bone_name = right_hand_bone
 	skel.add_child(hand_item_holder)
 
-	var parent_scale: Vector3 = skel.get_parent().scale if skel.get_parent() is Node3D else Vector3.ONE
+	var accum_scale: Vector3 = Vector3.ONE
+	var skel_to_model_basis: Basis = Basis.IDENTITY
+	var cursor: Node = skel
+	while cursor != null and cursor != player_model:
+		if cursor is Node3D:
+			var n3d: Node3D = cursor as Node3D
+			var s: Vector3 = n3d.scale
+			accum_scale = Vector3(accum_scale.x * s.x, accum_scale.y * s.y, accum_scale.z * s.z)
+			skel_to_model_basis = n3d.transform.basis.orthonormalized() * skel_to_model_basis
+		cursor = cursor.get_parent()
 	var inv_scale := Vector3(
-		1.0 / maxf(0.001, absf(parent_scale.x)),
-		1.0 / maxf(0.001, absf(parent_scale.y)),
-		1.0 / maxf(0.001, absf(parent_scale.z))
+		1.0 / maxf(0.001, absf(accum_scale.x)),
+		1.0 / maxf(0.001, absf(accum_scale.y)),
+		1.0 / maxf(0.001, absf(accum_scale.z))
 	)
 	hand_prop_pivot = Node3D.new()
 	hand_prop_pivot.name = "HandPropPivot"
 	_base_hand_prop_scale = inv_scale
 	hand_prop_pivot.scale = _base_hand_prop_scale
-	# Pada ordinaryMan.fbx, sumbu lokal X/Z hand.r berputar 90 derajat di sekitar sumbu jari (+Y)
-	if right_hand_bone == "hand.r":
-		hand_prop_pivot.rotation_degrees = Vector3(0.0, 90.0, 0.0)
+	_orient_hand_prop_pivot(hand_prop_pivot, skel, right_hand_bone, skel_to_model_basis, true)
 	hand_item_holder.add_child(hand_prop_pivot)
 
 	var left_hand_bone: String = _resolve_bone_name(skel, "Hand.L")
@@ -1247,8 +1342,7 @@ func _build_hand_item_holder(skel: Skeleton3D) -> void:
 		left_hand_prop_pivot = Node3D.new()
 		left_hand_prop_pivot.name = "LeftHandPropPivot"
 		left_hand_prop_pivot.scale = inv_scale
-		if left_hand_bone == "hand.l":
-			left_hand_prop_pivot.rotation_degrees = Vector3(0.0, -90.0, 0.0)
+		_orient_hand_prop_pivot(left_hand_prop_pivot, skel, left_hand_bone, skel_to_model_basis, false)
 		left_hand_item_holder.add_child(left_hand_prop_pivot)
 
 	# 1. Flashlight
@@ -1706,12 +1800,16 @@ func trigger_action_animation(anim_name: String, duration: float = 0.45) -> void
 		_item_hold_blend = 1.0 if equipped_item_id != "" else 0.0
 		_left_equip_blend = 1.0 if equipped_item_id == "kentongan" else 0.0
 		_sync_hand_prop_visibility()
-	if not model_anim_player or not model_anim_player.has_animation(anim_name):
+	if not model_anim_player:
 		return
 	action_anim_duration = maxf(0.1, duration)
 	action_anim_timer = action_anim_duration
-	current_anim_name = anim_name
-	model_anim_player.play(anim_name, 0.08, 1.25)
+	if model_anim_player.has_animation(anim_name):
+		current_anim_name = anim_name
+		model_anim_player.play(anim_name, 0.08, 1.25)
+	elif not model_anim_player.is_playing() and model_anim_player.has_animation("idle"):
+		current_anim_name = "idle"
+		model_anim_player.play("idle", 0.08, 1.0)
 
 func _play_player_anim(anim_name: String, custom_blend: float = 0.15, custom_speed: float = 1.0) -> void:
 	if not model_anim_player or not model_anim_player.has_animation(anim_name):
@@ -1880,3 +1978,42 @@ func revive_from_extra_life() -> void:
 	SignalBus.player_sanity_changed.emit(sanity_system.current_sanity, sanity_system.max_sanity)
 	SignalBus.player_stamina_changed.emit(current_stamina, max_stamina)
 	SignalBus.flashlight_battery_changed.emit(flashlight_battery, 100.0)
+
+func try_friendly_revive() -> bool:
+	if not MultiplayerManager.is_online_session:
+		return false
+	if not bool(MultiplayerManager.get_room_setting("friendlyRevive", true)):
+		return false
+	var my_uid: String = AccountManager.user_id
+	var has_living_teammate: bool = false
+	var alive_peer_pos: Variant = null
+	for p_var: Variant in MultiplayerManager.room_players:
+		if not (p_var is Dictionary):
+			continue
+		var p: Dictionary = p_var as Dictionary
+		var uid: String = str(p.get("userId", p.get("id", "")))
+		if not my_uid.is_empty() and uid == my_uid:
+			continue
+		var pstate: Variant = p.get("playerState", {})
+		var peer_alive: bool = bool(pstate.get("isAlive", true)) if pstate is Dictionary else true
+		if peer_alive:
+			has_living_teammate = true
+			if MultiplayerManager.remote_players.has(uid):
+				var rp: Node3D = MultiplayerManager.remote_players[uid] as Node3D
+				if is_instance_valid(rp):
+					alive_peer_pos = rp.global_position
+					break
+	if not has_living_teammate:
+		return false
+	revive_from_extra_life()
+	if alive_peer_pos is Vector3:
+		var rp_pos: Vector3 = alive_peer_pos as Vector3
+		global_position = Vector3(clampf(rp_pos.x + 0.9, -36.0, 36.0), maxf(0.1, rp_pos.y), clampf(rp_pos.z + 0.9, -36.0, 36.0))
+	if sanity_system:
+		sanity_system.current_sanity = 65.0
+		SignalBus.player_sanity_changed.emit(sanity_system.current_sanity, sanity_system.max_sanity)
+	SignalBus.dialog_requested.emit(LocScript.pick(
+		"Rekan satu tim membantumu bangkit kembali!",
+		"A teammate helped revive you!"
+	), 3.6)
+	return true

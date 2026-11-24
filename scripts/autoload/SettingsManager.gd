@@ -4,6 +4,7 @@ const LocScript = preload("res://scripts/systems/Loc.gd")
 
 signal keybinds_changed()
 signal language_changed(new_language: String)
+signal character_model_changed(model_id: String)
 
 const CONFIG_PATH: String = "user://lampor_settings.cfg"
 const WEB_SETTINGS_STORAGE_KEY: String = "lampor_settings_v1"
@@ -15,6 +16,12 @@ const DEFAULT_AUTO_UPDATE: bool = true
 const DEFAULT_MOBILE_BUTTON_SCALE: float = 1.0
 const DEFAULT_MOBILE_JOYSTICK_SCALE: float = 1.0
 const DEFAULT_LANGUAGE: String = "id"
+const DEFAULT_CHARACTER_MODEL: String = "male"
+const CHARACTER_MODEL_PATHS: Dictionary = {
+	"male": "res://assets/models/player/adult_male.glb",
+	"female": "res://assets/models/player/adult_female.glb"
+}
+const DEFAULT_SERVER_URL: String = "https://lampor-website.vercel.app"
 
 const REBINDABLE_ACTIONS: Array[String] = [
 	"move_forward",
@@ -61,6 +68,8 @@ var mobile_joystick_scale: float = DEFAULT_MOBILE_JOYSTICK_SCALE
 var mobile_joystick_position: Vector2 = Vector2(-1.0, -1.0)
 var mobile_button_positions: Array = []
 var language: String = DEFAULT_LANGUAGE
+var character_model: String = DEFAULT_CHARACTER_MODEL
+var server_base_url: String = DEFAULT_SERVER_URL
 var keybinds: Dictionary = {}
 var _default_input_map_events: Dictionary = {}
 var _pending_graphics_apply: bool = false
@@ -122,6 +131,10 @@ func _apply_config_values(config: ConfigFile) -> void:
 	if loaded_button_positions is Array:
 		mobile_button_positions = loaded_button_positions.duplicate(true)
 	language = LocScript.normalize_language(str(config.get_value("general", "language", DEFAULT_LANGUAGE)))
+	character_model = normalize_character_model(str(config.get_value("general", "character_model", DEFAULT_CHARACTER_MODEL)))
+	var saved_server_url: String = _sanitize_server_url(str(config.get_value("network", "server_base_url", DEFAULT_SERVER_URL)))
+	server_base_url = saved_server_url if not saved_server_url.is_empty() else DEFAULT_SERVER_URL
+	_sync_server_url_to_account_manager()
 	for action: String in REBINDABLE_ACTIONS:
 		if config.has_section_key("keybinds", action):
 			var saved_bind: Variant = config.get_value("keybinds", action, {})
@@ -133,6 +146,7 @@ func _apply_config_values(config: ConfigFile) -> void:
 func _save_settings() -> void:
 	var config := ConfigFile.new()
 	config.set_value("general", "language", language)
+	config.set_value("general", "character_model", character_model)
 	config.set_value("controls", "mouse_sensitivity", mouse_sensitivity)
 	config.set_value("controls", "camera_sensitivity", camera_sensitivity)
 	config.set_value("video", "graphics_quality", graphics_quality)
@@ -142,6 +156,7 @@ func _save_settings() -> void:
 	config.set_value("mobile", "joystick_scale", mobile_joystick_scale)
 	config.set_value("mobile", "joystick_position", mobile_joystick_position)
 	config.set_value("mobile", "button_positions", mobile_button_positions)
+	config.set_value("network", "server_base_url", server_base_url)
 	for action: String in REBINDABLE_ACTIONS:
 		if keybinds.has(action):
 			config.set_value("keybinds", action, keybinds[action])
@@ -214,6 +229,7 @@ func _schedule_web_reconcile() -> void:
 		_apply_graphics_quality()
 		_apply_brightness_overlay()
 		language_changed.emit(language)
+		character_model_changed.emit(character_model)
 		keybinds_changed.emit()
 
 func t(id_text: String, en_text: String) -> String:
@@ -230,6 +246,52 @@ func set_language(code: String) -> void:
 	LocScript.set_language(language)
 	_save_settings()
 	language_changed.emit(language)
+
+func normalize_character_model(model_id: String) -> String:
+	var cleaned: String = model_id.strip_edges().to_lower()
+	if cleaned in ["female", "perempuan", "woman", "cewek"]:
+		return "female"
+	return "male"
+
+func set_character_model(model_id: String) -> void:
+	character_model = normalize_character_model(model_id)
+	_save_settings()
+	character_model_changed.emit(character_model)
+
+func get_character_model_path(model_id: String = "") -> String:
+	var raw_id: String = character_model if model_id.strip_edges().is_empty() else model_id
+	var normalized: String = normalize_character_model(raw_id)
+	return str(CHARACTER_MODEL_PATHS.get(normalized, CHARACTER_MODEL_PATHS[DEFAULT_CHARACTER_MODEL]))
+
+func _sanitize_server_url(url: String) -> String:
+	var cleaned: String = url.strip_edges()
+	while cleaned.ends_with("/"):
+		cleaned = cleaned.left(cleaned.length() - 1)
+	var lower: String = cleaned.to_lower()
+	if not (lower.begins_with("http://") or lower.begins_with("https://")):
+		return ""
+	var scheme_end: int = cleaned.find("://")
+	if scheme_end < 0:
+		return ""
+	var scheme: String = cleaned.left(scheme_end).to_lower()
+	var rest: String = cleaned.substr(scheme_end + 3)
+	if rest.is_empty() or rest.begins_with("/") or rest.contains(" ") or rest.contains("\t"):
+		return ""
+	return scheme + "://" + rest
+
+func _sync_server_url_to_account_manager() -> void:
+	var am: Node = get_node_or_null("/root/AccountManager")
+	if am and "server_base_url" in am:
+		am.set("server_base_url", server_base_url)
+
+func set_server_base_url(url: String) -> String:
+	var cleaned: String = _sanitize_server_url(url)
+	if cleaned.is_empty():
+		return ""
+	server_base_url = cleaned
+	_sync_server_url_to_account_manager()
+	_save_settings()
+	return server_base_url
 
 func _serialize_event(event: InputEvent) -> Dictionary:
 	if event is InputEventKey:

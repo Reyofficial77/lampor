@@ -9,13 +9,20 @@ var sfx_pool: Array[AudioStreamPlayer] = []
 var ending_player: AudioStreamPlayer
 var rooster_player: AudioStreamPlayer
 var jumpscare_player: AudioStreamPlayer
+var voice_player: AudioStreamPlayer
 const POOL_SIZE: int = 8
+const VOICE_MANIFEST_PATH: String = "res://assets/audio/voice/voice_manifest.json"
 
 var sound_streams: Dictionary = {}
+var _voice_clips_by_id: Dictionary = {}
+var _voice_exact_text_to_id: Dictionary = {}
+var _voice_prefix_rules: Array[Dictionary] = []
+var _voice_stream_cache: Dictionary = {}
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_load_sounds()
+	_load_voice_manifest()
 	_setup_audio_players()
 	play_ambient()
 	
@@ -25,6 +32,7 @@ func _ready() -> void:
 
 
 func _on_player_death_requested(reason: String) -> void:
+	stop_voice()
 	set_heartbeat_intensity(0.0)
 	set_whisper_intensity(0.0)
 	# Kematian oleh Lampor memakai jumpscare.wav (dikelola GameManager),
@@ -109,6 +117,12 @@ func _setup_audio_players() -> void:
 	jumpscare_player.process_mode = Node.PROCESS_MODE_ALWAYS
 	jumpscare_player.volume_db = -1.0
 	add_child(jumpscare_player)
+
+	voice_player = AudioStreamPlayer.new()
+	voice_player.name = "VoicePlayer"
+	voice_player.process_mode = Node.PROCESS_MODE_ALWAYS
+	voice_player.volume_db = 0.0
+	add_child(voice_player)
 
 	for i in range(POOL_SIZE):
 		var p: AudioStreamPlayer = AudioStreamPlayer.new()
@@ -234,6 +248,7 @@ func _on_game_won() -> void:
 		ending_player.play()
 
 func stop_ending_audio() -> void:
+	stop_voice()
 	if rooster_player:
 		rooster_player.stop()
 	if ending_player:
@@ -245,3 +260,136 @@ func stop_ending_audio() -> void:
 
 func _on_screamer() -> void:
 	play_sound("lampor_roar", 6.0, randf_range(0.9, 1.1))
+
+func _load_voice_manifest() -> void:
+	_voice_clips_by_id.clear()
+	_voice_exact_text_to_id.clear()
+	_voice_prefix_rules.clear()
+	if not FileAccess.file_exists(VOICE_MANIFEST_PATH):
+		return
+	var fa: FileAccess = FileAccess.open(VOICE_MANIFEST_PATH, FileAccess.READ)
+	if fa == null:
+		return
+	var parsed: Variant = JSON.parse_string(fa.get_as_text())
+	if not (parsed is Dictionary):
+		return
+	var clips_raw: Variant = (parsed as Dictionary).get("clips", [])
+	if not (clips_raw is Array):
+		return
+	for entry_raw: Variant in (clips_raw as Array):
+		if not (entry_raw is Dictionary):
+			continue
+		var entry: Dictionary = entry_raw as Dictionary
+		var clip_id: String = str(entry.get("id", "")).strip_edges()
+		if clip_id.is_empty():
+			continue
+		_voice_clips_by_id[clip_id] = entry
+		for field_name: String in ["text_id", "text_en", "tts_text_id", "tts_text_en"]:
+			var raw_text: String = str(entry.get(field_name, "")).strip_edges()
+			if raw_text.is_empty():
+				continue
+			if raw_text.contains("%"):
+				var rule: Dictionary = _build_voice_template_rule(raw_text, clip_id)
+				if not rule.is_empty():
+					_voice_prefix_rules.append(rule)
+			else:
+				_voice_exact_text_to_id[raw_text] = clip_id
+	_voice_prefix_rules.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return int(a.get("score", 0)) > int(b.get("score", 0))
+	)
+
+func _build_voice_template_rule(tpl_text: String, clip_id: String) -> Dictionary:
+	var pct_pos: int = tpl_text.find("%")
+	if pct_pos < 0:
+		return {}
+	var prefix: String = tpl_text.substr(0, pct_pos)
+	var after_start: int = pct_pos + 1
+	while after_start < tpl_text.length():
+		var ch: String = tpl_text.substr(after_start, 1)
+		after_start += 1
+		if ch == "s" or ch == "d" or ch == "f":
+			break
+	var rest: String = tpl_text.substr(after_start)
+	var next_pct: int = rest.find("%")
+	var tail: String = rest.substr(0, next_pct) if next_pct >= 0 else rest
+	if prefix.length() + tail.length() < 6:
+		return {}
+	return {
+		"prefix": prefix,
+		"tail": tail,
+		"clip_id": clip_id,
+		"score": prefix.length() + tail.length()
+	}
+
+func resolve_voice_clip_id_for_text(text_value: String) -> String:
+	var clean_text: String = text_value.strip_edges()
+	if clean_text.is_empty():
+		return ""
+	if _voice_exact_text_to_id.has(clean_text):
+		return str(_voice_exact_text_to_id[clean_text])
+	for rule: Dictionary in _voice_prefix_rules:
+		var prefix: String = str(rule.get("prefix", ""))
+		var tail: String = str(rule.get("tail", ""))
+		if not prefix.is_empty() and not clean_text.begins_with(prefix):
+			continue
+		if not tail.is_empty() and not clean_text.contains(tail):
+			continue
+		if prefix.is_empty() and tail.is_empty():
+			continue
+		return str(rule.get("clip_id", ""))
+	return ""
+
+func resolve_voice_path(clip_id: String, gender_override: String = "", lang_override: String = "") -> String:
+	if not _voice_clips_by_id.has(clip_id):
+		return ""
+	var entry: Dictionary = _voice_clips_by_id[clip_id] as Dictionary
+	var filename: String = str(entry.get("filename", "")).strip_edges()
+	if filename.is_empty():
+		return ""
+	var lang: String = lang_override.strip_edges().to_lower()
+	if lang != "id" and lang != "en":
+		lang = "en" if SettingsManager.is_en() else "id"
+	var speaker: String = str(entry.get("speaker", "Narrator"))
+	var role: String = "narrator"
+	if speaker.begins_with("Player"):
+		var raw_gender: String = gender_override.strip_edges()
+		if raw_gender.is_empty():
+			raw_gender = SettingsManager.character_model
+		role = SettingsManager.normalize_character_model(raw_gender)
+	return "res://assets/audio/voice/%s/%s/%s" % [lang, role, filename]
+
+func play_voice_by_id(clip_id: String, volume_db: float = 0.0) -> bool:
+	if voice_player == null:
+		return false
+	var path: String = resolve_voice_path(clip_id)
+	if path.is_empty():
+		return false
+	if not ResourceLoader.exists(path):
+		var id_fallback: String = resolve_voice_path(clip_id, "", "id")
+		if not id_fallback.is_empty() and ResourceLoader.exists(id_fallback):
+			path = id_fallback
+		else:
+			return false
+	var stream: AudioStream = _voice_stream_cache.get(path, null) as AudioStream
+	if stream == null:
+		stream = load(path) as AudioStream
+		if stream == null:
+			return false
+		_voice_stream_cache[path] = stream
+	if stream is AudioStreamWAV:
+		(stream as AudioStreamWAV).loop_mode = AudioStreamWAV.LOOP_DISABLED
+	voice_player.stop()
+	voice_player.stream = stream
+	voice_player.volume_db = volume_db
+	voice_player.play()
+	return true
+
+func play_voice_for_dialog_text(text_value: String, volume_db: float = 0.0) -> bool:
+	var clip_id: String = resolve_voice_clip_id_for_text(text_value)
+	if clip_id.is_empty():
+		return false
+	return play_voice_by_id(clip_id, volume_db)
+
+func stop_voice() -> void:
+	if voice_player and voice_player.playing:
+		voice_player.stop()

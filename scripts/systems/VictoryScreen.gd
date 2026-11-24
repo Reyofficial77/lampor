@@ -77,6 +77,7 @@ func _ready() -> void:
 		subtitle_label.add_theme_color_override("font_outline_color", Color("120c05"))
 		subtitle_label.add_theme_constant_override("outline_size", 2)
 		subtitle_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	AudioManager.play_voice_by_id("vo_ending_victory_sub_01")
 
 	reward_label = Label.new()
 	reward_label.text = LocScript.pick("+%d Koin Emas  ·  Total: %d" % [GameManager.last_run_coin_reward, GameManager.coins], "+%d Gold Coins  ·  Total: %d" % [GameManager.last_run_coin_reward, GameManager.coins])

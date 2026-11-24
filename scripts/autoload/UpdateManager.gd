@@ -31,7 +31,24 @@ const FIX_NOTES_CACHE_PATH: String = "user://lampor_fix_notes.md"
 const AUTO_CHECK_INTERVAL_SEC: float = 300.0
 const REQUIRED_UPDATE_FILES: PackedStringArray = ["project.godot", "scripts/autoload/UpdateManager.gd", "FIX_NOTES.md"]
 
-const BUNDLED_FIX_NOTES: String = """# LAMPOR v1.2.9
+const BUNDLED_FIX_NOTES: String = """# LAMPOR v1.3.0
+
+## v1.3.0
+
+- **Mode Multiplayer Co-op Online (Vercel Server, Maks. 4 Pemain)**:
+  - Menambahkan mode **MULTIPLAYER MODE** dan peramban server **MULTIPLAYER SERVER** melalui backend **Vercel Serverless API** dengan pembaruan daftar room, gabung cepat memakai kode room 6 karakter, dan dukungan **CREATE ROOM**.
+  - Mendukung pengaturan room lengkap: **Nama Room**, **Password Room (Opsional)**, batas maksimal **4 Pemain**, tingkat kesulitan (`Easy` / `Normal` / `Hard` / `Nightmare`), sakelar **Gunakan Item dari Toko (`ON/OFF`)**, **Aktifkan Lampor AI**, **Kecepatan Jam Malam** (`0.5x` - `2.0x`), **Izinkan Gabung Saat Main**, serta **Bangkit Otomatis Rekan**.
+  - Menambahkan layar **Room Lobby** interaktif dengan tombol **Salin Kode**, status kesiapan pemain (`[HOST]`, `[SIAP]`, `[MENUNGGU]`), tombol **Kick** untuk Host, **Obrolan Lobi (Lobby Chat)**, serta sinkronisasi real-time karakter pemain lain (`RemotePlayer`), obor, pintu, item, ritual, dan pergerakan Lampor di desa.
+- **Mode Sandbox (1-4 Pemain & Panel Owner `Ctrl+F5` / Tombol Mobile)**:
+  - Menambahkan **SANDBOX MODE** melalui **SANDBOX SERVER** untuk eksperimen bebas (1 hingga 4 pemain) tanpa memengaruhi statistik kemenangan maupun hadiah koin peringkat.
+  - Pembuat room (**Sandbox Owner**) memperoleh **Sandbox Panel** melalui pintasan **`Ctrl+F5`** di desktop dan tombol ikon **Sandbox** di layar kontrol sentuh mobile (mengatur *God Mode*, stamina/baterai/kewarasan tak terbatas, isi ulang stat, kecepatan gerak `1x/1.5x/2x`, bekukan/turunkan/usir/panggil Lampor AI, jeda jam, lompat babak & jam, selesaikan obor/pintu/ritual instan, tambah semua item, teleport ke tungku, sakelar kabut malam, serta kick pemain).
+- **Sistem Akun LAMPOR (Neon PostgreSQL) & Gerbang Masuk (Force Login / Guest Mode)**:
+  - Mengintegrasikan akun **LAMPOR** dengan penyimpanan cloud **Neon PostgreSQL** untuk menyinkronkan total kemenangan, koin, nyawa tambahan, persediaan item toko, dan kode redeem.
+  - Menambahkan gerbang autentikasi otomatis di Menu Utama (**Force Login Gate**) dengan tab **Masuk (Login)**, **Buat Akun (Daftar)**, pengaturan URL server & tes koneksi, serta opsi **Lanjut Sebagai Guest** (Mode Guest hanya dapat memainkan Singleplayer; Multiplayer & Sandbox terkunci).
+- **Dashboard Web Admin (`/admin`)**:
+  - Menambahkan antarmuka command console web di `/admin` dengan autentikasi admin terpisah untuk memantau metrik server, mengelola akun pemain (buat, edit koin/win/nyawa, ban/unban, reset password, paksa logout), mengendalikan room aktif, mengatur *Maintenance Mode* & pengumuman global, mengelola kode redeem, serta memantau log keamanan dan blokir IP.
+- **Perlindungan Keamanan Siber (Cybersecurity)**:
+  - Melindungi autentikasi dan API dengan hashing password `scrypt` + perbandingan waktu konstan (`timingSafeEqual`), tantangan *Proof-of-Work* anti-bot bertanda tangan HMAC-SHA256, proteksi *honeypot*, validasi skema ketat (`Zod`), sanitasi XSS, pembatasan ukuran payload, *rate limiting* & penguncian brute-force, blokir IP, kueri SQL berparameter anti-SQL injection, serta cookie admin `HttpOnly; SameSite=Strict` dan token CSRF (`X-Lampor-CSRF`).
 
 ## v1.2.9
 

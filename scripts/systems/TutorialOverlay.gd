@@ -20,6 +20,7 @@ var spawn_recorded: bool = false
 var initial_item_total: int = -1
 var dismissed: bool = false
 var is_minimized: bool = false
+var _last_voiced_step: int = -1
 
 func _ready() -> void:
 	name = "TutorialOverlay"
@@ -335,3 +336,21 @@ func _refresh_step_content() -> void:
 			)
 			goal_label.text = LocScript.pick("Target: Bakar Benda Ritual di Tungku Balai Desa dengan [%s]." % act_k, "Goal: Burn the Ritual Relics at the Village Hall Furnace with [%s]." % act_k)
 	_apply_layout()
+	_play_step_voice_if_needed(touch)
+
+func _play_step_voice_if_needed(touch: bool) -> void:
+	if dismissed or not visible or not GameManager.is_tutorial_mode:
+		return
+	if current_step == _last_voiced_step:
+		return
+	_last_voiced_step = current_step
+	var clip_id: String = ""
+	match current_step:
+		1:
+			clip_id = "vo_tutorial_01_touch" if touch else "vo_tutorial_01_desktop"
+		2:
+			clip_id = "vo_tutorial_02_touch" if touch else "vo_tutorial_02_desktop"
+		3, 4, 5, 6, 7:
+			clip_id = "vo_tutorial_%02d" % current_step
+	if not clip_id.is_empty():
+		AudioManager.play_voice_by_id(clip_id)

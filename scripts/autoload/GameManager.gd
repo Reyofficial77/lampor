@@ -2,7 +2,9 @@ extends Node
 
 const REDEMPTION_CODES = preload("res://scripts/systems/RedemptionCodes.gd")
 const ADMIN_PANEL_SCRIPT = preload("res://scripts/ui/AdminPanel.gd")
+const SANDBOX_PANEL_SCRIPT = preload("res://scripts/ui/SandboxPanel.gd")
 const LocScript = preload("res://scripts/systems/Loc.gd")
+const FATE_CARD_SYSTEM = preload("res://scripts/systems/FateCardSystem.gd")
 
 # Game Manager Singleton
 
@@ -86,11 +88,29 @@ var tutorial_origin_version: String = ""
 var tutorial_origin_commit: String = ""
 var admin_god_mode: bool = false
 var admin_panel: CanvasLayer = null
+var is_sandbox_mode: bool = false
+var sandbox_panel: CanvasLayer = null
+var sandbox_freeze_lampor: bool = false
+var sandbox_infinite_stamina: bool = false
+var sandbox_infinite_battery: bool = false
+var sandbox_no_sanity_drain: bool = false
+var sandbox_pause_clock: bool = false
+var sandbox_fog_enabled: bool = true
+var sandbox_speed_multiplier: float = 1.0
+var sandbox_time_scale: float = 1.0
+var _handling_network_victory: bool = false
+var _disconnect_notice_layer: CanvasLayer = null
 var save_seq: int = 0
 var _save_load_failed: bool = false
 var _web_save_sync_pending: bool = false
 var _web_save_sync_dirty: bool = false
 var _skip_shutdown_resave: bool = false
+
+# Fate Cards (Kartu Takdir per Babak)
+var active_fate_cards: Array[Dictionary] = []
+var drawn_fate_card_ids: Array[String] = []
+var fate_cards_offered_acts: Dictionary = {}
+var fate_modifiers: Dictionary = {}
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -99,6 +119,10 @@ func _ready() -> void:
 	SignalBus.torch_lit.connect(_on_torch_lit)
 	SignalBus.ritual_item_collected.connect(_on_ritual_item_collected)
 	SignalBus.player_death_requested.connect(_on_player_death_requested)
+	if SignalBus.has_signal("multiplayer_event_received"):
+		SignalBus.multiplayer_event_received.connect(_on_multiplayer_event_received)
+	if SignalBus.has_signal("multiplayer_disconnected"):
+		SignalBus.multiplayer_disconnected.connect(_on_multiplayer_disconnected)
 	SettingsManager.language_changed.connect(_on_language_changed)
 	call_deferred("_setup_admin_panel")
 	if OS.has_feature("web"):
@@ -113,6 +137,12 @@ func _setup_admin_panel() -> void:
 	if admin_panel == null and ADMIN_PANEL_SCRIPT != null:
 		admin_panel = ADMIN_PANEL_SCRIPT.new()
 		add_child(admin_panel)
+	_setup_sandbox_panel()
+
+func _setup_sandbox_panel() -> void:
+	if sandbox_panel == null and SANDBOX_PANEL_SCRIPT != null:
+		sandbox_panel = SANDBOX_PANEL_SCRIPT.new()
+		add_child(sandbox_panel)
 
 func _read_save_dict_from_file(path: String) -> Dictionary:
 	if not FileAccess.file_exists(path):
@@ -427,7 +457,7 @@ func _write_json_file_direct(path: String, json_text: String) -> bool:
 	f.close()
 	return true
 
-func save_game_data(explicit_write: bool = false) -> void:
+func save_game_data(explicit_write: bool = false, sync_cloud: bool = true) -> void:
 	coins = clampi(coins, 0, MAX_COINS)
 	var disk_best: Dictionary = _pick_best_save_candidate()
 	if not disk_best.is_empty():
@@ -484,6 +514,9 @@ func save_game_data(explicit_write: bool = false) -> void:
 
 	if OS.has_feature("web"):
 		_sync_web_save_idbfs()
+	if sync_cloud and is_inside_tree() and get_tree().root.has_node("AccountManager"):
+		if AccountManager.can_access_online_modes():
+			AccountManager.sync_profile_to_cloud()
 
 func mark_tutorial_completed() -> void:
 	if not tutorial_completed or install_tutorial_state != "completed":
@@ -629,6 +662,8 @@ func _capture_world_snapshot(world_root: Node) -> Dictionary:
 	return world_data
 
 func save_active_run() -> bool:
+	if is_inside_tree() and get_tree().root.has_node("MultiplayerManager") and MultiplayerManager.is_online_session:
+		return false
 	if current_state != GameState.PLAYING or not is_instance_valid(player_character) or not (player_character is PlayerController):
 		return false
 	var player: PlayerController = player_character as PlayerController
@@ -678,6 +713,12 @@ func save_active_run() -> bool:
 			"inside_house": player.is_inside_house,
 			"house_path": house_path
 		},
+		"fate_cards": {
+			"active_cards": active_fate_cards.duplicate(true),
+			"drawn_ids": drawn_fate_card_ids.duplicate(),
+			"offered_acts": fate_cards_offered_acts.duplicate(true),
+			"modifiers": fate_modifiers.duplicate(true)
+		},
 		"world": _capture_world_snapshot(world_root)
 	}
 	if not _write_run_snapshot(snapshot):
@@ -708,8 +749,9 @@ func resume_saved_game() -> void:
 		return
 	selected_difficulty = _saved_difficulty(int(snapshot.get("selected_difficulty", Difficulty.NORMAL)))
 	is_tutorial_mode = bool(snapshot.get("is_tutorial_mode", false))
+	_restore_fate_cards_snapshot(snapshot.get("fate_cards", {}))
 	seconds_per_game_minute = get_seconds_per_minute_for_difficulty(selected_difficulty)
-	furnace_total_time = get_furnace_duration_for_difficulty(selected_difficulty)
+	furnace_total_time = maxf(3.0, get_furnace_duration_for_difficulty(selected_difficulty) * get_fate_modifier("furnace_duration_mult", 1.0))
 	current_act = _saved_act(int(snapshot.get("current_act", Act.BABAK_1)))
 	current_hour = clampi(int(snapshot.get("current_hour", 1)), 1, 5)
 	current_minute = clampi(int(snapshot.get("current_minute", 0)), 0, 59)
@@ -1065,6 +1107,12 @@ func apply_reward(reward: Dictionary) -> void:
 func deliver_stored_items(inventory: Node) -> void:
 	if is_resuming_saved_run:
 		return
+	if not MultiplayerManager.can_use_shop_items():
+		SignalBus.dialog_requested.emit(LocScript.pick(
+			"Penggunaan Item Toko dinonaktifkan oleh Host di room ini.",
+			"Shop items are disabled by the Host in this room."
+		), 3.6)
+		return
 	if not is_instance_valid(inventory) or not inventory.has_method("add_item"):
 		return
 	var stash_changed: bool = false
@@ -1183,11 +1231,57 @@ func get_difficulty_name(diff: Difficulty) -> String:
 		Difficulty.NIGHTMARE: return "NIGHTMARE"
 	return "NORMAL"
 
+func reset_sandbox_flags() -> void:
+	sandbox_freeze_lampor = false
+	sandbox_infinite_stamina = false
+	sandbox_infinite_battery = false
+	sandbox_no_sanity_drain = false
+	sandbox_pause_clock = false
+	sandbox_fog_enabled = true
+	sandbox_speed_multiplier = 1.0
+	admin_god_mode = false
+
+func is_sandbox_owner_active() -> bool:
+	return is_sandbox_mode and MultiplayerManager.is_room_owner and is_in_active_gameplay()
+
+func toggle_sandbox_panel() -> void:
+	if not is_sandbox_owner_active():
+		return
+	if sandbox_panel == null:
+		_setup_sandbox_panel()
+	if sandbox_panel and sandbox_panel.has_method("toggle_panel"):
+		sandbox_panel.call("toggle_panel")
+
+func start_online_room_game(room: Dictionary) -> void:
+	var diff_str: String = str(room.get("difficulty", "normal")).to_lower()
+	var diff: Difficulty = Difficulty.NORMAL
+	match diff_str:
+		"easy": diff = Difficulty.EASY
+		"hard": diff = Difficulty.HARD
+		"nightmare": diff = Difficulty.NIGHTMARE
+		_: diff = Difficulty.NORMAL
+	clear_run_save()
+	reset_sandbox_flags()
+	is_sandbox_mode = (str(room.get("mode", MultiplayerManager.session_mode)).to_lower() == "sandbox")
+	var room_settings: Variant = room.get("settings", {})
+	if room_settings is Dictionary:
+		sandbox_time_scale = clampf(float((room_settings as Dictionary).get("timeScale", 1.0)), 0.25, 4.0)
+	else:
+		sandbox_time_scale = 1.0
+	start_new_game(diff, false, true)
+
 func start_tutorial_game() -> void:
 	start_new_game(Difficulty.EASY, true)
 
-func start_new_game(diff: Difficulty = Difficulty.NORMAL, tutorial: bool = false) -> void:
+func start_new_game(diff: Difficulty = Difficulty.NORMAL, tutorial: bool = false, preserve_online_session: bool = false) -> void:
+	if not preserve_online_session:
+		if is_inside_tree() and get_tree().root.has_node("MultiplayerManager") and MultiplayerManager.is_online_session:
+			MultiplayerManager.leave_room()
+		is_sandbox_mode = false
+		sandbox_time_scale = 1.0
+		reset_sandbox_flags()
 	clear_run_save()
+	reset_fate_cards()
 	is_resuming_saved_run = false
 	is_tutorial_mode = tutorial
 	selected_difficulty = diff
@@ -1227,6 +1321,9 @@ func start_new_game(diff: Difficulty = Difficulty.NORMAL, tutorial: bool = false
 	await get_tree().process_frame
 	await get_tree().process_frame
 	_enter_act_1()
+	call_deferred("_apply_fog_state", sandbox_fog_enabled)
+	if preserve_online_session and MultiplayerManager.is_online_session and not MultiplayerManager.is_room_owner:
+		call_deferred("_apply_client_world_state")
 
 func _sync_babak_1_progress() -> void:
 	if current_act != Act.BABAK_1:
@@ -1262,7 +1359,8 @@ func _sync_babak_1_progress() -> void:
 		)
 
 func _process(delta: float) -> void:
-	if current_state == GameState.PLAYING:
+	var in_online: bool = is_inside_tree() and get_tree().root.has_node("MultiplayerManager") and MultiplayerManager.is_online_session
+	if current_state == GameState.PLAYING and not in_online:
 		autosave_elapsed += delta
 		if autosave_elapsed >= AUTOSAVE_INTERVAL:
 			if save_active_run():
@@ -1274,12 +1372,28 @@ func _process(delta: float) -> void:
 		autosave_elapsed = 0.0
 	if current_state != GameState.PLAYING or get_tree().paused:
 		return
+	if in_online and not MultiplayerManager.is_room_owner:
+		_apply_client_world_state()
+		if furnace_burning:
+			furnace_time_left = maxf(0.0, furnace_time_left - delta)
+			SignalBus.furnace_progress_updated.emit(furnace_time_left, furnace_total_time)
+			var client_elapsed_sec: int = clampi(int(furnace_total_time - furnace_time_left), 0, int(furnace_total_time))
+			if client_elapsed_sec != last_furnace_elapsed_sec:
+				last_furnace_elapsed_sec = client_elapsed_sec
+				SignalBus.objective_updated.emit(
+					"survive_furnace",
+					LocScript.pick("Bertahan hidup dari amukan Lampor hingga ritual selesai", "Survive Lampor's fury until the ritual finishes"),
+					client_elapsed_sec,
+					int(furnace_total_time),
+					furnace_time_left <= 0.0
+				)
+		return
 	if current_act == Act.BABAK_1:
 		_sync_babak_1_progress()
 		if torches_lit >= REQUIRED_TORCHES and doors_barricaded >= REQUIRED_BARRICADES:
 			_enter_act_2()
-	if not dawn_reached:
-		time_accumulator += delta
+	if not dawn_reached and not sandbox_pause_clock:
+		time_accumulator += delta * sandbox_time_scale * get_fate_modifier("clock_speed_mult", 1.0)
 		while time_accumulator >= seconds_per_game_minute and not dawn_reached:
 			time_accumulator -= seconds_per_game_minute
 			_advance_time(1)
@@ -1437,12 +1551,153 @@ func try_start_ritual() -> bool:
 
 func start_furnace_burning() -> void:
 	if not furnace_burning and current_act == Act.BABAK_3:
-		furnace_total_time = get_furnace_duration_for_difficulty(selected_difficulty)
+		furnace_total_time = maxf(3.0, get_furnace_duration_for_difficulty(selected_difficulty) * get_fate_modifier("furnace_duration_mult", 1.0))
 		furnace_burning = true
 		furnace_time_left = furnace_total_time
 		last_furnace_elapsed_sec = 0
 		broadcast_all_objectives()
 		SignalBus.lampor_state_changed.emit("CHASE")
+
+# ---------- Sistem Kartu Takdir (Fate Cards) ----------
+
+func reset_fate_cards() -> void:
+	active_fate_cards.clear()
+	drawn_fate_card_ids.clear()
+	fate_cards_offered_acts.clear()
+	fate_modifiers.clear()
+	SignalBus.fate_cards_reset.emit()
+
+func _restore_fate_cards_snapshot(raw_fate: Variant) -> void:
+	reset_fate_cards()
+	if not (raw_fate is Dictionary):
+		return
+	var fd: Dictionary = raw_fate as Dictionary
+	var raw_active: Variant = fd.get("active_cards", [])
+	if raw_active is Array:
+		for item: Variant in (raw_active as Array):
+			if item is Dictionary:
+				active_fate_cards.append((item as Dictionary).duplicate(true))
+	var raw_drawn: Variant = fd.get("drawn_ids", [])
+	if raw_drawn is Array:
+		for cid: Variant in (raw_drawn as Array):
+			var cid_str: String = str(cid)
+			if not cid_str.is_empty() and not drawn_fate_card_ids.has(cid_str):
+				drawn_fate_card_ids.append(cid_str)
+	var raw_offered: Variant = fd.get("offered_acts", {})
+	if raw_offered is Dictionary:
+		for k: Variant in (raw_offered as Dictionary).keys():
+			fate_cards_offered_acts[int(k)] = bool((raw_offered as Dictionary)[k])
+	var raw_mods: Variant = fd.get("modifiers", {})
+	if raw_mods is Dictionary:
+		for mk: Variant in (raw_mods as Dictionary).keys():
+			fate_modifiers[str(mk)] = clampf(float((raw_mods as Dictionary)[mk]), 0.45, 2.2)
+
+func get_fate_modifier(key: String, default_val: float = 1.0) -> float:
+	if fate_modifiers.has(key):
+		return float(fate_modifiers[key])
+	return default_val
+
+func request_fate_card_pair_for_act(act_num: int) -> Dictionary:
+	if is_tutorial_mode or is_resuming_saved_run or current_state != GameState.PLAYING:
+		return {}
+	if death_sequence_active or victory_sequence_active:
+		return {}
+	if act_num < 1 or act_num > 3:
+		return {}
+	if bool(fate_cards_offered_acts.get(act_num, false)):
+		return {}
+	fate_cards_offered_acts[act_num] = true
+	var pair: Dictionary = FATE_CARD_SYSTEM.draw_act_pair(drawn_fate_card_ids)
+	for side_key: String in ["left", "right"]:
+		var c_raw: Variant = pair.get(side_key, {})
+		if c_raw is Dictionary:
+			var cid: String = str((c_raw as Dictionary).get("id", ""))
+			if not cid.is_empty() and not drawn_fate_card_ids.has(cid):
+				drawn_fate_card_ids.append(cid)
+	return pair
+
+func apply_fate_card(card: Dictionary) -> void:
+	if card.is_empty():
+		return
+	var card_copy: Dictionary = card.duplicate(true)
+	active_fate_cards.append(card_copy)
+
+	var furnace_mod_changed: bool = false
+	var mods_raw: Variant = card_copy.get("modifiers", {})
+	if mods_raw is Dictionary:
+		var mods: Dictionary = mods_raw as Dictionary
+		for mod_key_var: Variant in mods.keys():
+			var mod_key: String = str(mod_key_var)
+			var factor: float = float(mods[mod_key_var])
+			var current_val: float = float(fate_modifiers.get(mod_key, 1.0))
+			fate_modifiers[mod_key] = clampf(current_val * factor, 0.45, 2.2)
+			if mod_key == "furnace_duration_mult":
+				furnace_mod_changed = true
+
+	if furnace_mod_changed and furnace_burning:
+		var base_furnace: float = get_furnace_duration_for_difficulty(selected_difficulty)
+		var new_total: float = maxf(3.0, base_furnace * get_fate_modifier("furnace_duration_mult", 1.0))
+		var remaining_ratio: float = clampf(furnace_time_left / maxf(0.1, furnace_total_time), 0.0, 1.0)
+		furnace_total_time = new_total
+		furnace_time_left = clampf(new_total * remaining_ratio, 0.0, furnace_total_time)
+		last_furnace_elapsed_sec = clampi(int(furnace_total_time - furnace_time_left), 0, int(furnace_total_time))
+		SignalBus.furnace_progress_updated.emit(furnace_time_left, furnace_total_time)
+		broadcast_all_objectives()
+
+	var inst_raw: Variant = card_copy.get("instant", {})
+	if inst_raw is Dictionary:
+		var inst: Dictionary = inst_raw as Dictionary
+		if inst.has("sanity_delta") and is_instance_valid(player_character) and player_character is PlayerController:
+			var pc: PlayerController = player_character as PlayerController
+			var s_delta: float = float(inst["sanity_delta"])
+			if pc.sanity_system:
+				if s_delta >= 0.0:
+					pc.sanity_system.restore_sanity(s_delta)
+				elif not admin_god_mode:
+					pc.sanity_system.current_sanity = clampf(pc.sanity_system.current_sanity + s_delta, 1.0, pc.sanity_system.max_sanity)
+					SignalBus.player_sanity_changed.emit(pc.sanity_system.current_sanity, pc.sanity_system.max_sanity)
+
+		if bool(inst.get("full_battery", false)) and is_instance_valid(player_character) and player_character is PlayerController:
+			var pc: PlayerController = player_character as PlayerController
+			pc.flashlight_battery = 100.0
+			pc._low_battery_warned = false
+			pc._empty_battery_warned = false
+			SignalBus.flashlight_battery_changed.emit(100.0, 100.0)
+
+		if inst.has("grant_item") and is_instance_valid(player_character) and player_character is PlayerController:
+			var pc: PlayerController = player_character as PlayerController
+			var grant_id: String = str(inst["grant_item"])
+			if not grant_id.is_empty():
+				var item_label: String = "Jamu Tolak Bala" if grant_id == "jamu" else LocScript.item_name(grant_id, grant_id)
+				var item_payload: Dictionary = {
+					"id": grant_id,
+					"name": item_label,
+					"type": "consumable",
+					"quantity": 1
+				}
+				var added: bool = false
+				if is_instance_valid(pc.inventory_system):
+					added = pc.inventory_system.add_item(item_payload)
+				if not added and is_inside_tree() and get_tree().current_scene:
+					var pickup_scene: PackedScene = load("res://scenes/items/PickupItem.tscn") as PackedScene
+					if pickup_scene:
+						var drop_inst: PickupItem = pickup_scene.instantiate() as PickupItem
+						if drop_inst:
+							drop_inst.item_id = grant_id
+							drop_inst.item_name = item_label
+							drop_inst.item_type = "consumable"
+							drop_inst.set_meta("autosave_dynamic", true)
+							get_tree().current_scene.add_child(drop_inst)
+							drop_inst.global_position = pc.global_position + Vector3(0.0, 0.35, 0.0)
+
+		if inst.has("coins_delta"):
+			var c_delta: int = int(inst["coins_delta"])
+			if c_delta != 0:
+				coins = clampi(coins + c_delta, 0, MAX_COINS)
+				SignalBus.coins_changed.emit(coins)
+				save_game_data()
+
+	SignalBus.fate_card_applied.emit(card_copy)
 
 func _on_torch_lit(_torch_id: int, total_lit: int, _req: int) -> void:
 	torches_lit = total_lit
@@ -1455,7 +1710,8 @@ func _on_torch_lit(_torch_id: int, total_lit: int, _req: int) -> void:
 			torches_lit >= REQUIRED_TORCHES
 		)
 	if current_act == Act.BABAK_1 and torches_lit >= REQUIRED_TORCHES and doors_barricaded >= REQUIRED_BARRICADES:
-		_enter_act_2()
+		if not MultiplayerManager.is_online_session or MultiplayerManager.is_room_owner:
+			_enter_act_2()
 		return
 	if total_lit == REQUIRED_TORCHES - 1:
 		SignalBus.dialog_requested.emit(LocScript.pick(
@@ -1479,7 +1735,8 @@ func record_door_barricaded() -> void:
 			doors_barricaded >= REQUIRED_BARRICADES
 		)
 	if current_act == Act.BABAK_1 and torches_lit >= REQUIRED_TORCHES and doors_barricaded >= REQUIRED_BARRICADES:
-		_enter_act_2()
+		if not MultiplayerManager.is_online_session or MultiplayerManager.is_room_owner:
+			_enter_act_2()
 		return
 	if doors_barricaded == REQUIRED_BARRICADES - 1:
 		SignalBus.dialog_requested.emit(LocScript.pick(
@@ -1514,7 +1771,8 @@ func _on_ritual_item_collected(item_name: String, count: int, total: int) -> voi
 			count >= total
 		)
 	if count >= total and current_act == Act.BABAK_2:
-		_enter_act_3()
+		if not MultiplayerManager.is_online_session or MultiplayerManager.is_room_owner:
+			_enter_act_3()
 		return
 	if count == total - 1:
 		SignalBus.dialog_requested.emit(LocScript.pick(
@@ -1537,6 +1795,8 @@ func get_ritual_item_count() -> int:
 func trigger_victory() -> void:
 	if victory_sequence_active or death_sequence_active or current_state == GameState.GAMEOVER or current_state == GameState.VICTORY:
 		return
+	if MultiplayerManager.is_online_session and not _handling_network_victory:
+		MultiplayerManager.push_event("victory", {"reason": "ritual_complete"})
 	victory_sequence_active = true
 	furnace_burning = false
 	clear_run_save()
@@ -1553,9 +1813,13 @@ func trigger_victory() -> void:
 		return
 	get_tree().paused = false
 	current_state = GameState.VICTORY
-	total_wins += 1
-	_award_run_coins(WIN_COIN_REWARD)
-	save_game_data()
+	if is_sandbox_mode:
+		last_run_coin_reward = 0
+		run_reward_awarded = true
+	else:
+		total_wins += 1
+		_award_run_coins(WIN_COIN_REWARD)
+		save_game_data()
 	SignalBus.game_won.emit()
 	victory_sequence_active = false
 	get_tree().change_scene_to_file("res://scenes/ui/VictoryScreen.tscn")
@@ -1587,8 +1851,19 @@ func _execute_player_death(reason: String, ignore_extra_lives: bool = false, byp
 	if not is_inside_tree():
 		death_sequence_active = false
 		return
-	# Nyawa tambahan menghidupkan kembali pemain di titik awal desa (kecuali batas pukul 05.00 atau force lose).
-	if not ignore_extra_lives and extra_lives > 0 and is_instance_valid(player_character) and player_character.has_method("revive_from_extra_life"):
+	# Kebangkitan rekan otomatis di Multiplayer / Sandbox bila aktif
+	if not ignore_extra_lives and is_instance_valid(player_character) and player_character.has_method("try_friendly_revive"):
+		if bool(player_character.call("try_friendly_revive")):
+			for lampor_node: Node in get_tree().get_nodes_in_group("lampor"):
+				if lampor_node.has_method("reset_after_player_revive"):
+					lampor_node.reset_after_player_revive()
+			current_state = GameState.PLAYING
+			get_tree().paused = false
+			death_sequence_active = false
+			return
+	# Nyawa tambahan menghidupkan kembali pemain di titik awal desa (kecuali batas pukul 05.00, force lose, sandbox, atau shop item nonaktif).
+	var allow_extra_life: bool = (not ignore_extra_lives) and (not is_sandbox_mode) and MultiplayerManager.can_use_shop_items()
+	if allow_extra_life and extra_lives > 0 and is_instance_valid(player_character) and player_character.has_method("revive_from_extra_life"):
 		extra_lives -= 1
 		save_game_data()
 		current_state = GameState.PLAYING
@@ -1611,10 +1886,14 @@ func _execute_player_death(reason: String, ignore_extra_lives: bool = false, byp
 	if not is_inside_tree():
 		death_sequence_active = false
 		return
-	# Koin kekalahan hanya diberikan ketika permainan benar-benar berakhir.
+	# Koin kekalahan hanya diberikan ketika permainan benar-benar berakhir (non-sandbox).
 	if is_tutorial_mode or install_tutorial_state != "admin_forced":
 		mark_tutorial_completed()
-	_award_run_coins(LOSS_COIN_REWARD)
+	if is_sandbox_mode:
+		last_run_coin_reward = 0
+		run_reward_awarded = true
+	else:
+		_award_run_coins(LOSS_COIN_REWARD)
 	clear_run_save()
 	current_state = GameState.GAMEOVER
 	SignalBus.player_died.emit(reason)
@@ -1770,3 +2049,465 @@ func admin_teleport_to_altar() -> void:
 			pc.exit_hiding()
 		pc.global_position = altar.global_position + Vector3(0.0, 0.3, 2.2)
 		pc.velocity = Vector3.ZERO
+
+# ---------- Sinkronisasi Multiplayer & Perintah Sandbox ----------
+
+func _apply_fog_state(enabled: bool) -> void:
+	var world_root: Node = get_tree().current_scene
+	if not is_instance_valid(world_root):
+		return
+	for env_node: Node in world_root.find_children("*", "WorldEnvironment", true, false):
+		var we: WorldEnvironment = env_node as WorldEnvironment
+		if we and we.environment:
+			we.environment.fog_enabled = enabled
+
+func _sync_altar_burning_visual(burning: bool) -> void:
+	var world_root: Node = get_tree().current_scene
+	if not is_instance_valid(world_root):
+		return
+	var altar: Node = world_root.find_child("RitualAltar", true, false)
+	if altar and altar.has_method("apply_network_burning"):
+		altar.call("apply_network_burning", burning)
+
+func _mark_collected_ritual_pickups() -> void:
+	for node: Node in get_tree().get_nodes_in_group("interactable"):
+		if node is PickupItem:
+			var item: PickupItem = node as PickupItem
+			if not item.is_ritual_item:
+				continue
+			var r_name: String = item.ritual_display_name if not item.ritual_display_name.is_empty() else item.item_name
+			if bool(ritual_items.get(r_name, false)):
+				if item.has_method("apply_network_picked_up"):
+					item.apply_network_picked_up()
+				else:
+					item.queue_free()
+
+func _recount_torches_lit() -> int:
+	var count: int = 0
+	for node: Node in get_tree().get_nodes_in_group("torch"):
+		if node is SafeZoneTorch and (node as SafeZoneTorch).is_lit:
+			count += 1
+	return count
+
+func _recount_doors_barricaded() -> int:
+	var count: int = 0
+	for node: Node in get_tree().get_nodes_in_group("interactable"):
+		if node is Door and (node as Door).is_barricaded:
+			count += 1
+	return count
+
+func _apply_client_world_state() -> void:
+	var ws: Dictionary = MultiplayerManager.world_state
+	if ws.is_empty():
+		return
+
+	var sb: Variant = ws.get("sandbox", {})
+	if sb is Dictionary:
+		var sbd := sb as Dictionary
+		if sbd.has("freezeLampor"):
+			sandbox_freeze_lampor = bool(sbd["freezeLampor"])
+		if sbd.has("pauseClock"):
+			sandbox_pause_clock = bool(sbd["pauseClock"])
+		if sbd.has("fogEnabled"):
+			var next_fog: bool = bool(sbd["fogEnabled"])
+			if next_fog != sandbox_fog_enabled:
+				sandbox_fog_enabled = next_fog
+				_apply_fog_state(sandbox_fog_enabled)
+
+	if ws.has("hour") and ws.has("minute"):
+		var host_h: int = clampi(int(ws.get("hour", current_hour)), 1, 5)
+		var host_m: int = clampi(int(ws.get("minute", current_minute)), 0, 59)
+		if host_h >= 5:
+			host_h = 5
+			host_m = 0
+		if host_h != current_hour or host_m != current_minute:
+			current_hour = host_h
+			current_minute = host_m
+			dawn_reached = (current_hour >= 5)
+			SignalBus.time_tick.emit("%02d:%02d" % [current_hour, current_minute], current_hour, current_minute)
+			if dawn_reached:
+				trigger_dawn_lampor_devour()
+
+	if ws.has("act"):
+		var host_act_num: int = clampi(int(ws.get("act", 1)), 1, 3)
+		var host_act: Act = _saved_act(host_act_num - 1)
+		if host_act != current_act:
+			current_act = host_act
+			if current_act == Act.BABAK_1:
+				furnace_burning = false
+				_sync_altar_burning_visual(false)
+			SignalBus.act_started.emit(host_act_num, get_current_act_title())
+			broadcast_all_objectives()
+
+	if ws.has("torchesLit"):
+		var host_torches: int = clampi(int(ws.get("torchesLit", torches_lit)), 0, REQUIRED_TORCHES)
+		if host_torches > torches_lit:
+			torches_lit = host_torches
+			if torches_lit >= REQUIRED_TORCHES:
+				for node: Node in get_tree().get_nodes_in_group("torch"):
+					if node is SafeZoneTorch and not (node as SafeZoneTorch).is_lit:
+						(node as SafeZoneTorch).apply_network_lit(true)
+			if current_act == Act.BABAK_1:
+				SignalBus.objective_updated.emit(
+					"torches",
+					LocScript.pick("Nyalakan 5 Obor Penolak Bala", "Light 5 Repellent Torches"),
+					torches_lit,
+					REQUIRED_TORCHES,
+					torches_lit >= REQUIRED_TORCHES
+				)
+
+	if ws.has("doorsBarricaded"):
+		var host_doors: int = clampi(int(ws.get("doorsBarricaded", doors_barricaded)), 0, REQUIRED_BARRICADES)
+		if host_doors > doors_barricaded:
+			doors_barricaded = host_doors
+			if current_act == Act.BABAK_1:
+				SignalBus.objective_updated.emit(
+					"barricades",
+					LocScript.pick("Barikade 3 Pintu Rumah dengan Papan & Paku", "Barricade 3 House Doors with Planks & Nails"),
+					doors_barricaded,
+					REQUIRED_BARRICADES,
+					doors_barricaded >= REQUIRED_BARRICADES
+				)
+
+	var host_ritual: Variant = ws.get("ritualItems", {})
+	if host_ritual is Dictionary:
+		var r_changed: bool = false
+		for r_key: String in ritual_items.keys():
+			var h_val: bool = bool((host_ritual as Dictionary).get(r_key, false))
+			if h_val and not bool(ritual_items[r_key]):
+				ritual_items[r_key] = true
+				r_changed = true
+		if r_changed:
+			_mark_collected_ritual_pickups()
+			if current_act == Act.BABAK_2:
+				var r_cnt: int = get_ritual_item_count()
+				SignalBus.objective_updated.emit(
+					"ritual_items",
+					LocScript.pick("Kumpulkan 4 Benda Ritual (Kemenyan, Bunga 7 Rupa, Keris, Tanah)", "Collect 4 Ritual Relics (Incense, Flowers, Keris, Soil)"),
+					r_cnt,
+					TOTAL_RITUAL_ITEMS,
+					r_cnt >= TOTAL_RITUAL_ITEMS
+				)
+
+	if ws.has("furnaceBurning"):
+		var host_burning: bool = bool(ws.get("furnaceBurning", false))
+		if host_burning and not furnace_burning:
+			furnace_burning = true
+			furnace_total_time = get_furnace_duration_for_difficulty(selected_difficulty)
+			furnace_time_left = clampf(float(ws.get("furnaceTimeLeft", furnace_total_time)), 0.0, furnace_total_time)
+			last_furnace_elapsed_sec = clampi(int(furnace_total_time - furnace_time_left), 0, int(furnace_total_time))
+			_sync_altar_burning_visual(true)
+			broadcast_all_objectives()
+		elif host_burning and furnace_burning and ws.has("furnaceTimeLeft"):
+			var host_left: float = clampf(float(ws.get("furnaceTimeLeft", furnace_time_left)), 0.0, furnace_total_time)
+			if absf(host_left - furnace_time_left) > 1.2:
+				furnace_time_left = host_left
+
+func _on_multiplayer_event_received(event_type: String, payload: Dictionary, sender_name: String) -> void:
+	if event_type == "player_kicked":
+		var target_uid: String = str(payload.get("targetUserId", payload.get("userId", "")))
+		var target_uname: String = str(payload.get("targetUsername", payload.get("username", "")))
+		var my_uid: String = AccountManager.user_id if (is_inside_tree() and get_tree().root.has_node("AccountManager")) else ""
+		var my_uname: String = AccountManager.username if (is_inside_tree() and get_tree().root.has_node("AccountManager")) else ""
+		if (not target_uid.is_empty() and target_uid == my_uid) or (not target_uname.is_empty() and target_uname == my_uname):
+			_handle_kicked_or_disconnected(LocScript.pick("Kamu dikeluarkan dari room oleh Host.", "You were kicked from the room by the Host."))
+		return
+
+	if event_type == "room_broadcast":
+		var b_msg: String = str(payload.get("message", "")).strip_edges()
+		if not b_msg.is_empty():
+			SignalBus.dialog_requested.emit("[SERVER] " + b_msg, 4.5)
+		return
+
+	var local_uname: String = AccountManager.username if (is_inside_tree() and get_tree().root.has_node("AccountManager")) else ""
+	if not local_uname.is_empty() and sender_name == local_uname:
+		return
+
+	var world_root: Node = get_tree().current_scene
+	match event_type:
+		"torch_lit":
+			var t_id: int = int(payload.get("torch_id", payload.get("torchId", -1)))
+			var t_path: String = str(payload.get("node_path", ""))
+			var target_torch: SafeZoneTorch = null
+			if world_root and not t_path.is_empty():
+				target_torch = world_root.get_node_or_null(NodePath(t_path)) as SafeZoneTorch
+			if target_torch == null:
+				for node: Node in get_tree().get_nodes_in_group("torch"):
+					if node is SafeZoneTorch and (node as SafeZoneTorch).torch_id == t_id:
+						target_torch = node as SafeZoneTorch
+						break
+			if target_torch:
+				target_torch.apply_network_lit(bool(payload.get("is_lit", true)))
+			torches_lit = _recount_torches_lit()
+			SignalBus.torch_lit.emit(t_id, torches_lit, REQUIRED_TORCHES)
+		"door_state":
+			var d_path: String = str(payload.get("node_path", ""))
+			var target_door: Door = world_root.get_node_or_null(NodePath(d_path)) as Door if (world_root and not d_path.is_empty()) else null
+			if target_door == null and not d_path.is_empty():
+				for node: Node in get_tree().get_nodes_in_group("interactable"):
+					if node is Door and str(node.name) == d_path.get_file():
+						target_door = node as Door
+						break
+			if target_door:
+				target_door.apply_network_state(bool(payload.get("is_open", false)), bool(payload.get("is_barricaded", false)))
+			doors_barricaded = _recount_doors_barricaded()
+			if current_act == Act.BABAK_1:
+				SignalBus.objective_updated.emit(
+					"barricades",
+					LocScript.pick("Barikade 3 Pintu Rumah dengan Papan & Paku", "Barricade 3 House Doors with Planks & Nails"),
+					doors_barricaded,
+					REQUIRED_BARRICADES,
+					doors_barricaded >= REQUIRED_BARRICADES
+				)
+				if torches_lit >= REQUIRED_TORCHES and doors_barricaded >= REQUIRED_BARRICADES and MultiplayerManager.is_room_owner:
+					_enter_act_2()
+		"pickup_taken":
+			var p_path: String = str(payload.get("node_path", ""))
+			if world_root and not p_path.is_empty():
+				var p_node: PickupItem = world_root.get_node_or_null(NodePath(p_path)) as PickupItem
+				if p_node:
+					p_node.apply_network_picked_up()
+		"ritual_collected":
+			var r_path: String = str(payload.get("node_path", ""))
+			var r_name: String = str(payload.get("ritual_name", ""))
+			if world_root and not r_path.is_empty():
+				var r_node: PickupItem = world_root.get_node_or_null(NodePath(r_path)) as PickupItem
+				if r_node:
+					r_node.apply_network_picked_up()
+			if not r_name.is_empty():
+				ritual_items[r_name] = true
+				_mark_collected_ritual_pickups()
+				_on_ritual_item_collected(r_name, get_ritual_item_count(), TOTAL_RITUAL_ITEMS)
+		"furnace_started":
+			if not furnace_burning:
+				for k: String in ritual_items.keys():
+					ritual_items[k] = true
+				if current_act < Act.BABAK_3:
+					current_act = Act.BABAK_3
+					_fast_forward_clock_to(4, 0)
+					SignalBus.time_tick.emit("%02d:%02d" % [current_hour, current_minute], current_hour, current_minute)
+					SignalBus.act_started.emit(3, get_current_act_title())
+				start_furnace_burning()
+			_sync_altar_burning_visual(true)
+		"sandbox_cmd":
+			var cmd: String = str(payload.get("cmd", ""))
+			var params_val: Variant = payload.get("params", {})
+			var params: Dictionary = params_val if params_val is Dictionary else {}
+			if not cmd.is_empty():
+				apply_sandbox_command(cmd, params, false)
+		"victory":
+			_handling_network_victory = true
+			trigger_victory()
+			_handling_network_victory = false
+
+func _on_multiplayer_disconnected(reason: String) -> void:
+	_handle_kicked_or_disconnected(reason)
+
+func _handle_kicked_or_disconnected(reason: String) -> void:
+	is_sandbox_mode = false
+	sandbox_time_scale = 1.0
+	reset_sandbox_flags()
+	if is_inside_tree() and get_tree().root.has_node("MultiplayerManager"):
+		MultiplayerManager.reset_to_singleplayer()
+	if sandbox_panel and sandbox_panel.has_method("_force_close"):
+		sandbox_panel.call("_force_close")
+	if is_in_active_gameplay():
+		get_tree().paused = false
+		death_sequence_active = false
+		victory_sequence_active = false
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		current_state = GameState.MENU
+		get_tree().change_scene_to_file("res://scenes/ui/MainMenu.tscn")
+		if not reason.strip_edges().is_empty():
+			call_deferred("_show_disconnect_notice", reason)
+
+func _show_disconnect_notice(reason: String) -> void:
+	if is_instance_valid(_disconnect_notice_layer):
+		_disconnect_notice_layer.queue_free()
+	var layer := CanvasLayer.new()
+	layer.layer = 125
+	layer.process_mode = Node.PROCESS_MODE_ALWAYS
+	_disconnect_notice_layer = layer
+	add_child(layer)
+
+	var overlay := ColorRect.new()
+	overlay.color = Color(0.03, 0.015, 0.018, 0.72)
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	layer.add_child(overlay)
+
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.add_child(center)
+
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(360.0, 0.0)
+	panel.add_theme_stylebox_override("panel", HorrorTheme.make_minimal_panel_style(Color(0.086, 0.045, 0.043, 0.96), HorrorTheme.ACCENT, 2, 22, 20))
+	center.add_child(panel)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 10)
+	panel.add_child(vbox)
+
+	var title := Label.new()
+	title.text = LocScript.pick("KONEKSI ROOM TERPUTUS", "ROOM DISCONNECTED")
+	HorrorTheme.style_label(title, "headline-md", HorrorTheme.PRIMARY, 17)
+	vbox.add_child(title)
+
+	var msg := Label.new()
+	msg.text = reason
+	msg.custom_minimum_size.x = 320.0
+	msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	HorrorTheme.style_label(msg, "body-md", HorrorTheme.ON_SURFACE, 13)
+	vbox.add_child(msg)
+
+	var ok_btn := Button.new()
+	ok_btn.text = "OK"
+	ok_btn.custom_minimum_size.y = 40.0
+	HorrorTheme.style_button(ok_btn, "primary", 12, true)
+	ok_btn.pressed.connect(func() -> void:
+		if is_instance_valid(layer):
+			layer.queue_free()
+	)
+	vbox.add_child(ok_btn)
+
+func apply_sandbox_command(cmd: String, params: Dictionary = {}, broadcast: bool = true) -> void:
+	if broadcast and MultiplayerManager.is_online_session:
+		MultiplayerManager.send_sandbox_command(cmd, params)
+	match cmd:
+		"god_mode":
+			admin_god_mode = bool(params.get("enabled", not admin_god_mode))
+			if admin_god_mode:
+				admin_refill_player_stats()
+		"infinite_stamina":
+			sandbox_infinite_stamina = bool(params.get("enabled", not sandbox_infinite_stamina))
+			if sandbox_infinite_stamina and is_instance_valid(player_character) and player_character is PlayerController:
+				var pc := player_character as PlayerController
+				pc.current_stamina = pc.max_stamina
+				SignalBus.player_stamina_changed.emit(pc.current_stamina, pc.max_stamina)
+		"infinite_battery":
+			sandbox_infinite_battery = bool(params.get("enabled", not sandbox_infinite_battery))
+			if sandbox_infinite_battery and is_instance_valid(player_character) and player_character is PlayerController:
+				var pc := player_character as PlayerController
+				pc.flashlight_battery = 100.0
+				SignalBus.flashlight_battery_changed.emit(100.0, 100.0)
+		"no_sanity_drain":
+			sandbox_no_sanity_drain = bool(params.get("enabled", not sandbox_no_sanity_drain))
+		"refill_stats":
+			admin_refill_player_stats()
+		"speed_multiplier":
+			sandbox_speed_multiplier = clampf(float(params.get("value", 1.0)), 0.5, 3.0)
+		"freeze_lampor":
+			sandbox_freeze_lampor = bool(params.get("enabled", not sandbox_freeze_lampor))
+			if sandbox_freeze_lampor:
+				for node: Node in get_tree().get_nodes_in_group("lampor"):
+					if node is LamporStateMachine:
+						(node as LamporStateMachine).velocity = Vector3.ZERO
+		"descend_lampor":
+			if not MultiplayerManager.is_online_session or MultiplayerManager.is_room_owner:
+				for node: Node in get_tree().get_nodes_in_group("lampor"):
+					if node is LamporStateMachine:
+						var lampor := node as LamporStateMachine
+						if lampor.current_state == LamporStateMachine.State.DORMANT_SKY:
+							lampor.trigger_descent(false)
+		"repel_lampor":
+			var dur: float = float(params.get("duration", 8.0))
+			for node: Node in get_tree().get_nodes_in_group("lampor"):
+				if node.has_method("repel_from_kentongan"):
+					node.call("repel_from_kentongan", dur)
+		"push_lampor_away":
+			if not MultiplayerManager.is_online_session or MultiplayerManager.is_room_owner:
+				var p_pos: Vector3 = player_character.global_position if is_instance_valid(player_character) and player_character is Node3D else Vector3.ZERO
+				for node: Node in get_tree().get_nodes_in_group("lampor"):
+					if node is LamporStateMachine:
+						var lampor := node as LamporStateMachine
+						var best_pos: Vector3 = Vector3(30.0, 2.2, 30.0)
+						var best_d: float = -1.0
+						for wp: Vector3 in lampor.waypoints:
+							var d: float = wp.distance_squared_to(p_pos)
+							if d > best_d:
+								best_d = d
+								best_pos = wp
+						if lampor.descent_tween and lampor.descent_tween.is_running():
+							lampor.descent_tween.kill()
+						lampor.is_descending = false
+						lampor.is_catching = false
+						lampor.velocity = Vector3.ZERO
+						lampor.chase_cooldown = 8.0
+						lampor.global_position = Vector3(best_pos.x, maxf(best_pos.y, 2.2), best_pos.z)
+						if lampor.current_state != LamporStateMachine.State.DORMANT_SKY and lampor.current_state != LamporStateMachine.State.BANISHED:
+							lampor._set_state(LamporStateMachine.State.PATROL)
+		"pull_lampor_near":
+			if (not MultiplayerManager.is_online_session or MultiplayerManager.is_room_owner) and is_instance_valid(player_character) and player_character is Node3D:
+				var pc_node := player_character as Node3D
+				var forward: Vector3 = -pc_node.global_transform.basis.z
+				forward.y = 0.0
+				if forward.length_squared() < 0.01:
+					forward = Vector3(0.0, 0.0, -1.0)
+				forward = forward.normalized()
+				var spawn_pos := Vector3(
+					clampf(pc_node.global_position.x + forward.x * 7.5, -34.0, 34.0),
+					2.2,
+					clampf(pc_node.global_position.z + forward.z * 7.5, -34.0, 34.0)
+				)
+				for node: Node in get_tree().get_nodes_in_group("lampor"):
+					if node is LamporStateMachine:
+						var lampor := node as LamporStateMachine
+						if lampor.descent_tween and lampor.descent_tween.is_running():
+							lampor.descent_tween.kill()
+						lampor.is_descending = false
+						lampor.is_catching = false
+						lampor.visible = true
+						if lampor.collision_shape:
+							lampor.collision_shape.disabled = false
+						lampor.global_position = spawn_pos
+						lampor.velocity = Vector3.ZERO
+						lampor.safe_look_at(pc_node.global_position)
+						if lampor.current_state == LamporStateMachine.State.DORMANT_SKY or lampor.current_state == LamporStateMachine.State.BANISHED:
+							lampor._set_state(LamporStateMachine.State.PATROL)
+		"pause_clock":
+			sandbox_pause_clock = bool(params.get("enabled", not sandbox_pause_clock))
+		"jump_act":
+			admin_jump_to_act(int(params.get("act", 1)))
+		"set_time":
+			admin_set_time(int(params.get("hour", 1)), int(params.get("minute", 0)))
+		"instant_win":
+			_handling_network_victory = true
+			admin_instant_win()
+			_handling_network_victory = false
+		"instant_lose":
+			admin_instant_lose()
+		"light_all_torches":
+			for node: Node in get_tree().get_nodes_in_group("torch"):
+				if node is SafeZoneTorch:
+					(node as SafeZoneTorch).apply_network_lit(true)
+			torches_lit = REQUIRED_TORCHES
+			broadcast_all_objectives()
+			if current_act == Act.BABAK_1 and torches_lit >= REQUIRED_TORCHES and doors_barricaded >= REQUIRED_BARRICADES:
+				_enter_act_2()
+		"barricade_doors":
+			var count_d: int = 0
+			for node: Node in get_tree().get_nodes_in_group("interactable"):
+				if node is Door:
+					var d := node as Door
+					if d.is_barricaded:
+						count_d += 1
+			for node: Node in get_tree().get_nodes_in_group("interactable"):
+				if node is Door and count_d < REQUIRED_BARRICADES:
+					var d := node as Door
+					if not d.is_barricaded:
+						d.apply_network_state(false, true, true)
+						count_d += 1
+			doors_barricaded = maxi(_recount_doors_barricaded(), REQUIRED_BARRICADES)
+			broadcast_all_objectives()
+			if current_act == Act.BABAK_1 and torches_lit >= REQUIRED_TORCHES and doors_barricaded >= REQUIRED_BARRICADES:
+				_enter_act_2()
+		"collect_ritual_items":
+			admin_collect_all_ritual_items()
+		"give_all_items":
+			admin_give_all_items()
+		"teleport_altar":
+			admin_teleport_to_altar()
+		"toggle_fog":
+			sandbox_fog_enabled = bool(params.get("enabled", not sandbox_fog_enabled))
+			_apply_fog_state(sandbox_fog_enabled)

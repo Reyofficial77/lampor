@@ -3,6 +3,8 @@ extends CanvasLayer
 
 const INVENTORY_SLOT_UI_SCRIPT = preload("res://scripts/ui/InventorySlotUI.gd")
 const TUTORIAL_OVERLAY_SCRIPT = preload("res://scripts/systems/TutorialOverlay.gd")
+const FATE_CARD_SYSTEM_SCRIPT = preload("res://scripts/systems/FateCardSystem.gd")
+const FATE_CARD_OVERLAY_SCRIPT = preload("res://scripts/ui/FateCardOverlay.gd")
 const HORROR_TITLE_FONT: Font = preload("res://assets/fonts/HorrorTitle.ttf")
 const LocScript = preload("res://scripts/systems/Loc.gd")
 
@@ -102,6 +104,16 @@ var selected_swap_slot: int = -1
 var cached_inventory_slots: Array = []
 var hud_bag_button: Button = null
 var touch_run_button: Button = null
+var sandbox_touch_btn: Button = null
+var mp_overlay_panel: PanelContainer = null
+var mp_room_title_lbl: Label = null
+var mp_room_meta_lbl: Label = null
+var mp_announcement_panel: PanelContainer = null
+var mp_announcement_lbl: Label = null
+var mp_roster_vbox: VBoxContainer = null
+var _mp_refresh_elapsed: float = 0.0
+var _mp_last_sig: String = ""
+var _last_sandbox_hint_active: bool = false
 var _pause_settings_box: VBoxContainer = null
 var _pause_language_option: OptionButton = null
 var _pause_listening_keybind_action: String = ""
@@ -115,6 +127,9 @@ var _inv_close_btn: Button = null
 var _inv_storage_lbl: Label = null
 var _inv_hotbar_lbl: Label = null
 var _inv_hint_lbl: Label = null
+var fate_card_overlay: FATE_CARD_OVERLAY_SCRIPT = null
+var fate_cards_strip: HFlowContainer = null
+var _pending_fate_offers: Dictionary = {}
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -135,6 +150,10 @@ func _ready() -> void:
 	SignalBus.lampor_stare_detected.connect(_on_lampor_stare)
 	SignalBus.dialog_requested.connect(_on_dialog_requested)
 	SignalBus.request_barricade_warning.connect(_on_barricade_warning)
+	SignalBus.fate_card_applied.connect(_on_fate_card_applied)
+	SignalBus.fate_cards_reset.connect(_on_fate_cards_reset)
+	if SignalBus.has_signal("multiplayer_room_updated"):
+		SignalBus.multiplayer_room_updated.connect(func(_r: Dictionary, _p: Array) -> void: _refresh_online_room_overlay(true))
 	SettingsManager.keybinds_changed.connect(_on_settings_keybinds_changed)
 	SettingsManager.language_changed.connect(_on_language_changed)
 
@@ -148,12 +167,18 @@ func _ready() -> void:
 	_build_mission_card()
 	_build_exit_confirm()
 	_build_desktop_hints()
+	_build_online_room_overlay()
 	_build_inventory_overlay()
 	_build_hud_bag_button()
+	_build_fate_cards_strip()
+	_mount_fate_card_overlay()
 	if TUTORIAL_OVERLAY_SCRIPT:
 		add_child(TUTORIAL_OVERLAY_SCRIPT.new())
 	_initialize_objectives_immediate()
+	_refresh_fate_cards_strip()
 	_refresh_localized_hud_texts()
+	if not GameManager.is_resuming_saved_run and not GameManager.is_tutorial_mode and GameManager.current_act == GameManager.Act.BABAK_1 and not bool(GameManager.fate_cards_offered_acts.get(1, false)):
+		_schedule_fate_card_offer(1, 0.5)
 	SettingsManager.call_deferred("_apply_brightness_overlay")
 	if is_instance_valid(GameManager.player_character):
 		SignalBus.flashlight_battery_changed.emit(GameManager.player_character.flashlight_battery, 100.0)
@@ -185,6 +210,8 @@ func _ready() -> void:
 	call_deferred("_apply_mobile_hud_layout")
 	get_viewport().size_changed.connect(_apply_overlay_layouts)
 	call_deferred("_apply_overlay_layouts")
+	call_deferred("_populate_desktop_hints")
+	call_deferred("_refresh_online_room_overlay", true)
 
 func _style_horror_hud_containers() -> void:
 	var touch: bool = _is_touch_device()
@@ -374,6 +401,9 @@ func _on_inventory_slot_input(event: InputEvent, slot_index: int) -> void:
 func is_cutscene_active() -> bool:
 	return not active_cutscene_type.is_empty() or (is_instance_valid(descent_cutscene_overlay) and descent_cutscene_overlay.visible)
 
+func is_fate_card_overlay_open() -> bool:
+	return is_instance_valid(fate_card_overlay) and fate_card_overlay.is_open()
+
 func _is_key_bound_to_gameplay(event: InputEventKey) -> bool:
 	for action: String in SettingsManager.REBINDABLE_ACTIONS:
 		if action != "toggle_inventory" and event.is_action(action):
@@ -381,7 +411,7 @@ func _is_key_bound_to_gameplay(event: InputEventKey) -> bool:
 	return false
 
 func _unhandled_input(event: InputEvent) -> void:
-	if is_cutscene_active():
+	if is_cutscene_active() or is_fate_card_overlay_open():
 		return
 	var legacy_inv_key: bool = event is InputEventKey and (event as InputEventKey).pressed and not (event as InputEventKey).echo and ((event as InputEventKey).keycode == KEY_B or (event as InputEventKey).keycode == KEY_I) and not _is_key_bound_to_gameplay(event as InputEventKey)
 	if event.is_action_pressed("toggle_inventory") or legacy_inv_key:
@@ -411,7 +441,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			toggle_pause()
 
 func toggle_pause() -> void:
-	if is_cutscene_active():
+	if is_cutscene_active() or is_fate_card_overlay_open():
 		return
 	_cancel_pause_keybind_listening()
 	if mobile_editor_active:
@@ -761,11 +791,24 @@ func _finish_open_pause_settings() -> void:
 	_layout_pause_settings_panel()
 
 func _on_main_menu_pressed() -> void:
-	GameManager.save_active_run()
+	_confirm_exit_to_menu()
+
+func _confirm_exit_to_menu() -> void:
+	if MultiplayerManager.is_online_session:
+		MultiplayerManager.leave_room()
+	else:
+		GameManager.save_active_run()
+	GameManager.is_sandbox_mode = false
+	GameManager.admin_god_mode = false
+	GameManager.reset_sandbox_flags()
+	if GameManager.sandbox_panel and GameManager.sandbox_panel.has_method("_force_close"):
+		GameManager.sandbox_panel.call("_force_close")
 	if mobile_editor_active:
 		_finish_mobile_editor()
 	if desktop_hint_panel:
 		desktop_hint_panel.visible = false
+	if is_instance_valid(fate_card_overlay) and fate_card_overlay.is_open():
+		fate_card_overlay.force_close()
 	if exit_confirm_overlay:
 		exit_confirm_overlay.visible = false
 	barricade_dialog.visible = false
@@ -857,6 +900,7 @@ func _build_dialog_label() -> void:
 func _on_dialog_requested(text_value: String, duration: float) -> void:
 	if not dialog_label or not dialog_panel:
 		return
+	AudioManager.play_voice_for_dialog_text(text_value)
 	if dialog_tween and dialog_tween.is_running():
 		dialog_tween.kill()
 	dialog_label.text = text_value
@@ -1002,6 +1046,17 @@ func _build_exit_confirm() -> void:
 
 func _show_exit_confirm() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if _exit_confirm_msg:
+		if MultiplayerManager.is_online_session:
+			_exit_confirm_msg.text = LocScript.pick(
+				"Yakin ingin keluar dari room online dan kembali ke menu utama?",
+				"Are you sure you want to leave the online room and return to the main menu?"
+			)
+		else:
+			_exit_confirm_msg.text = LocScript.pick(
+				"Yakin ingin kembali ke menu utama?\nProgres tersimpan otomatis setiap 5 detik dan dapat dilanjutkan nanti.",
+				"Return to the main menu?\nProgress autosaves every 5 seconds and can be resumed later."
+			)
 	_apply_overlay_layouts()
 	exit_confirm_overlay.visible = true
 	HorrorTheme.animate_surface_enter(exit_panel)
@@ -1052,6 +1107,7 @@ func _apply_overlay_layouts() -> void:
 		var panel_w: float = minf(maxf(380.0, slot_dim * 5.0 + 68.0), view_size.x - 24.0)
 		inventory_modal_panel.custom_minimum_size = Vector2(panel_w, 0.0)
 		inventory_modal_panel.reset_size()
+	_apply_online_overlay_layout()
 
 func _is_touch_device() -> bool:
 	return DisplayServer.is_touchscreen_available() or OS.has_feature("android") or OS.has_feature("ios") or OS.has_feature("web_android") or OS.has_feature("web_ios")
@@ -1085,11 +1141,15 @@ func _setup_mobile_controls() -> void:
 	pause_button.pressed.connect(toggle_pause)
 	var bag_button := _make_touch_button("bag")
 	bag_button.pressed.connect(toggle_inventory)
+	sandbox_touch_btn = _make_touch_button("sandbox")
+	sandbox_touch_btn.pressed.connect(func() -> void: GameManager.toggle_sandbox_panel())
+	sandbox_touch_btn.visible = GameManager.is_sandbox_owner_active()
 	touch_buttons.append(run_button)
 	touch_buttons.append(interact_button)
 	touch_buttons.append(flashlight_button)
 	touch_buttons.append(pause_button)
 	touch_buttons.append(bag_button)
+	touch_buttons.append(sandbox_touch_btn)
 	for button: Button in touch_buttons:
 		touch_root.add_child(button)
 	get_viewport().size_changed.connect(_layout_touch_controls)
@@ -1100,11 +1160,12 @@ func _make_touch_button(icon_id: String) -> Button:
 	button.text = ""
 	button.set_meta("touch_icon", icon_id)
 	button.focus_mode = Control.FOCUS_NONE
-	var is_utility: bool = icon_id in ["pause", "bag"]
+	var is_utility: bool = icon_id in ["pause", "bag", "sandbox"]
+	var is_sandbox_btn: bool = icon_id == "sandbox"
 
 	var normal := StyleBoxFlat.new()
 	normal.bg_color = Color(HorrorTheme.SURFACE_LOW.r, HorrorTheme.SURFACE_LOW.g, HorrorTheme.SURFACE_LOW.b, 0.86) if is_utility else Color(HorrorTheme.SURFACE.r, HorrorTheme.SURFACE.g, HorrorTheme.SURFACE.b, 0.86)
-	normal.border_color = HorrorTheme.OUTLINE if is_utility else HorrorTheme.ACCENT
+	normal.border_color = HorrorTheme.RELIC_BRASS if is_sandbox_btn else (HorrorTheme.OUTLINE if is_utility else HorrorTheme.ACCENT)
 	normal.set_border_width_all(2)
 	normal.set_corner_radius_all(4)
 	normal.shadow_color = Color(HorrorTheme.SCRIM.r, HorrorTheme.SCRIM.g, HorrorTheme.SCRIM.b, 0.65)
@@ -1119,7 +1180,7 @@ func _make_touch_button(icon_id: String) -> Button:
 	button.add_theme_stylebox_override("focus", normal)
 	HorrorTheme.attach_corner_ornaments(
 		button,
-		HorrorTheme.ON_SURFACE_VARIANT if is_utility else HorrorTheme.PRIMARY,
+		HorrorTheme.RELIC_BRASS if is_sandbox_btn else (HorrorTheme.ON_SURFACE_VARIANT if is_utility else HorrorTheme.PRIMARY),
 		6.0,
 		1.4,
 		3.0,
@@ -1197,6 +1258,17 @@ func _draw_touch_button_icon(btn: Button, icon_id: String) -> void:
 				c + Vector2(u * 0.22, -u * 0.15)
 			])
 			btn.draw_polyline(pts, col, w * 1.4, true)
+		"sandbox":
+			# Ikon panel slider sandbox (vektor murni tanpa huruf/emoji)
+			var frame := Rect2(c + Vector2(-u * 0.24, -u * 0.21), Vector2(u * 0.48, u * 0.42))
+			btn.draw_rect(frame, Color(col.r, col.g, col.b, 0.40), false, maxf(1.2, w * 0.72))
+			var row_offsets: Array[float] = [-u * 0.11, 0.0, u * 0.11]
+			var knob_x: Array[float] = [-u * 0.07, u * 0.09, -u * 0.09]
+			for idx: int in range(3):
+				var ry: float = c.y + row_offsets[idx]
+				btn.draw_line(Vector2(c.x - u * 0.17, ry), Vector2(c.x + u * 0.17, ry), col, maxf(1.5, w * 0.85))
+				btn.draw_circle(Vector2(c.x + knob_x[idx], ry), u * 0.055, HorrorTheme.RELIC_BRASS)
+				btn.draw_arc(Vector2(c.x + knob_x[idx], ry), u * 0.055, 0.0, TAU, 16, col, maxf(1.0, w * 0.5), true)
 
 func _layout_touch_controls() -> void:
 	if not touch_controls_enabled or not joystick_base:
@@ -1224,12 +1296,14 @@ func _layout_touch_controls() -> void:
 	var stats_width: float = clampf(view_size.x * 0.24, 198.0, 236.0)
 	var bag_x: float = view_size.x - stats_width - 26.0 - util_size
 	var pause_x: float = bag_x - util_size - 14.0
+	var sandbox_x: float = pause_x - util_size - 14.0
 	var defaults: Array[Vector2] = [
 		Vector2(x_right, y_top),     # 0: run
 		Vector2(x_right, y_bottom),  # 1: interact
 		Vector2(x_left, y_bottom),   # 2: flashlight
 		Vector2(pause_x, 16.0),      # 3: pause
-		Vector2(bag_x, 16.0)         # 4: bag
+		Vector2(bag_x, 16.0),        # 4: bag
+		Vector2(sandbox_x, 16.0)     # 5: sandbox
 	]
 	var stats_forbidden := Rect2(view_size.x - stats_width - 18.0, 8.0, stats_width + 18.0, 94.0)
 	var saved_positions: Array = SettingsManager.mobile_button_positions
@@ -1238,7 +1312,7 @@ func _layout_touch_controls() -> void:
 		var target_size: Vector2 = Vector2(util_size, util_size) if i >= 3 else Vector2(button_size, button_size)
 		button.size = target_size
 		var button_position: Vector2 = defaults[i]
-		if saved_positions.size() == touch_buttons.size() and saved_positions[i] is Vector2:
+		if i < saved_positions.size() and saved_positions[i] is Vector2:
 			var candidate: Vector2 = saved_positions[i] * view_size
 			var candidate_rect := Rect2(candidate, target_size)
 			if not stats_forbidden.intersects(candidate_rect):
@@ -1276,6 +1350,9 @@ func _apply_mobile_hud_layout() -> void:
 			var obj_lbl: Label = objective as Label
 			obj_lbl.add_theme_font_size_override("font_size", 11)
 			obj_lbl.custom_minimum_size.x = tl_width - 16.0
+	if is_instance_valid(fate_cards_strip):
+		fate_cards_strip.custom_minimum_size.x = tl_width - 16.0
+		_refresh_fate_cards_strip()
 	bottom_left.anchor_left = 1.0
 	bottom_left.anchor_right = 1.0
 	bottom_left.anchor_top = 0.0
@@ -1343,7 +1420,7 @@ func _build_desktop_hints() -> void:
 	desktop_hint_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	desktop_hint_panel.offset_right = -24.0
 	desktop_hint_panel.offset_bottom = -16.0
-	desktop_hint_panel.offset_left = -390.0
+	desktop_hint_panel.offset_left = -520.0
 	desktop_hint_panel.offset_top = -68.0
 	desktop_hint_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	desktop_hint_panel.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
@@ -1383,7 +1460,161 @@ func _populate_desktop_hints() -> void:
 	_add_gta_key_hint(row2, slot_range, LocScript.pick("SLOT", "SLOTS"), false)
 	_add_gta_key_hint(row2, SettingsManager.get_action_key_text("toggle_inventory"), LocScript.pick("TAS", "BAG"), true)
 	_add_gta_key_hint(row2, SettingsManager.get_action_key_text("drop_item"), LocScript.pick("BUANG", "DROP"), false)
+	if GameManager.is_sandbox_owner_active():
+		_add_gta_key_hint(row2, "Ctrl+F5", "Sandbox", true)
 	_add_gta_key_hint(row2, "ESC", LocScript.pick("JEDA", "PAUSE"), false)
+	_last_sandbox_hint_active = GameManager.is_sandbox_owner_active()
+
+func _build_online_room_overlay() -> void:
+	mp_overlay_panel = PanelContainer.new()
+	mp_overlay_panel.name = "OnlineRoomOverlay"
+	mp_overlay_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	mp_overlay_panel.z_index = 3
+	mp_overlay_panel.add_theme_stylebox_override(
+		"panel",
+		HorrorTheme.make_minimal_panel_style(Color(0.06, 0.03, 0.032, 0.78), HorrorTheme.BORDER_SUBTLE, 2, 10, 8)
+	)
+	add_child(mp_overlay_panel)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 4)
+	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	mp_overlay_panel.add_child(vbox)
+
+	mp_room_title_lbl = Label.new()
+	mp_room_title_lbl.clip_text = true
+	mp_room_title_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	HorrorTheme.style_label(mp_room_title_lbl, "label-lg", HorrorTheme.RELIC_BRASS, 11)
+	vbox.add_child(mp_room_title_lbl)
+
+	mp_room_meta_lbl = Label.new()
+	mp_room_meta_lbl.clip_text = true
+	mp_room_meta_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	HorrorTheme.style_label(mp_room_meta_lbl, "mono-sm", HorrorTheme.ON_SURFACE_VARIANT, 10)
+	vbox.add_child(mp_room_meta_lbl)
+
+	mp_announcement_panel = PanelContainer.new()
+	mp_announcement_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	mp_announcement_panel.visible = false
+	mp_announcement_panel.add_theme_stylebox_override(
+		"panel",
+		HorrorTheme.make_chip_style(Color(0.28, 0.07, 0.07, 0.88), HorrorTheme.ACCENT, 2, 6, 4)
+	)
+	vbox.add_child(mp_announcement_panel)
+
+	mp_announcement_lbl = Label.new()
+	mp_announcement_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	mp_announcement_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	HorrorTheme.style_label(mp_announcement_lbl, "label-sm", HorrorTheme.ON_PRIMARY_CONTAINER, 10)
+	mp_announcement_panel.add_child(mp_announcement_lbl)
+
+	vbox.add_child(HorrorTheme.make_hairline_divider())
+
+	mp_roster_vbox = VBoxContainer.new()
+	mp_roster_vbox.add_theme_constant_override("separation", 2)
+	mp_roster_vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vbox.add_child(mp_roster_vbox)
+
+	_apply_online_overlay_layout()
+	_refresh_online_room_overlay(true)
+
+func _apply_online_overlay_layout() -> void:
+	if not is_instance_valid(mp_overlay_panel):
+		return
+	var view_size: Vector2 = get_viewport().get_visible_rect().size
+	if view_size.x <= 0.0:
+		view_size = Vector2(1280.0, 720.0)
+	var touch: bool = _is_touch_device()
+	var panel_w: float = clampf(view_size.x * 0.24, 198.0, 236.0) if touch else 258.0
+	var top_y: float = 104.0 if touch else 14.0
+	mp_overlay_panel.anchor_left = 1.0
+	mp_overlay_panel.anchor_right = 1.0
+	mp_overlay_panel.anchor_top = 0.0
+	mp_overlay_panel.anchor_bottom = 0.0
+	mp_overlay_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	mp_overlay_panel.grow_vertical = Control.GROW_DIRECTION_END
+	mp_overlay_panel.offset_left = -panel_w - (12.0 if touch else 14.0)
+	mp_overlay_panel.offset_right = -(12.0 if touch else 14.0)
+	mp_overlay_panel.offset_top = top_y
+	mp_overlay_panel.offset_bottom = top_y + 10.0
+	mp_overlay_panel.custom_minimum_size = Vector2(panel_w, 0.0)
+	if mp_announcement_lbl:
+		mp_announcement_lbl.custom_minimum_size.x = panel_w - 34.0
+
+func _refresh_online_room_overlay(force: bool = false) -> void:
+	if not is_instance_valid(mp_overlay_panel):
+		return
+	var active: bool = MultiplayerManager.is_online_session and not is_cutscene_active()
+	mp_overlay_panel.visible = active
+	if not active:
+		return
+
+	var room: Dictionary = MultiplayerManager.current_room
+	var mode_tag: String = "[SANDBOX]" if (GameManager.is_sandbox_mode or str(room.get("mode", "")) == "sandbox") else "[CO-OP]"
+	var room_name: String = str(room.get("name", "Desa Lampor"))
+	var room_code: String = str(room.get("roomCode", "------"))
+	var ping_val: int = maxi(0, MultiplayerManager.ping_ms)
+	var ann: String = MultiplayerManager.server_announcement.strip_edges()
+	var host_id: String = str(room.get("hostUserId", ""))
+
+	var sig_parts: PackedStringArray = PackedStringArray([mode_tag, room_name, room_code, str(ping_val), ann])
+	for p_var: Variant in MultiplayerManager.room_players:
+		if p_var is Dictionary:
+			var p: Dictionary = p_var as Dictionary
+			var uid: String = str(p.get("userId", p.get("id", "")))
+			var uname: String = str(p.get("username", "Pemain"))
+			var ps: Variant = p.get("playerState", {})
+			var san: int = clampi(int(round(float(ps.get("sanity", 100)) if ps is Dictionary else float(p.get("sanity", 100)))), 0, 100)
+			sig_parts.append("%s:%s:%d" % [uid, uname, san])
+	var sig: String = "|".join(sig_parts)
+	if not force and sig == _mp_last_sig:
+		return
+	_mp_last_sig = sig
+
+	if mp_room_title_lbl:
+		mp_room_title_lbl.text = "%s %s" % [mode_tag, room_name]
+		HorrorTheme.style_label(mp_room_title_lbl, "label-lg", HorrorTheme.RELIC_BRASS if mode_tag == "[SANDBOX]" else HorrorTheme.PRIMARY, 11)
+	if mp_room_meta_lbl:
+		mp_room_meta_lbl.text = "Kode: %s  ·  %d ms" % [room_code, ping_val]
+
+	if mp_announcement_panel and mp_announcement_lbl:
+		mp_announcement_panel.visible = not ann.is_empty()
+		mp_announcement_lbl.text = ann
+
+	if mp_roster_vbox:
+		for child: Node in mp_roster_vbox.get_children():
+			mp_roster_vbox.remove_child(child)
+			child.queue_free()
+		for p_var: Variant in MultiplayerManager.room_players:
+			if not (p_var is Dictionary):
+				continue
+			var p: Dictionary = p_var as Dictionary
+			var uid: String = str(p.get("userId", p.get("id", "")))
+			var uname: String = str(p.get("username", "Pemain"))
+			var is_host: bool = bool(p.get("isHost", false)) or (not host_id.is_empty() and uid == host_id)
+			var ps: Variant = p.get("playerState", {})
+			var san: int = clampi(int(round(float(ps.get("sanity", 100)) if ps is Dictionary else float(p.get("sanity", 100)))), 0, 100)
+
+			var row := HBoxContainer.new()
+			row.add_theme_constant_override("separation", 6)
+			row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			mp_roster_vbox.add_child(row)
+
+			var name_lbl := Label.new()
+			name_lbl.text = "%s%s" % [uname, " [HOST]" if is_host else ""]
+			name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			name_lbl.clip_text = true
+			name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			HorrorTheme.style_label(name_lbl, "label-sm", HorrorTheme.RELIC_BRASS if is_host else HorrorTheme.ON_SURFACE, 10)
+			row.add_child(name_lbl)
+
+			var san_lbl := Label.new()
+			san_lbl.text = "WARAS %d%%" % san
+			san_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			var san_col: Color = HorrorTheme.SUCCESS_SAGE if san >= 60 else (HorrorTheme.RELIC_BRASS if san >= 30 else HorrorTheme.ACCENT)
+			HorrorTheme.style_label(san_lbl, "mono-sm", san_col, 10)
+			row.add_child(san_lbl)
+	mp_overlay_panel.reset_size()
 
 func _on_settings_keybinds_changed() -> void:
 	_populate_desktop_hints()
@@ -1397,6 +1628,7 @@ func _on_settings_keybinds_changed() -> void:
 func _on_language_changed(_new_lang: String) -> void:
 	_populate_pause_settings_box()
 	_refresh_localized_hud_texts()
+	_refresh_fate_cards_strip()
 	_layout_pause_settings_panel()
 
 func _refresh_localized_hud_texts() -> void:
@@ -1660,7 +1892,7 @@ func _handle_mobile_editor_input(event: InputEvent) -> void:
 				editor_drag_target = joystick_base
 			else:
 				for button: Button in touch_buttons:
-					if button.get_global_rect().has_point(touch.position):
+					if button.visible and button.get_global_rect().has_point(touch.position):
 						editor_drag_target = button
 						break
 			if editor_drag_target:
@@ -1757,7 +1989,7 @@ func _update_virtual_joystick(screen_position: Vector2) -> void:
 
 func _is_over_touch_button(screen_position: Vector2) -> bool:
 	for button: Button in touch_buttons:
-		if button.get_global_rect().has_point(screen_position):
+		if button.visible and button.get_global_rect().has_point(screen_position):
 			return true
 	return false
 
@@ -1803,6 +2035,15 @@ func _process(delta: float) -> void:
 			player.set_virtual_sprint(false)
 	if noise_bar.value > 0:
 		noise_bar.value = move_toward(noise_bar.value, 0.0, delta * 1.5)
+	var sb_active: bool = GameManager.is_sandbox_owner_active()
+	if is_instance_valid(sandbox_touch_btn):
+		sandbox_touch_btn.visible = sb_active and not is_cutscene_active()
+	if sb_active != _last_sandbox_hint_active:
+		_populate_desktop_hints()
+	_mp_refresh_elapsed += delta
+	if _mp_refresh_elapsed >= 0.25:
+		_mp_refresh_elapsed = 0.0
+		_refresh_online_room_overlay(false)
 
 func _on_interaction_prompt_changed(text: String) -> void:
 	interaction_label.text = text
@@ -1856,14 +2097,21 @@ func _on_act_started(num: int, title: String) -> void:
 	objective_labels.clear()
 	objective_texts.clear()
 	_populate_current_act_objectives()
-	if num == 2 and not GameManager.is_resuming_saved_run:
+	if num == 2 and not GameManager.is_resuming_saved_run and (not MultiplayerManager.is_online_session or bool(MultiplayerManager.get_room_setting("lamporEnabled", true))):
 		if mission_tween and mission_tween.is_running():
 			mission_tween.kill()
 		if mission_panel:
 			mission_panel.visible = false
 		_play_lampor_descent_cutscene()
+		if not is_cutscene_active() and not GameManager.is_tutorial_mode and not bool(GameManager.fate_cards_offered_acts.get(2, false)):
+			_schedule_fate_card_offer(2, 0.8)
 	else:
 		_show_act_banner(num, title)
+		if not GameManager.is_resuming_saved_run and not GameManager.is_tutorial_mode and not bool(GameManager.fate_cards_offered_acts.get(num, false)):
+			if num == 1:
+				_schedule_fate_card_offer(1, 0.5)
+			elif num == 2 or num == 3:
+				_schedule_fate_card_offer(num, 0.8)
 
 func _open_stage_xz(preferred_xz: Vector2) -> Vector2:
 	var candidate := Vector2(clampf(preferred_xz.x, -26.0, 26.0), clampf(preferred_xz.y, -26.0, 26.0))
@@ -1904,6 +2152,8 @@ func _begin_cutscene_ui(cutscene_type: String, overlay_name: String, title_text:
 		exit_confirm_overlay.visible = false
 	if barricade_dialog:
 		barricade_dialog.visible = false
+	if is_instance_valid(fate_card_overlay) and fate_card_overlay.is_open():
+		fate_card_overlay.force_close()
 	if mission_tween and mission_tween.is_running():
 		mission_tween.kill()
 	if mission_panel:
@@ -1912,6 +2162,8 @@ func _begin_cutscene_ui(cutscene_type: String, overlay_name: String, title_text:
 		touch_root.visible = false
 	if desktop_hint_panel:
 		desktop_hint_panel.visible = false
+	if mp_overlay_panel:
+		mp_overlay_panel.visible = false
 	if hud_bag_button:
 		hud_bag_button.visible = false
 	if stare_warning:
@@ -2098,6 +2350,7 @@ func _finish_active_cutscene(skipped: bool) -> void:
 	if is_instance_valid(descent_cutscene_overlay):
 		descent_cutscene_overlay.queue_free()
 	descent_cutscene_overlay = null
+	_refresh_online_room_overlay(true)
 	cutscene_finished.emit(skipped)
 
 func _play_lampor_descent_cutscene() -> void:
@@ -2108,7 +2361,8 @@ func _play_lampor_descent_cutscene() -> void:
 	if not lampor:
 		return
 
-	lampor.trigger_descent(true)
+	if not MultiplayerManager.is_online_session or MultiplayerManager.is_room_owner:
+		lampor.trigger_descent(true)
 	var ctx: Dictionary = _begin_cutscene_ui(
 		"descent",
 		"DescentCutsceneOverlay",
@@ -2117,6 +2371,7 @@ func _play_lampor_descent_cutscene() -> void:
 		LocScript.pick("Lampor mendarat dari langit malam... Bersiaplah, Lampor langsung mengejarmu!", "Lampor lands from the night sky... Brace yourself, the hunt begins now!"),
 		false
 	)
+	AudioManager.play_voice_by_id("vo_cutscene_descent_sub_01")
 	var cutscene_camera: Camera3D = ctx["camera"]
 	var crosshair: Control = ctx["crosshair"]
 
@@ -2153,7 +2408,7 @@ func _play_lampor_descent_cutscene() -> void:
 			hud_bag_button.visible = true
 		if not get_tree().paused:
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _is_touch_device() else Input.MOUSE_MODE_CAPTURED
-		if is_instance_valid(lampor) and lampor.current_state != LamporStateMachine.State.CHASE and lampor.current_state != LamporStateMachine.State.BANISHED:
+		if (not MultiplayerManager.is_online_session or MultiplayerManager.is_room_owner) and is_instance_valid(lampor) and lampor.current_state != LamporStateMachine.State.CHASE and lampor.current_state != LamporStateMachine.State.BANISHED:
 			if lampor.descent_tween and lampor.descent_tween.is_running():
 				lampor.descent_tween.kill()
 			lampor.global_position = lampor.descend_target
@@ -2166,6 +2421,8 @@ func _play_lampor_descent_cutscene() -> void:
 			lampor._set_state(LamporStateMachine.State.CHASE)
 			SignalBus.lampor_state_changed.emit("CHASE")
 		_on_dialog_requested("LAMPOR TELAH TURUN DAN MENGEJARMU! Lari atau sembunyi di dalam rumah!", 4.5)
+		if not GameManager.is_resuming_saved_run and not GameManager.is_tutorial_mode and not bool(GameManager.fate_cards_offered_acts.get(2, false)):
+			call_deferred("_try_offer_fate_card", 2)
 
 	descent_camera_tween = create_tween()
 	descent_camera_tween.set_pause_mode(Tween.TWEEN_PAUSE_STOP)
@@ -2190,6 +2447,7 @@ func play_victory_cutscene_and_wait() -> void:
 		LocScript.pick("Cahaya langit menyambar dan menarik Keranda Lampor ke atas hingga lenyap!", "Heavenly light strikes down, pulling Lampor's coffin skyward until it vanishes!"),
 		true
 	)
+	AudioManager.play_voice_by_id("vo_cutscene_victory_sub_01")
 	var cutscene_camera: Camera3D = ctx["camera"]
 	var fill_light: OmniLight3D = ctx["fill_light"]
 	var fade_rect: ColorRect = ctx["fade_rect"]
@@ -2374,6 +2632,7 @@ func play_death_cutscene_and_wait() -> void:
 		LocScript.pick("Lampor mengangkat tubuhmu dan membawamu pergi ke dalam kegelapan malam...", "Lampor hoists you skyward and carries you into the pitch-black night..."),
 		true
 	)
+	AudioManager.play_voice_by_id("vo_cutscene_death_sub_01")
 	var cutscene_camera: Camera3D = ctx["camera"]
 	var fill_light: OmniLight3D = ctx["fill_light"]
 	var fade_rect: ColorRect = ctx["fade_rect"]
@@ -2784,6 +3043,8 @@ func _build_inventory_overlay() -> void:
 func toggle_inventory() -> void:
 	if descent_cutscene_overlay and is_instance_valid(descent_cutscene_overlay) and descent_cutscene_overlay.visible:
 		return
+	if is_fate_card_overlay_open():
+		return
 	if pause_menu.visible or barricade_dialog.visible:
 		return
 	if GameManager.death_sequence_active or GameManager.current_state != GameManager.GameState.PLAYING:
@@ -2866,3 +3127,129 @@ func _on_inventory_slot_clicked(slot_idx: int) -> void:
 			if success:
 				AudioManager.play_sound("item_pickup", -4.0, 1.1)
 			_refresh_inventory_ui()
+
+func _build_fate_cards_strip() -> void:
+	var tl_vbox: VBoxContainer = top_left.get_node_or_null("VBox") as VBoxContainer if top_left else null
+	if not tl_vbox:
+		return
+	fate_cards_strip = HFlowContainer.new()
+	fate_cards_strip.name = "FateCardsStrip"
+	fate_cards_strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	fate_cards_strip.add_theme_constant_override("h_separation", 5)
+	fate_cards_strip.add_theme_constant_override("v_separation", 4)
+	var touch: bool = _is_touch_device()
+	var view_w: float = get_viewport().get_visible_rect().size.x
+	var strip_w: float = (clampf(view_w * 0.34, 260.0, 350.0) - 16.0) if touch else 380.0
+	fate_cards_strip.custom_minimum_size.x = strip_w
+	fate_cards_strip.visible = false
+	tl_vbox.add_child(fate_cards_strip)
+
+func _refresh_fate_cards_strip() -> void:
+	if not is_instance_valid(fate_cards_strip):
+		return
+	for child: Node in fate_cards_strip.get_children():
+		fate_cards_strip.remove_child(child)
+		child.queue_free()
+
+	var cards: Array[Dictionary] = GameManager.active_fate_cards
+	fate_cards_strip.visible = not cards.is_empty()
+	if cards.is_empty():
+		return
+
+	var touch: bool = _is_touch_device()
+	for card: Dictionary in cards:
+		var is_blessing: bool = str(card.get("type", "curse")) == "blessing"
+		var pill := PanelContainer.new()
+		pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var bg_col: Color = Color(0.08, 0.16, 0.10, 0.88) if is_blessing else Color(0.24, 0.05, 0.06, 0.90)
+		var border_col: Color = HorrorTheme.RELIC_BRASS if is_blessing else HorrorTheme.ACCENT
+		pill.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(bg_col, border_col, 3, 7, 2))
+		pill.tooltip_text = FATE_CARD_SYSTEM_SCRIPT.get_card_description(card)
+
+		var lbl := Label.new()
+		lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var icon_prefix: String = "✦ " if is_blessing else "☠ "
+		lbl.text = icon_prefix + FATE_CARD_SYSTEM_SCRIPT.get_card_title(card)
+		var text_col: Color = Color("f2cb72") if is_blessing else HorrorTheme.PRIMARY
+		HorrorTheme.style_label(lbl, "label-sm", text_col, 9 if touch else 11)
+		lbl.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.95))
+		lbl.add_theme_constant_override("outline_size", 2)
+		pill.add_child(lbl)
+		fate_cards_strip.add_child(pill)
+
+func _mount_fate_card_overlay() -> void:
+	if fate_card_overlay == null and FATE_CARD_OVERLAY_SCRIPT != null:
+		fate_card_overlay = FATE_CARD_OVERLAY_SCRIPT.new() as FATE_CARD_OVERLAY_SCRIPT
+		if fate_card_overlay:
+			fate_card_overlay.overlay_opened.connect(_on_fate_overlay_opened)
+			fate_card_overlay.overlay_closed.connect(_on_fate_overlay_closed)
+			add_child(fate_card_overlay)
+
+func _schedule_fate_card_offer(act_num: int, delay_sec: float) -> void:
+	if act_num < 1 or act_num > 3:
+		return
+	if GameManager.is_tutorial_mode or GameManager.is_resuming_saved_run:
+		return
+	if bool(GameManager.fate_cards_offered_acts.get(act_num, false)):
+		return
+	if bool(_pending_fate_offers.get(act_num, false)):
+		return
+	_pending_fate_offers[act_num] = true
+	get_tree().create_timer(maxf(0.05, delay_sec), true, false, false).timeout.connect(func() -> void:
+		if not is_inside_tree():
+			return
+		_try_offer_fate_card(act_num)
+	)
+
+func _try_offer_fate_card(act_num: int) -> void:
+	_pending_fate_offers.erase(act_num)
+	if not is_inside_tree():
+		return
+	if GameManager.is_tutorial_mode or GameManager.is_resuming_saved_run:
+		return
+	if GameManager.current_state != GameManager.GameState.PLAYING:
+		return
+	if GameManager.death_sequence_active or GameManager.victory_sequence_active:
+		return
+	if bool(GameManager.fate_cards_offered_acts.get(act_num, false)):
+		return
+	if not is_instance_valid(fate_card_overlay):
+		return
+	var modal_blocking: bool = is_cutscene_active() \
+		or is_fate_card_overlay_open() \
+		or get_tree().paused \
+		or (pause_menu and pause_menu.visible) \
+		or (barricade_dialog and barricade_dialog.visible) \
+		or (exit_confirm_overlay and exit_confirm_overlay.visible) \
+		or (inventory_overlay and inventory_overlay.visible)
+	if modal_blocking:
+		_schedule_fate_card_offer(act_num, 0.35)
+		return
+	var pair: Dictionary = GameManager.request_fate_card_pair_for_act(act_num)
+	if pair.is_empty():
+		return
+	fate_card_overlay.open_choice(act_num, pair)
+
+func _on_fate_card_applied(_card_data: Dictionary) -> void:
+	_refresh_fate_cards_strip()
+
+func _on_fate_cards_reset() -> void:
+	_pending_fate_offers.clear()
+	if is_instance_valid(fate_card_overlay) and fate_card_overlay.is_open():
+		fate_card_overlay.force_close()
+	_refresh_fate_cards_strip()
+
+func _on_fate_overlay_opened() -> void:
+	joystick_vector = Vector2.ZERO
+	if desktop_hint_panel:
+		desktop_hint_panel.visible = false
+	if touch_root:
+		touch_root.visible = false
+
+func _on_fate_overlay_closed(_chosen_card: Dictionary) -> void:
+	_refresh_fate_cards_strip()
+	if not get_tree().paused and not is_cutscene_active() and GameManager.current_state == GameManager.GameState.PLAYING:
+		if touch_root and _is_touch_device():
+			touch_root.visible = true
+		if desktop_hint_panel and not _is_touch_device():
+			desktop_hint_panel.visible = true

@@ -38,3 +38,17 @@ signal time_tick(time_str: String, hour: int, minute: int)
 signal game_won()
 signal game_over(reason: String)
 signal request_barricade_warning(door_node: Node, player_node: Node)
+
+# Account, Multiplayer & Sandbox signals (v1.3.0)
+signal coins_changed(new_coins: int)
+signal account_state_changed()
+signal multiplayer_rooms_updated(rooms: Array)
+signal multiplayer_room_updated(room: Dictionary, players: Array)
+signal multiplayer_game_started(room: Dictionary)
+signal multiplayer_event_received(event_type: String, payload: Dictionary, sender_name: String)
+signal multiplayer_disconnected(reason: String)
+signal sandbox_panel_toggled(is_open: bool)
+
+# Fate Card signals
+signal fate_card_applied(card_data: Dictionary)
+signal fate_cards_reset()

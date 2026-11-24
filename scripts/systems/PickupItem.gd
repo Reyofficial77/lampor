@@ -131,6 +131,12 @@ func get_interaction_prompt(player: Node) -> String:
 
 	return LocScript.pick("[%s] Ambil %s" % [k, localized_name], "[%s] Pick Up %s" % [k, localized_name])
 
+func _get_scene_node_path() -> String:
+	var root: Node = get_tree().current_scene
+	if root and root.is_ancestor_of(self):
+		return str(root.get_path_to(self))
+	return name
+
 func interact(player: Node) -> void:
 	if is_picked_up:
 		return
@@ -139,10 +145,17 @@ func interact(player: Node) -> void:
 		if GameManager.current_act == GameManager.Act.BABAK_1:
 			return
 		is_picked_up = true
+		var npath_r: String = _get_scene_node_path()
 		var r_name: String = ritual_display_name if ritual_display_name != "" else item_name
 		GameManager.ritual_items[r_name] = true
 		var current_count: int = GameManager.get_ritual_item_count()
 		SignalBus.ritual_item_collected.emit(r_name, current_count, GameManager.TOTAL_RITUAL_ITEMS)
+		if MultiplayerManager.is_online_session:
+			MultiplayerManager.push_event("ritual_collected", {
+				"ritual_name": r_name,
+				"item_id": item_id,
+				"node_path": npath_r
+			})
 		AudioManager.play_sound("item_pickup")
 		queue_free()
 		return
@@ -164,9 +177,26 @@ func interact(player: Node) -> void:
 	}
 	var success: bool = inv.add_item(item_data)
 	if success:
+		if MultiplayerManager.is_online_session:
+			MultiplayerManager.push_event("pickup_taken", {
+				"item_id": item_id,
+				"node_path": _get_scene_node_path()
+			})
 		queue_free()
 	else:
 		is_picked_up = false
+
+func apply_network_picked_up() -> void:
+	if is_picked_up:
+		return
+	is_picked_up = true
+	visible = false
+	collision_layer = 0
+	set_deferred("monitoring", false)
+	set_deferred("monitorable", false)
+	if item_light:
+		item_light.visible = false
+	queue_free()
 
 # ---------- Model benda ritual (dibangun lewat kode) ----------
 

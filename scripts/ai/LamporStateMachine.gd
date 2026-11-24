@@ -73,14 +73,21 @@ func _ready() -> void:
 	SignalBus.lampor_state_changed.connect(func(new_state_str: String) -> void:
 		if GameManager.is_resuming_saved_run:
 			return
+		if _is_lampor_disabled_by_room() or (MultiplayerManager.is_online_session and not MultiplayerManager.is_room_owner):
+			return
 		if new_state_str == "CHASE":
 			if current_state == State.DORMANT_SKY:
 				trigger_descent(true)
 			elif current_state != State.DESCENDING and current_state != State.CHASE and current_state != State.REPELLED:
 				_set_state(State.CHASE)
 	)
+	if _is_lampor_disabled_by_room():
+		visible = false
 	
 	call_deferred("_setup_waypoints")
+
+func _is_lampor_disabled_by_room() -> bool:
+	return MultiplayerManager.is_online_session and not bool(MultiplayerManager.get_room_setting("lamporEnabled", true))
 
 # ---------- Model keranda (dibangun lewat kode) ----------
 
@@ -275,12 +282,16 @@ func _setup_waypoints() -> void:
 		descend_target = waypoints[0]
 
 func _on_act_started(act_number: int, _title: String) -> void:
-	if GameManager.is_resuming_saved_run:
+	if GameManager.is_resuming_saved_run or _is_lampor_disabled_by_room():
+		return
+	if MultiplayerManager.is_online_session and not MultiplayerManager.is_room_owner:
 		return
 	if act_number >= 2 and current_state == State.DORMANT_SKY:
 		trigger_descent(true)
 
 func trigger_descent(immediate_chase: bool = true) -> void:
+	if _is_lampor_disabled_by_room() or (MultiplayerManager.is_online_session and not MultiplayerManager.is_room_owner):
+		return
 	if current_state != State.DORMANT_SKY:
 		return
 
@@ -375,10 +386,30 @@ func _physics_process(delta: float) -> void:
 	if GameManager.current_state != GameManager.GameState.PLAYING:
 		return
 
+	if _is_lampor_disabled_by_room():
+		visible = false
+		current_state = State.DORMANT_SKY
+		velocity = Vector3.ZERO
+		if collision_shape:
+			collision_shape.disabled = true
+		SignalBus.lampor_nearby.emit(999.0)
+		SignalBus.lampor_stare_detected.emit(0.0)
+		return
+	visible = true
+
 	if not player:
 		player = GameManager.player_character as PlayerController
 		if not player:
 			return
+
+	if GameManager.sandbox_freeze_lampor:
+		velocity = Vector3.ZERO
+		SignalBus.lampor_stare_detected.emit(0.0)
+		return
+
+	if MultiplayerManager.is_online_session and not MultiplayerManager.is_room_owner:
+		_sync_from_network_state(delta)
+		return
 
 	hover_time += delta * 2.0
 	if chase_cooldown > 0.0:
@@ -496,7 +527,8 @@ func _process_patrol(delta: float, dist_to_player: float, hover_bob: float) -> v
 	var target: Vector3 = waypoints[current_waypoint_idx]
 	target.y += hover_offset + hover_bob
 	var dir: Vector3 = (target - global_position).normalized()
-	velocity = dir * patrol_speed
+	var speed_mult: float = GameManager.get_fate_modifier("lampor_speed_mult", 1.0)
+	velocity = dir * (patrol_speed * speed_mult)
 
 	var horiz_sq: float = velocity.x * velocity.x + velocity.z * velocity.z
 	if horiz_sq > 0.05:
@@ -509,7 +541,8 @@ func _process_investigate(delta: float, dist_to_player: float, hover_bob: float)
 	var target: Vector3 = target_position
 	target.y += hover_offset + hover_bob
 	var dir: Vector3 = (target - global_position).normalized()
-	velocity = dir * (patrol_speed * 1.3)
+	var speed_mult: float = GameManager.get_fate_modifier("lampor_speed_mult", 1.0)
+	velocity = dir * (patrol_speed * 1.3 * speed_mult)
 
 	var horiz_sq: float = velocity.x * velocity.x + velocity.z * velocity.z
 	if horiz_sq > 0.05:
@@ -567,7 +600,8 @@ func _process_chase(delta: float, dist_to_player: float, hover_bob: float) -> vo
 	var target: Vector3 = player.global_position
 	target.y += hover_offset + hover_bob
 	var dir: Vector3 = (target - global_position).normalized()
-	velocity = dir * chase_speed
+	var speed_mult: float = GameManager.get_fate_modifier("lampor_speed_mult", 1.0)
+	velocity = dir * (chase_speed * speed_mult)
 
 	safe_look_at(player.global_position)
 
@@ -577,7 +611,9 @@ func _process_chase(delta: float, dist_to_player: float, hover_bob: float) -> vo
 			_start_catch()
 
 func _start_catch() -> void:
-	if is_catching:
+	if is_catching or GameManager.sandbox_freeze_lampor or _is_lampor_disabled_by_room():
+		return
+	if MultiplayerManager.is_online_session and not MultiplayerManager.is_room_owner:
 		return
 	is_catching = true
 	velocity = Vector3.ZERO
@@ -598,7 +634,8 @@ func _start_catch() -> void:
 func repel_from_kentongan(duration: float = REPEL_DURATION) -> bool:
 	if current_state == State.DORMANT_SKY or current_state == State.DESCENDING or current_state == State.BANISHED or is_catching:
 		return false
-	repel_timer = maxf(repel_timer, duration)
+	var effective_duration: float = duration * GameManager.get_fate_modifier("lampor_repel_mult", 1.0)
+	repel_timer = maxf(repel_timer, effective_duration)
 	chase_cooldown = maxf(chase_cooldown, repel_timer)
 	stare_timer = 0.0
 	SignalBus.lampor_stare_detected.emit(0.0)
@@ -620,7 +657,8 @@ func _process_repelled(delta: float, hover_bob: float) -> void:
 		away_dir = Vector3(-away_dir.z, 0.0, away_dir.x).normalized()
 
 	var desired_vy: float = (hover_offset + hover_bob - global_position.y) * 2.5
-	var flee_speed: float = maxf(patrol_speed * 1.65, chase_speed * 0.72)
+	var speed_mult: float = GameManager.get_fate_modifier("lampor_speed_mult", 1.0)
+	var flee_speed: float = maxf(patrol_speed * 1.65, chase_speed * 0.72) * speed_mult
 	velocity = Vector3(away_dir.x * flee_speed, desired_vy, away_dir.z * flee_speed)
 	safe_look_at(global_position + Vector3(velocity.x, 0.0, velocity.z))
 
@@ -658,6 +696,10 @@ func _give_up_chase() -> void:
 	_set_state(State.PATROL)
 
 func _on_player_noise(level: float, noise_pos: Vector3) -> void:
+	if _is_lampor_disabled_by_room() or GameManager.sandbox_freeze_lampor:
+		return
+	if MultiplayerManager.is_online_session and not MultiplayerManager.is_room_owner:
+		return
 	if current_state == State.DORMANT_SKY or current_state == State.DESCENDING or current_state == State.REPELLED or repel_timer > 0.0:
 		return
 	if current_state == State.CHASE or current_state == State.STARE_PUNISHMENT:
@@ -665,7 +707,7 @@ func _on_player_noise(level: float, noise_pos: Vector3) -> void:
 	if chase_cooldown > 0.0 or is_catching:
 		return
 		
-	var effective_hearing: float = hearing_range
+	var effective_hearing: float = hearing_range * GameManager.get_fate_modifier("lampor_hearing_mult", 1.0)
 	if player and player.is_inside_house:
 		effective_hearing *= 0.4 # Noise muffled by house walls
 		
@@ -687,13 +729,23 @@ func _set_state(new_state: State) -> void:
 		if not pool.is_empty():
 			SignalBus.dialog_requested.emit(pool[randi() % pool.size()], 2.6)
 	match new_state:
+		State.PATROL, State.INVESTIGATE, State.CHASE, State.REPELLED:
+			_apply_state_visuals(new_state)
+
+func _apply_state_visuals(state_val: State) -> void:
+	if not red_light:
+		return
+	match state_val:
+		State.DORMANT_SKY:
+			red_light.light_energy = 0.8
+			red_light.light_color = Color(0.2, 0.8, 0.3)
 		State.PATROL:
 			red_light.light_energy = 2.0
 			red_light.light_color = Color(0.2, 0.9, 0.4) # Eerie green
 		State.INVESTIGATE:
 			red_light.light_energy = 2.8
 			red_light.light_color = Color(0.9, 0.7, 0.1) # Alert yellow
-		State.CHASE:
+		State.STARE_PUNISHMENT, State.CHASE:
 			red_light.light_energy = 4.5
 			red_light.light_color = Color(1.0, 0.1, 0.1) # Menacing crimson
 			if audio_roar and not audio_roar.playing:
@@ -701,3 +753,85 @@ func _set_state(new_state: State) -> void:
 		State.REPELLED:
 			red_light.light_energy = 1.2
 			red_light.light_color = Color(0.45, 0.75, 1.0) # Repelled cool glow
+
+func _parse_network_state(raw_state: Variant) -> State:
+	if raw_state is int or raw_state is float:
+		var idx: int = clampi(int(raw_state), 0, 7)
+		match idx:
+			0: return State.DORMANT_SKY
+			1: return State.DESCENDING
+			2: return State.PATROL
+			3: return State.INVESTIGATE
+			4: return State.STARE_PUNISHMENT
+			5: return State.CHASE
+			6: return State.BANISHED
+			7: return State.REPELLED
+	var s: String = str(raw_state).to_upper()
+	match s:
+		"DORMANT_SKY": return State.DORMANT_SKY
+		"DESCENDING": return State.DESCENDING
+		"PATROL": return State.PATROL
+		"INVESTIGATE": return State.INVESTIGATE
+		"STARE_PUNISHMENT": return State.STARE_PUNISHMENT
+		"CHASE": return State.CHASE
+		"BANISHED": return State.BANISHED
+		"REPELLED": return State.REPELLED
+	return State.DORMANT_SKY
+
+func _sync_from_network_state(delta: float) -> void:
+	velocity = Vector3.ZERO
+	hover_time += delta * 2.0
+	var raw_lampor: Variant = MultiplayerManager.world_state.get("lampor", {})
+	if raw_lampor is Dictionary and not (raw_lampor as Dictionary).is_empty():
+		var ld: Dictionary = raw_lampor as Dictionary
+		if ld.has("pos"):
+			var raw_pos: Variant = ld["pos"]
+			var target_pos: Vector3 = global_position
+			if raw_pos is Array and (raw_pos as Array).size() >= 3:
+				var arr := raw_pos as Array
+				target_pos = Vector3(float(arr[0]), float(arr[1]), float(arr[2]))
+			elif raw_pos is Dictionary:
+				var pd := raw_pos as Dictionary
+				target_pos = Vector3(float(pd.get("x", target_pos.x)), float(pd.get("y", target_pos.y)), float(pd.get("z", target_pos.z)))
+			elif raw_pos is Vector3:
+				target_pos = raw_pos as Vector3
+			if global_position.distance_to(target_pos) > 22.0:
+				global_position = target_pos
+			else:
+				global_position = global_position.lerp(target_pos, minf(1.0, delta * 10.0))
+		if ld.has("rotY"):
+			rotation.y = lerp_angle(rotation.y, float(ld["rotY"]), minf(1.0, delta * 10.0))
+		if ld.has("state"):
+			var next_state: State = _parse_network_state(ld["state"])
+			if next_state != current_state:
+				current_state = next_state
+				_apply_state_visuals(current_state)
+				if collision_shape:
+					collision_shape.disabled = (current_state == State.DORMANT_SKY or current_state == State.BANISHED)
+
+	if current_state == State.DORMANT_SKY or current_state == State.BANISHED:
+		SignalBus.lampor_nearby.emit(999.0)
+		SignalBus.lampor_stare_detected.emit(0.0)
+		return
+
+	var dist_to_player: float = global_position.distance_to(player.global_position)
+	if player.is_inside_house:
+		SignalBus.lampor_nearby.emit(999.0)
+	else:
+		SignalBus.lampor_nearby.emit(dist_to_player)
+
+	if current_state != State.REPELLED and not player.is_hiding and dist_to_player <= sight_range and has_line_of_sight_to_player():
+		var cam: Camera3D = player.camera
+		var cam_forward: Vector3 = -cam.global_transform.basis.z.normalized()
+		var dir_to_lampor: Vector3 = (global_position - cam.global_position).normalized()
+		var dot: float = cam_forward.dot(dir_to_lampor)
+		SignalBus.lampor_stare_detected.emit(dot if dot > stare_threshold else 0.0)
+	else:
+		SignalBus.lampor_stare_detected.emit(0.0)
+
+	bell_timer += delta
+	if bell_timer >= bell_interval:
+		bell_timer = 0.0
+		bell_interval = randf_range(6.0, 10.0)
+		if audio_bell and not audio_bell.playing:
+			audio_bell.play()

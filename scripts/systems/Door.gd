@@ -38,9 +38,12 @@ func is_player_inside(player: Node) -> bool:
 # True jika pemain berdiri di ambang pintu (area blocker + radius kapsul pemain).
 # Menutup/memalang pintu saat itu akan membuat pemain tersangkut di dalam collision.
 func is_doorway_occupied() -> bool:
-	for p: Node in get_tree().get_nodes_in_group("player"):
+	var occupants: Array[Node] = []
+	occupants.append_array(get_tree().get_nodes_in_group("player"))
+	occupants.append_array(get_tree().get_nodes_in_group("remote_player"))
+	for p: Node in occupants:
 		var body: Node3D = p as Node3D
-		if body == null:
+		if body == null or not is_instance_valid(body):
 			continue
 		var l: Vector3 = to_local(body.global_position)
 		# Blocker berpusat di x=0.5 (lebar 1.05, tebal 0.15); kapsul pemain beradius 0.4
@@ -106,6 +109,7 @@ func interact(player: Node) -> void:
 	target_rotation_y = deg_to_rad(open_angle) if is_open else 0.0
 	_update_blocker()
 	AudioManager.play_sound("door_creak", -4.0, randf_range(0.95, 1.05))
+	_broadcast_door_state()
 
 func confirm_barricade(player: Node) -> void:
 	if is_barricaded or is_open or is_doorway_occupied():
@@ -119,6 +123,7 @@ func confirm_barricade(player: Node) -> void:
 		if barricade_visual:
 			barricade_visual.visible = true
 		_update_blocker()
+		_broadcast_door_state()
 
 func _dismantle_barricade(player: Node) -> void:
 	is_barricaded = false
@@ -140,3 +145,35 @@ func _dismantle_barricade(player: Node) -> void:
 	# Membongkar itu berisik
 	AudioManager.play_sound("barricade_hammer", -2.0, 0.8)
 	SignalBus.player_noise_made.emit(0.9, player.global_position)
+	_broadcast_door_state()
+
+func _get_scene_node_path() -> String:
+	var root: Node = get_tree().current_scene
+	if root and root.is_ancestor_of(self):
+		return str(root.get_path_to(self))
+	return name
+
+func _broadcast_door_state() -> void:
+	if not MultiplayerManager.is_online_session:
+		return
+	MultiplayerManager.push_event("door_state", {
+		"node_path": _get_scene_node_path(),
+		"is_open": is_open,
+		"is_barricaded": is_barricaded
+	})
+
+func apply_network_state(open_state: bool, barricaded_state: bool, instant: bool = false) -> void:
+	var changed: bool = (is_open != open_state) or (is_barricaded != barricaded_state)
+	is_open = open_state
+	is_barricaded = barricaded_state
+	target_rotation_y = deg_to_rad(open_angle) if is_open else 0.0
+	if instant and hinge:
+		hinge.rotation.y = target_rotation_y
+	if barricade_visual:
+		barricade_visual.visible = is_barricaded
+	_update_blocker()
+	if changed:
+		if is_barricaded:
+			AudioManager.play_sound("barricade_hammer", -4.0)
+		else:
+			AudioManager.play_sound("door_creak", -6.0, randf_range(0.95, 1.05))

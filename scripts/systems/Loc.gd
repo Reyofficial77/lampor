@@ -247,3 +247,48 @@ static func dialogue_pool(category: String) -> Array[String]:
 			"time_04":
 				return ["Pukul 04.00 WIB! Fajar hampir tiba—sebentar lagi semuanya berakhir!"]
 		return []
+
+static func mode_label(mode: String) -> String:
+	match mode.strip_edges().to_lower():
+		"multiplayer":
+			return pick("MULTIPLAYER CO-OP", "MULTIPLAYER CO-OP")
+		"sandbox":
+			return pick("MODE SANDBOX", "SANDBOX MODE")
+		_:
+			return pick("SINGLEPLAYER", "SINGLEPLAYER")
+
+static func difficulty_label(diff: String) -> String:
+	match diff.strip_edges().to_lower():
+		"easy":
+			return pick("MUDAH", "EASY")
+		"hard":
+			return pick("SULIT", "HARD")
+		"nightmare":
+			return "NIGHTMARE"
+		_:
+			return "NORMAL"
+
+static func network_error_label(status_code: int) -> String:
+	match status_code:
+		0:
+			return pick("Tidak dapat terhubung ke server. Periksa koneksi internet atau URL server.", "Cannot reach server. Check your internet connection or server URL.")
+		400:
+			return pick("Permintaan tidak valid.", "Invalid request.")
+		401:
+			return pick("Sesi berakhir atau tidak terotorisasi. Silakan masuk kembali.", "Session expired or unauthorized. Please log in again.")
+		403:
+			return pick("Akses ditolak.", "Access forbidden.")
+		404:
+			return pick("Data atau room tidak ditemukan.", "Resource or room not found.")
+		409:
+			return pick("Konflik data.", "Data conflict.")
+		410:
+			return pick("Room sudah ditutup.", "Room has been closed.")
+		413:
+			return pick("Ukuran data terlalu besar.", "Payload too large.")
+		429:
+			return pick("Terlalu banyak permintaan. Coba lagi sebentar.", "Too many requests. Please wait a moment.")
+		503:
+			return pick("Server sedang dalam pemeliharaan.", "Server is currently under maintenance.")
+		_:
+			return pick("Kesalahan server (%d)." % status_code, "Server error (%d)." % status_code)

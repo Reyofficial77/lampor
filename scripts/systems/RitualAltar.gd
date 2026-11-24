@@ -29,6 +29,12 @@ func get_interaction_prompt(_player: Node) -> String:
 
 	return LocScript.pick("[%s] Bakar Benda Ritual & Mulai Upacara Pemutus Kutukan!" % k, "[%s] Burn Ritual Relics & Start the Ritual!" % k)
 
+func _get_scene_node_path() -> String:
+	var root: Node = get_tree().current_scene
+	if root and root.is_ancestor_of(self):
+		return str(root.get_path_to(self))
+	return name
+
 func interact(player: Node) -> void:
 	if GameManager.furnace_burning:
 		return
@@ -39,6 +45,10 @@ func interact(player: Node) -> void:
 		fire_mesh.visible = true
 		AudioManager.play_sound("lighter_ignite", 3.0)
 		AudioManager.play_sound("lampor_roar", 2.0)
+		if MultiplayerManager.is_online_session:
+			MultiplayerManager.push_event("furnace_started", {
+				"node_path": _get_scene_node_path()
+			})
 		# Pemain sudah berdiri di dalam area aman sebelum api menyala,
 		# jadi body_entered tidak akan terpanggil lagi: set manual
 		var pc: PlayerController = player as PlayerController
@@ -46,6 +56,21 @@ func interact(player: Node) -> void:
 			pc.sanity_system.set_safe_source(self, true)
 	else:
 		AudioManager.play_sound("item_pickup", -10.0, 0.5)
+
+func apply_network_burning(burning: bool) -> void:
+	if fire_light:
+		fire_light.visible = burning
+	if fire_mesh:
+		fire_mesh.visible = burning
+	if burning:
+		AudioManager.play_sound("lighter_ignite", 1.0)
+		AudioManager.play_sound("lampor_roar", 0.5)
+	if safe_area:
+		for body: Node3D in safe_area.get_overlapping_bodies():
+			if body is PlayerController:
+				var pc: PlayerController = body as PlayerController
+				if pc.sanity_system:
+					pc.sanity_system.set_safe_source(self, burning)
 
 func _on_safe_area_entered(body: Node3D) -> void:
 	if GameManager.furnace_burning and body is PlayerController:

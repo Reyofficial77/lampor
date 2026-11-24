@@ -68,32 +68,37 @@ func _process(delta: float) -> void:
 		AudioManager.set_whisper_intensity(0.0)
 		return
 
+	var no_drain: bool = ("sandbox_no_sanity_drain" in GameManager) and bool(GameManager.get("sandbox_no_sanity_drain"))
+	var fate_sanity_regen: float = GameManager.get_fate_modifier("sanity_regen_mult", 1.0)
+	var fate_sanity_drain: float = GameManager.get_fate_modifier("sanity_drain_mult", 1.0)
+	var fate_stare_drain: float = GameManager.get_fate_modifier("stare_drain_mult", 1.0)
 	var delta_sanity: float = 0.0
 
 	if in_safe_zone:
-		delta_sanity += safe_zone_regen * delta
+		delta_sanity += safe_zone_regen * fate_sanity_regen * delta
 		if _was_low_sanity_before_safezone and _safezone_relief_cooldown <= 0.0:
 			_was_low_sanity_before_safezone = false
 			_safezone_relief_cooldown = 32.0
 			var relief_line: String = _pick_random_dialog("safezone_relief")
 			if not relief_line.is_empty():
 				SignalBus.dialog_requested.emit(relief_line, 3.0)
-	else:
+	elif not no_drain:
 		# Darkness drain
 		var darkness_drain: float = dark_drain_light if flashlight_is_on else dark_drain_dark
 		var owner_player: PlayerController = get_parent() as PlayerController
 		if owner_player and owner_player.is_inside_house:
 			darkness_drain *= house_dark_factor
-		delta_sanity -= darkness_drain * delta
+		delta_sanity -= darkness_drain * fate_sanity_drain * delta
 
-	# Lampor proximity drain
-	if lampor_distance < 20.0:
-		var prox_factor: float = clamp(1.0 - (lampor_distance / 20.0), 0.0, 1.0)
-		delta_sanity -= prox_factor * proximity_drain * delta
+	if not no_drain:
+		# Lampor proximity drain
+		if lampor_distance < 20.0:
+			var prox_factor: float = clamp(1.0 - (lampor_distance / 20.0), 0.0, 1.0)
+			delta_sanity -= prox_factor * proximity_drain * fate_sanity_drain * delta
 
-	# Stare drain (heavy penalty for looking at Lampor)
-	if is_staring_at_lampor:
-		delta_sanity -= stare_drain * delta
+		# Stare drain (heavy penalty for looking at Lampor)
+		if is_staring_at_lampor:
+			delta_sanity -= stare_drain * fate_stare_drain * delta
 
 	current_sanity = clamp(current_sanity + delta_sanity, 0.0, max_sanity)
 	SignalBus.player_sanity_changed.emit(current_sanity, max_sanity)
@@ -128,7 +133,7 @@ func _process(delta: float) -> void:
 	AudioManager.set_heartbeat_intensity(fear_ratio if fear_ratio > 0.4 else 0.0)
 	AudioManager.set_whisper_intensity(fear_ratio if fear_ratio > 0.55 else 0.0)
 
-	if current_sanity <= 0.0:
+	if not no_drain and current_sanity <= 0.0:
 		SignalBus.player_death_requested.emit(LocScript.pick(
 			"Kewarasanmu hancur total karena menatap Lampor!",
 			"Your sanity shattered completely from staring at Lampor!"

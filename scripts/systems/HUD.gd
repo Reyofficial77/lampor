@@ -790,12 +790,16 @@ func _finish_open_pause_settings() -> void:
 	pause_settings_container.visible = true
 	_layout_pause_settings_panel()
 
+func _mp() -> Variant:
+	return GameManager.get_multiplayer_manager()
+
 func _on_main_menu_pressed() -> void:
 	_confirm_exit_to_menu()
 
 func _confirm_exit_to_menu() -> void:
-	if MultiplayerManager.is_online_session:
-		MultiplayerManager.leave_room()
+	var mp: Variant = _mp()
+	if mp != null and mp.is_online_session:
+		mp.leave_room()
 	else:
 		GameManager.save_active_run()
 	GameManager.is_sandbox_mode = false
@@ -1047,7 +1051,8 @@ func _build_exit_confirm() -> void:
 func _show_exit_confirm() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	if _exit_confirm_msg:
-		if MultiplayerManager.is_online_session:
+		var mp: Variant = _mp()
+		if mp != null and mp.is_online_session:
 			_exit_confirm_msg.text = LocScript.pick(
 				"Yakin ingin keluar dari room online dan kembali ke menu utama?",
 				"Are you sure you want to leave the online room and return to the main menu?"
@@ -1544,21 +1549,22 @@ func _apply_online_overlay_layout() -> void:
 func _refresh_online_room_overlay(force: bool = false) -> void:
 	if not is_instance_valid(mp_overlay_panel):
 		return
-	var active: bool = MultiplayerManager.is_online_session and not is_cutscene_active()
+	var mp: Variant = _mp()
+	var active: bool = mp != null and mp.is_online_session and not is_cutscene_active()
 	mp_overlay_panel.visible = active
 	if not active:
 		return
 
-	var room: Dictionary = MultiplayerManager.current_room
+	var room: Dictionary = mp.current_room
 	var mode_tag: String = "[SANDBOX]" if (GameManager.is_sandbox_mode or str(room.get("mode", "")) == "sandbox") else "[CO-OP]"
 	var room_name: String = str(room.get("name", "Desa Lampor"))
 	var room_code: String = str(room.get("roomCode", "------"))
-	var ping_val: int = maxi(0, MultiplayerManager.ping_ms)
-	var ann: String = MultiplayerManager.server_announcement.strip_edges()
+	var ping_val: int = maxi(0, int(mp.ping_ms))
+	var ann: String = str(mp.server_announcement).strip_edges()
 	var host_id: String = str(room.get("hostUserId", ""))
 
 	var sig_parts: PackedStringArray = PackedStringArray([mode_tag, room_name, room_code, str(ping_val), ann])
-	for p_var: Variant in MultiplayerManager.room_players:
+	for p_var: Variant in mp.room_players:
 		if p_var is Dictionary:
 			var p: Dictionary = p_var as Dictionary
 			var uid: String = str(p.get("userId", p.get("id", "")))
@@ -1585,7 +1591,7 @@ func _refresh_online_room_overlay(force: bool = false) -> void:
 		for child: Node in mp_roster_vbox.get_children():
 			mp_roster_vbox.remove_child(child)
 			child.queue_free()
-		for p_var: Variant in MultiplayerManager.room_players:
+		for p_var: Variant in mp.room_players:
 			if not (p_var is Dictionary):
 				continue
 			var p: Dictionary = p_var as Dictionary
@@ -2097,7 +2103,9 @@ func _on_act_started(num: int, title: String) -> void:
 	objective_labels.clear()
 	objective_texts.clear()
 	_populate_current_act_objectives()
-	if num == 2 and not GameManager.is_resuming_saved_run and (not MultiplayerManager.is_online_session or bool(MultiplayerManager.get_room_setting("lamporEnabled", true))):
+	var mp: Variant = _mp()
+	var lampor_enabled: bool = (mp == null) or (not mp.is_online_session) or bool(mp.get_room_setting("lamporEnabled", true))
+	if num == 2 and not GameManager.is_resuming_saved_run and lampor_enabled:
 		if mission_tween and mission_tween.is_running():
 			mission_tween.kill()
 		if mission_panel:
@@ -2361,7 +2369,8 @@ func _play_lampor_descent_cutscene() -> void:
 	if not lampor:
 		return
 
-	if not MultiplayerManager.is_online_session or MultiplayerManager.is_room_owner:
+	var mp: Variant = _mp()
+	if mp == null or not mp.is_online_session or mp.is_room_owner:
 		lampor.trigger_descent(true)
 	var ctx: Dictionary = _begin_cutscene_ui(
 		"descent",
@@ -2408,7 +2417,8 @@ func _play_lampor_descent_cutscene() -> void:
 			hud_bag_button.visible = true
 		if not get_tree().paused:
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _is_touch_device() else Input.MOUSE_MODE_CAPTURED
-		if (not MultiplayerManager.is_online_session or MultiplayerManager.is_room_owner) and is_instance_valid(lampor) and lampor.current_state != LamporStateMachine.State.CHASE and lampor.current_state != LamporStateMachine.State.BANISHED:
+		var mp_cb: Variant = _mp()
+		if (mp_cb == null or not mp_cb.is_online_session or mp_cb.is_room_owner) and is_instance_valid(lampor) and lampor.current_state != LamporStateMachine.State.CHASE and lampor.current_state != LamporStateMachine.State.BANISHED:
 			if lampor.descent_tween and lampor.descent_tween.is_running():
 				lampor.descent_tween.kill()
 			lampor.global_position = lampor.descend_target

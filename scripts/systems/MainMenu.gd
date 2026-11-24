@@ -204,10 +204,17 @@ var _launching_online_game: bool = false
 var _last_chat_count: int = -1
 var _last_lobby_roster_sig: String = ""
 
+func _am() -> Variant:
+	return GameManager.get_account_manager()
+
+func _mp() -> Variant:
+	return GameManager.get_multiplayer_manager()
+
 func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_sync_pck_resources()
 	GameManager.current_state = GameManager.GameState.MENU
+	GameManager.ensure_online_managers()
 	_build_menu()
 	UpdateManager.update_available.connect(_on_update_available)
 	UpdateManager.update_installed.connect(_on_update_installed)
@@ -229,7 +236,8 @@ func _ready() -> void:
 	if start_button:
 		call_deferred("_focus_control_safely", start_button)
 	call_deferred("_check_for_game_updates")
-	if not AccountManager.account_gate_resolved:
+	var am: Variant = _am()
+	if am != null and not am.account_gate_resolved:
 		call_deferred("_run_initial_account_gate")
 	else:
 		_refresh_account_ui()
@@ -436,7 +444,8 @@ func _close_topmost_modal() -> bool:
 	var top_ov: ColorRect = _get_topmost_visible_modal()
 	if top_ov == null:
 		return false
-	if top_ov == account_overlay and not AccountManager.account_gate_resolved:
+	var am: Variant = _am()
+	if top_ov == account_overlay and (am == null or not am.account_gate_resolved):
 		return true
 	if top_ov == room_lobby_overlay:
 		_on_lobby_leave_pressed()
@@ -647,7 +656,8 @@ func _reset_mode_select_lock_notice() -> void:
 		mode_lock_box.visible = false
 
 func _on_mode_online_selected(target_mode: String) -> void:
-	if not AccountManager.can_access_online_modes():
+	var am: Variant = _am()
+	if am == null or not am.can_access_online_modes():
 		_pending_online_mode_after_auth = target_mode
 		if mode_lock_label:
 			var mode_title: String = "SANDBOX MODE" if target_mode == "sandbox" else "MULTIPLAYER MODE"
@@ -689,8 +699,9 @@ func _build_difficulty_modal() -> void:
 	tutorial_button.pressed.connect(func() -> void:
 		for overlay: ColorRect in modal_overlays:
 			overlay.visible = false
-		if MultiplayerManager.is_online_session:
-			MultiplayerManager.reset_to_singleplayer()
+		var mp: Variant = _mp()
+		if mp != null and mp.is_online_session:
+			mp.reset_to_singleplayer()
 		GameManager.is_sandbox_mode = false
 		if GameManager.has_method("start_tutorial_game"):
 			GameManager.start_tutorial_game()
@@ -1270,12 +1281,13 @@ func _on_redeem_pressed() -> void:
 		redeem_result_label.add_theme_color_override("font_color", HorrorTheme.ERROR)
 		return
 	var result: Dictionary = {}
-	if AccountManager.can_access_online_modes():
+	var am: Variant = _am()
+	if am != null and am.can_access_online_modes():
 		if is_instance_valid(redeem_button):
 			redeem_button.disabled = true
 		redeem_result_label.text = LocScript.pick("Memeriksa kode redeem di server...", "Checking redeem code on server...")
 		redeem_result_label.add_theme_color_override("font_color", HorrorTheme.ON_SURFACE_VARIANT)
-		var cloud_res: Dictionary = await AccountManager.redeem_cloud_code(normalized)
+		var cloud_res: Dictionary = await am.redeem_cloud_code(normalized)
 		if not is_instance_valid(self) or not is_inside_tree():
 			return
 		if is_instance_valid(redeem_button):
@@ -1315,8 +1327,9 @@ func _on_redeem_pressed() -> void:
 func _on_continue_pressed() -> void:
 	for overlay: ColorRect in modal_overlays:
 		overlay.visible = false
-	if MultiplayerManager.is_online_session:
-		MultiplayerManager.reset_to_singleplayer()
+	var mp: Variant = _mp()
+	if mp != null and mp.is_online_session:
+		mp.reset_to_singleplayer()
 	GameManager.is_sandbox_mode = false
 	if GameManager.has_saved_run():
 		GameManager.resume_saved_game()
@@ -2231,22 +2244,24 @@ func _toggle_fullscreen() -> void:
 func _start_with_difficulty(diff: GameManager.Difficulty) -> void:
 	for overlay: ColorRect in modal_overlays:
 		overlay.visible = false
-	if MultiplayerManager.is_online_session:
-		MultiplayerManager.reset_to_singleplayer()
+	var mp: Variant = _mp()
+	if mp != null and mp.is_online_session:
+		mp.reset_to_singleplayer()
 	GameManager.is_sandbox_mode = false
 	GameManager.start_new_game(diff)
 
 # ---------- Gerbang Akun LAMPOR (Force Login / Daftar / Guest) ----------
 
 func _run_initial_account_gate() -> void:
-	if AccountManager.account_gate_resolved:
+	var am: Variant = _am()
+	if am == null or am.account_gate_resolved:
 		_refresh_account_ui()
 		return
 	if account_chip_label:
 		account_chip_label.text = LocScript.pick("AKUN: MEMERIKSA SESI...", "ACCOUNT: CHECKING SESSION...")
 	if top_account_label:
 		top_account_label.text = LocScript.pick("MEMERIKSA...", "CHECKING...")
-	var verified: bool = await AccountManager.verify_saved_session()
+	var verified: bool = await am.verify_saved_session()
 	if not is_instance_valid(self) or not is_inside_tree():
 		return
 	_refresh_account_ui()
@@ -2254,10 +2269,10 @@ func _run_initial_account_gate() -> void:
 	_refresh_shop_display()
 	_update_nightmare_status()
 	_refresh_tutorial_button_visibility()
-	if not verified and not AccountManager.can_access_online_modes() and not AccountManager.is_guest_mode:
+	if not verified and not am.can_access_online_modes() and not am.is_guest_mode:
 		_open_account_modal(0)
-		if not AccountManager.last_error.strip_edges().is_empty():
-			_set_account_status(AccountManager.last_error, HorrorTheme.RELIC_BRASS)
+		if not str(am.last_error).strip_edges().is_empty():
+			_set_account_status(str(am.last_error), HorrorTheme.RELIC_BRASS)
 
 func _on_account_chip_gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
@@ -2478,7 +2493,8 @@ func _build_account_modal() -> void:
 
 	account_close_btn = _make_button(LocScript.pick("TUTUP", "CLOSE"), false, "ghost")
 	account_close_btn.pressed.connect(func() -> void:
-		if AccountManager.account_gate_resolved:
+		var am: Variant = _am()
+		if am == null or am.account_gate_resolved:
 			account_overlay.visible = false
 	)
 	body.add_child(account_close_btn)
@@ -2490,7 +2506,8 @@ func _open_account_modal(tab_idx: int = 0) -> void:
 	_select_account_tab(tab_idx)
 	_refresh_account_ui()
 	_open_modal(account_overlay, account_panel)
-	if not AccountManager.can_access_online_modes() and account_username_input:
+	var am: Variant = _am()
+	if (am == null or not am.can_access_online_modes()) and account_username_input:
 		call_deferred("_focus_control_safely", account_username_input)
 
 func _select_account_tab(tab_idx: int) -> void:
@@ -2537,12 +2554,16 @@ func _set_account_busy(busy: bool) -> void:
 			btn.mouse_default_cursor_shape = Control.CURSOR_ARROW if busy else Control.CURSOR_POINTING_HAND
 
 func _refresh_account_ui() -> void:
-	var logged_in: bool = AccountManager.can_access_online_modes()
-	var is_guest: bool = AccountManager.is_guest_mode
+	var am: Variant = _am()
+	var logged_in: bool = am != null and am.can_access_online_modes()
+	var is_guest: bool = am != null and am.is_guest_mode
+	var gate_resolved: bool = am == null or am.account_gate_resolved
+	var uname_disp: String = str(am.username) if am != null else ""
+	var role_disp: String = str(am.role).to_upper() if am != null else "PLAYER"
 	var chip_text: String = ""
 	var chip_color: Color = HorrorTheme.TEXT_MUTED
 	if logged_in:
-		chip_text = LocScript.pick("AKUN: %s" % AccountManager.username, "ACCOUNT: %s" % AccountManager.username)
+		chip_text = LocScript.pick("AKUN: %s" % uname_disp, "ACCOUNT: %s" % uname_disp)
 		chip_color = HorrorTheme.SUCCESS_SAGE
 	elif is_guest:
 		chip_text = "GUEST (OFFLINE)"
@@ -2565,25 +2586,25 @@ func _refresh_account_ui() -> void:
 	if guest_section:
 		guest_section.visible = not logged_in
 	if account_close_btn:
-		account_close_btn.visible = AccountManager.account_gate_resolved
+		account_close_btn.visible = gate_resolved
 	if account_title_label:
-		if not AccountManager.account_gate_resolved:
+		if not gate_resolved:
 			account_title_label.text = LocScript.pick("GERBANG AKUN LAMPOR", "LAMPOR ACCOUNT GATE")
 		else:
 			account_title_label.text = LocScript.pick("PROFIL AKUN LAMPOR", "LAMPOR ACCOUNT PROFILE") if logged_in else LocScript.pick("AKUN LAMPOR", "LAMPOR ACCOUNT")
 	if logged_in and account_profile_summary_label:
 		account_profile_summary_label.text = LocScript.pick(
 			"Username    : %s\nRole        : %s\nTotal Win   : %d\nKoin Emas   : %d\nNyawa       : %d/%d" % [
-				AccountManager.username,
-				AccountManager.role.to_upper(),
+				uname_disp,
+				role_disp,
 				GameManager.total_wins,
 				GameManager.coins,
 				GameManager.extra_lives,
 				GameManager.MAX_EXTRA_LIVES
 			],
 			"Username    : %s\nRole        : %s\nTotal Wins  : %d\nGold Coins  : %d\nExtra Lives : %d/%d" % [
-				AccountManager.username,
-				AccountManager.role.to_upper(),
+				uname_disp,
+				role_disp,
 				GameManager.total_wins,
 				GameManager.coins,
 				GameManager.extra_lives,
@@ -2597,7 +2618,8 @@ func _on_account_state_changed() -> void:
 	_refresh_shop_display()
 	_update_nightmare_status()
 	_refresh_tutorial_button_visibility()
-	if AccountManager.can_access_online_modes() and mode_lock_box:
+	var am: Variant = _am()
+	if am != null and am.can_access_online_modes() and mode_lock_box:
 		mode_lock_box.visible = false
 
 func _on_account_submit_pressed() -> void:
@@ -2611,7 +2633,11 @@ func _on_account_submit_pressed() -> void:
 		if pwd != confirm_pwd:
 			_set_account_status(LocScript.pick("Konfirmasi password tidak cocok.", "Password confirmation does not match."), HorrorTheme.ERROR)
 			return
-	var validation_err: String = AccountManager.validate_credentials_format(uname, pwd, is_register)
+	var am: Variant = _am()
+	if am == null:
+		_set_account_status(LocScript.pick("Sistem akun tidak tersedia.", "Account system unavailable."), HorrorTheme.ERROR)
+		return
+	var validation_err: String = am.validate_credentials_format(uname, pwd, is_register)
 	if not validation_err.is_empty():
 		_set_account_status(validation_err, HorrorTheme.ERROR)
 		return
@@ -2622,9 +2648,9 @@ func _on_account_submit_pressed() -> void:
 		_set_account_status(LocScript.pick("Memverifikasi anti-bot & masuk ke akun...", "Verifying anti-bot challenge & signing in..."), HorrorTheme.ON_SURFACE_VARIANT)
 	var res: Dictionary
 	if is_register:
-		res = await AccountManager.register_account(uname, pwd)
+		res = await am.register_account(uname, pwd)
 	else:
-		res = await AccountManager.login_account(uname, pwd)
+		res = await am.login_account(uname, pwd)
 	if not is_instance_valid(self) or not is_inside_tree():
 		return
 	_set_account_busy(false)
@@ -2654,7 +2680,9 @@ func _on_guest_pressed() -> void:
 	if _account_busy:
 		return
 	_pending_online_mode_after_auth = ""
-	AccountManager.enter_guest_mode()
+	var am: Variant = _am()
+	if am != null:
+		am.enter_guest_mode()
 	_refresh_account_ui()
 	_refresh_currency_display()
 	if account_overlay:
@@ -2663,27 +2691,32 @@ func _on_guest_pressed() -> void:
 		call_deferred("_focus_control_safely", start_button)
 
 func _on_account_sync_pressed() -> void:
-	if _account_busy or not AccountManager.can_access_online_modes():
+	var am: Variant = _am()
+	if _account_busy or am == null or not am.can_access_online_modes():
 		return
 	_set_account_busy(true)
 	_set_account_status(LocScript.pick("Menyinkronkan progres ke Neon DB...", "Syncing progress to Neon DB..."), HorrorTheme.ON_SURFACE_VARIANT)
-	await AccountManager.sync_profile_to_cloud()
+	await am.sync_profile_to_cloud()
 	if not is_instance_valid(self) or not is_inside_tree():
 		return
 	_set_account_busy(false)
 	_refresh_account_ui()
 	_refresh_currency_display()
-	if AccountManager.last_error.is_empty():
+	var sync_err: String = str(am.last_error) if is_instance_valid(am) else ""
+	if sync_err.is_empty():
 		_set_account_status(LocScript.pick("Progres berhasil disinkronkan ke cloud.", "Progress synced to cloud."), HorrorTheme.SUCCESS_SAGE)
 	else:
-		_set_account_status(AccountManager.last_error, HorrorTheme.ERROR)
+		_set_account_status(sync_err, HorrorTheme.ERROR)
 
 func _on_account_logout_pressed() -> void:
 	if _account_busy:
 		return
+	var am: Variant = _am()
+	if am == null:
+		return
 	_set_account_busy(true)
 	_set_account_status(LocScript.pick("Keluar dari akun...", "Signing out..."), HorrorTheme.ON_SURFACE_VARIANT)
-	await AccountManager.logout_account()
+	await am.logout_account()
 	if not is_instance_valid(self) or not is_inside_tree():
 		return
 	_set_account_busy(false)
@@ -2706,7 +2739,9 @@ func _on_server_save_pressed() -> void:
 			server_test_label.text = LocScript.pick("URL server tidak valid. Harus diawali http:// atau https://.", "Invalid server URL. Must start with http:// or https://.")
 			server_test_label.add_theme_color_override("font_color", HorrorTheme.ERROR)
 		return
-	AccountManager.server_base_url = cleaned
+	var am: Variant = _am()
+	if am != null:
+		am.server_base_url = cleaned
 	server_url_input.text = cleaned
 	if server_test_label:
 		server_test_label.text = LocScript.pick("URL server disimpan: %s" % cleaned, "Server URL saved: %s" % cleaned)
@@ -2715,6 +2750,7 @@ func _on_server_save_pressed() -> void:
 func _on_server_test_pressed() -> void:
 	if _account_busy:
 		return
+	var am: Variant = _am()
 	if server_url_input and not server_url_input.text.strip_edges().is_empty():
 		var cleaned: String = SettingsManager.set_server_base_url(server_url_input.text)
 		if cleaned.is_empty():
@@ -2722,13 +2758,15 @@ func _on_server_test_pressed() -> void:
 				server_test_label.text = LocScript.pick("URL server tidak valid. Harus diawali http:// atau https://.", "Invalid server URL. Must start with http:// or https://.")
 				server_test_label.add_theme_color_override("font_color", HorrorTheme.ERROR)
 			return
-		AccountManager.server_base_url = cleaned
+		if am != null:
+			am.server_base_url = cleaned
 		server_url_input.text = cleaned
 	_set_account_busy(true)
 	if server_test_label:
 		server_test_label.text = LocScript.pick("Menguji koneksi ke %s..." % SettingsManager.server_base_url, "Testing connection to %s..." % SettingsManager.server_base_url)
 		server_test_label.add_theme_color_override("font_color", HorrorTheme.ON_SURFACE_VARIANT)
-	var res: Dictionary = await MultiplayerManager.check_server_health()
+	var mp: Variant = _mp()
+	var res: Dictionary = await mp.check_server_health() if mp != null else {"ok": false, "message": LocScript.pick("Layanan jaringan tidak tersedia.", "Network service unavailable.")}
 	if not is_instance_valid(self) or not is_inside_tree():
 		return
 	_set_account_busy(false)
@@ -2869,8 +2907,9 @@ func _refresh_mp_server_and_rooms() -> void:
 		mp_server_status_label.text = LocScript.pick("Server: Memeriksa...", "Server: Checking...")
 		mp_server_status_label.add_theme_color_override("font_color", HorrorTheme.ON_SURFACE_VARIANT)
 
+	var mp: Variant = _mp()
 	var t0: int = Time.get_ticks_msec()
-	var health_res: Dictionary = await MultiplayerManager.check_server_health()
+	var health_res: Dictionary = await mp.check_server_health() if mp != null else {"ok": false}
 	if not is_instance_valid(self) or not is_inside_tree():
 		return
 	var rtt: int = maxi(1, Time.get_ticks_msec() - t0)
@@ -2887,7 +2926,7 @@ func _refresh_mp_server_and_rooms() -> void:
 			mp_server_status_label.text = LocScript.pick("Server: Tidak Terjangkau", "Server: Unreachable")
 			mp_server_status_label.add_theme_color_override("font_color", HorrorTheme.ERROR)
 
-	var rooms_res: Dictionary = await MultiplayerManager.list_rooms(mp_mode_filter)
+	var rooms_res: Dictionary = await mp.list_rooms(mp_mode_filter) if mp != null else {"ok": false}
 	if not is_instance_valid(self) or not is_inside_tree():
 		return
 	var was_loading: bool = _mp_rooms_loading
@@ -3082,7 +3121,8 @@ func _join_mp_room(room_id_or_code: String, password: String, from_pwd_modal: bo
 	if room_password_join_btn:
 		room_password_join_btn.disabled = true
 	_set_mp_server_feedback(LocScript.pick("Menghubungkan ke room...", "Joining room..."), HorrorTheme.ON_SURFACE_VARIANT)
-	var res: Dictionary = await MultiplayerManager.join_room(room_id_or_code, password)
+	var mp: Variant = _mp()
+	var res: Dictionary = await mp.join_room(room_id_or_code, password) if mp != null else {"ok": false}
 	if not is_instance_valid(self) or not is_inside_tree():
 		return
 	if mp_join_code_btn:
@@ -3096,7 +3136,7 @@ func _join_mp_room(room_id_or_code: String, password: String, from_pwd_modal: bo
 			room_password_overlay.visible = false
 		if mp_server_overlay:
 			mp_server_overlay.visible = false
-		if _launching_online_game or str(MultiplayerManager.current_room.get("status", "")).to_lower() == "playing":
+		if _launching_online_game or (mp != null and str(mp.current_room.get("status", "")).to_lower() == "playing"):
 			return
 		_open_room_lobby_modal()
 	else:
@@ -3276,7 +3316,9 @@ func _open_create_room_modal() -> void:
 		else:
 			create_room_mode_badge.text = LocScript.pick("MODE: MULTIPLAYER CO-OP", "MODE: MULTIPLAYER CO-OP")
 	if create_room_name_input:
-		var owner_name: String = AccountManager.username if not AccountManager.username.is_empty() else "Pemain"
+		var am: Variant = _am()
+		var uname_val: String = str(am.username) if am != null else ""
+		var owner_name: String = uname_val if not uname_val.is_empty() else "Pemain"
 		create_room_name_input.text = LocScript.pick("Desa %s" % owner_name, "%s's Village" % owner_name)
 	if create_room_password_input:
 		create_room_password_input.clear()
@@ -3352,7 +3394,8 @@ func _on_create_room_submit_pressed() -> void:
 		create_room_status_label.text = LocScript.pick("Membuat room di server...", "Creating room on server...")
 		create_room_status_label.add_theme_color_override("font_color", HorrorTheme.ON_SURFACE_VARIANT)
 		create_room_status_label.visible = true
-	var res: Dictionary = await MultiplayerManager.create_room(config)
+	var mp: Variant = _mp()
+	var res: Dictionary = await mp.create_room(config) if mp != null else {"ok": false}
 	if not is_instance_valid(self) or not is_inside_tree():
 		return
 	if create_room_submit_btn:
@@ -3522,7 +3565,11 @@ func _open_room_lobby_modal() -> void:
 	if lobby_status_label:
 		lobby_status_label.text = ""
 		lobby_status_label.visible = false
-	_refresh_lobby_ui(MultiplayerManager.current_room, MultiplayerManager.room_players)
+	var mp: Variant = _mp()
+	if mp != null:
+		_refresh_lobby_ui(mp.current_room, mp.room_players)
+	else:
+		_refresh_lobby_ui({}, [])
 	_open_modal(room_lobby_overlay, room_lobby_panel)
 
 func _on_multiplayer_room_updated(room: Dictionary, players: Array) -> void:
@@ -3576,8 +3623,12 @@ func _refresh_lobby_ui(room: Dictionary, players: Array) -> void:
 			]
 		)
 
+	var am: Variant = _am()
+	var mp: Variant = _mp()
+	var my_uid: String = str(am.user_id) if am != null else ""
+	var is_owner: bool = mp != null and mp.is_room_owner
 	var my_ready: bool = false
-	var sig_parts := PackedStringArray([str(r_max), "1" if MultiplayerManager.is_room_owner else "0"])
+	var sig_parts := PackedStringArray([str(r_max), "1" if is_owner else "0"])
 	for p_var: Variant in players:
 		if not p_var is Dictionary:
 			continue
@@ -3586,7 +3637,7 @@ func _refresh_lobby_ui(room: Dictionary, players: Array) -> void:
 		var uname_s: String = str(p_s.get("username", "Player"))
 		var host_s: bool = bool(p_s.get("isHost", uid_s == host_uid))
 		var ready_s: bool = bool(p_s.get("isReady", false))
-		if uid_s == AccountManager.user_id:
+		if uid_s == my_uid:
 			my_ready = ready_s
 		sig_parts.append("%s|%s|%s|%s" % [uid_s, uname_s, "1" if host_s else "0", "1" if ready_s else "0"])
 	var roster_sig: String = ";".join(sig_parts)
@@ -3614,7 +3665,7 @@ func _refresh_lobby_ui(room: Dictionary, players: Array) -> void:
 			p_row.mouse_filter = Control.MOUSE_FILTER_PASS
 			slot_card.add_child(p_row)
 
-			var you_tag: String = LocScript.pick(" (Anda)", " (You)") if uid == AccountManager.user_id else ""
+			var you_tag: String = LocScript.pick(" (Anda)", " (You)") if uid == my_uid else ""
 			var host_tag: String = "  [HOST]" if is_host else ""
 			var p_name_lbl := _make_label("%s%s%s" % [uname, you_tag, host_tag], 13, HorrorTheme.RELIC_BRASS if is_host else HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "body-md")
 			p_name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -3631,7 +3682,7 @@ func _refresh_lobby_ui(room: Dictionary, players: Array) -> void:
 			ready_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			p_row.add_child(ready_lbl)
 
-			if MultiplayerManager.is_room_owner and uid != AccountManager.user_id and not is_host:
+			if is_owner and uid != my_uid and not is_host:
 				var kick_btn := _make_button("KICK", false, "danger")
 				kick_btn.custom_minimum_size = Vector2(70.0, 30.0)
 				kick_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
@@ -3650,19 +3701,23 @@ func _refresh_lobby_ui(room: Dictionary, players: Array) -> void:
 		lobby_ready_btn.text = LocScript.pick("BATAL SIAP", "CANCEL READY") if my_ready else LocScript.pick("SIAP", "READY")
 		HorrorTheme.style_button(lobby_ready_btn, "secondary" if my_ready else "primary", 13, true)
 	if lobby_start_btn:
-		lobby_start_btn.visible = MultiplayerManager.is_room_owner
+		lobby_start_btn.visible = is_owner
 	_refresh_lobby_chat()
 
 func _refresh_lobby_chat() -> void:
 	if not is_instance_valid(lobby_chat_view):
 		return
-	var hist: Array[Dictionary] = MultiplayerManager.lobby_chat_history
+	var mp: Variant = _mp()
+	var hist: Array = mp.lobby_chat_history if mp != null else []
 	if hist.is_empty():
 		lobby_chat_view.text = "[color=#a98e8b]%s[/color]" % LocScript.pick("Belum ada pesan. Sapa rekanmu di sini.", "No messages yet. Say hello to your teammates.")
 		_last_chat_count = 0
 		return
 	var lines := PackedStringArray()
-	for entry: Dictionary in hist:
+	for entry_var: Variant in hist:
+		if not entry_var is Dictionary:
+			continue
+		var entry: Dictionary = entry_var as Dictionary
 		var sender: String = str(entry.get("sender", entry.get("sender_name", entry.get("username", "Pemain")))).replace("[", "[lb]").replace("]", "[rb]")
 		var msg_text: String = str(entry.get("text", entry.get("message", ""))).replace("[", "[lb]").replace("]", "[rb]")
 		lines.append("[color=#c99a5b][b]%s[/b][/color]: %s" % [sender, msg_text])
@@ -3677,7 +3732,10 @@ func _on_multiplayer_event_received(event_type: String, _payload: Dictionary, _s
 		_refresh_lobby_chat()
 
 func _on_lobby_copy_code_pressed() -> void:
-	var r_code: String = str(MultiplayerManager.current_room.get("roomCode", MultiplayerManager.current_room.get("code", "")))
+	var mp: Variant = _mp()
+	if mp == null:
+		return
+	var r_code: String = str(mp.current_room.get("roomCode", mp.current_room.get("code", "")))
 	if r_code.is_empty():
 		return
 	DisplayServer.clipboard_set(r_code)
@@ -3687,10 +3745,11 @@ func _on_lobby_copy_code_pressed() -> void:
 		lobby_status_label.visible = true
 
 func _on_lobby_kick_pressed(target_uid: String) -> void:
-	if _lobby_busy or not MultiplayerManager.is_room_owner:
+	var mp: Variant = _mp()
+	if _lobby_busy or mp == null or not mp.is_room_owner:
 		return
 	_lobby_busy = true
-	var res: Dictionary = await MultiplayerManager.kick_player(target_uid)
+	var res: Dictionary = await mp.kick_player(target_uid)
 	if not is_instance_valid(self) or not is_inside_tree():
 		return
 	_lobby_busy = false
@@ -3706,21 +3765,26 @@ func _on_lobby_chat_send_pressed() -> void:
 	if msg.is_empty():
 		return
 	lobby_chat_input.clear()
-	MultiplayerManager.send_chat_message(msg)
+	var mp: Variant = _mp()
+	if mp != null:
+		mp.send_chat_message(msg)
 	_refresh_lobby_chat()
 
 func _on_lobby_ready_pressed() -> void:
-	if _lobby_busy:
+	var am: Variant = _am()
+	var mp: Variant = _mp()
+	if _lobby_busy or mp == null:
 		return
+	var my_uid: String = str(am.user_id) if am != null else ""
 	var current_ready: bool = false
-	for p_var: Variant in MultiplayerManager.room_players:
-		if p_var is Dictionary and str((p_var as Dictionary).get("userId", "")) == AccountManager.user_id:
+	for p_var: Variant in mp.room_players:
+		if p_var is Dictionary and str((p_var as Dictionary).get("userId", "")) == my_uid:
 			current_ready = bool((p_var as Dictionary).get("isReady", false))
 			break
 	_lobby_busy = true
 	if lobby_ready_btn:
 		lobby_ready_btn.disabled = true
-	var res: Dictionary = await MultiplayerManager.set_ready(not current_ready)
+	var res: Dictionary = await mp.set_ready(not current_ready)
 	if not is_instance_valid(self) or not is_inside_tree():
 		return
 	_lobby_busy = false
@@ -3732,7 +3796,8 @@ func _on_lobby_ready_pressed() -> void:
 		lobby_status_label.visible = true
 
 func _on_lobby_start_pressed() -> void:
-	if _lobby_busy or _launching_online_game or not MultiplayerManager.is_room_owner:
+	var mp: Variant = _mp()
+	if _lobby_busy or _launching_online_game or mp == null or not mp.is_room_owner:
 		return
 	_lobby_busy = true
 	if lobby_start_btn:
@@ -3741,7 +3806,7 @@ func _on_lobby_start_pressed() -> void:
 		lobby_status_label.text = LocScript.pick("Memulai permainan online...", "Starting online game...")
 		lobby_status_label.add_theme_color_override("font_color", HorrorTheme.ON_SURFACE_VARIANT)
 		lobby_status_label.visible = true
-	var res: Dictionary = await MultiplayerManager.start_room_game()
+	var res: Dictionary = await mp.start_room_game()
 	if not is_instance_valid(self) or not is_inside_tree():
 		return
 	_lobby_busy = false
@@ -3749,7 +3814,8 @@ func _on_lobby_start_pressed() -> void:
 		lobby_start_btn.disabled = false
 	if bool(res.get("ok", false)):
 		var data: Dictionary = _unwrap_payload(res)
-		var started_room: Dictionary = data.get("room", MultiplayerManager.current_room) if data.get("room") is Dictionary else MultiplayerManager.current_room
+		var fallback_room: Dictionary = mp.current_room if is_instance_valid(mp) else {}
+		var started_room: Dictionary = data.get("room", fallback_room) if data.get("room") is Dictionary else fallback_room
 		if str(started_room.get("status", "")) == "playing" and not _launching_online_game:
 			_on_multiplayer_game_started(started_room)
 	elif lobby_status_label:
@@ -3763,7 +3829,9 @@ func _on_lobby_leave_pressed() -> void:
 	_lobby_busy = true
 	if lobby_leave_btn:
 		lobby_leave_btn.disabled = true
-	await MultiplayerManager.leave_room()
+	var mp: Variant = _mp()
+	if mp != null:
+		await mp.leave_room()
 	if not is_instance_valid(self) or not is_inside_tree():
 		return
 	_lobby_busy = false
@@ -3787,7 +3855,8 @@ func _on_multiplayer_disconnected(reason: String) -> void:
 	_launching_online_game = false
 	if room_lobby_overlay and room_lobby_overlay.visible:
 		room_lobby_overlay.visible = false
-		if AccountManager.can_access_online_modes():
+		var am: Variant = _am()
+		if am != null and am.can_access_online_modes():
 			_open_mp_server_modal(mp_mode_filter)
 			if not reason.strip_edges().is_empty():
 				_set_mp_server_feedback(reason, HorrorTheme.ERROR)

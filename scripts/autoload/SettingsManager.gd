@@ -87,6 +87,7 @@ func _ready() -> void:
 	get_tree().node_added.connect(_on_node_added)
 	if OS.has_feature("web"):
 		call_deferred("_schedule_web_reconcile")
+	GameManager.ensure_online_managers()
 
 func _capture_default_keybinds() -> void:
 	_default_input_map_events.clear()
@@ -280,7 +281,7 @@ func _sanitize_server_url(url: String) -> String:
 	return scheme + "://" + rest
 
 func _sync_server_url_to_account_manager() -> void:
-	var am: Node = get_node_or_null("/root/AccountManager")
+	var am: Variant = GameManager.get_account_manager(false)
 	if am and "server_base_url" in am:
 		am.set("server_base_url", server_base_url)
 

@@ -105,6 +105,8 @@ var _save_load_failed: bool = false
 var _web_save_sync_pending: bool = false
 var _web_save_sync_dirty: bool = false
 var _skip_shutdown_resave: bool = false
+var _account_manager_ref: Node = null
+var _multiplayer_manager_ref: Node = null
 
 # Fate Cards (Kartu Takdir per Babak)
 var active_fate_cards: Array[Dictionary] = []
@@ -138,6 +140,61 @@ func _setup_admin_panel() -> void:
 		admin_panel = ADMIN_PANEL_SCRIPT.new()
 		add_child(admin_panel)
 	_setup_sandbox_panel()
+
+func ensure_online_managers() -> void:
+	get_account_manager(true)
+	get_multiplayer_manager(true)
+
+func get_account_manager(allow_spawn: bool = true) -> Variant:
+	if is_instance_valid(_account_manager_ref):
+		return _account_manager_ref
+	var root: Window = get_tree().root if is_inside_tree() else null
+	if root != null:
+		var existing: Node = root.get_node_or_null("AccountManager")
+		if existing != null:
+			_account_manager_ref = existing
+			return _account_manager_ref
+	var local_child: Node = get_node_or_null("AccountManager")
+	if local_child != null:
+		_account_manager_ref = local_child
+		return _account_manager_ref
+	if not allow_spawn or ProjectSettings.has_setting("autoload/AccountManager"):
+		return null
+	var script_res: Variant = load("res://scripts/autoload/AccountManager.gd")
+	if script_res is Script:
+		var inst: Node = (script_res as Script).new() as Node
+		if inst != null:
+			inst.name = "AccountManager"
+			_account_manager_ref = inst
+			add_child(inst)
+			return _account_manager_ref
+	return null
+
+func get_multiplayer_manager(allow_spawn: bool = true) -> Variant:
+	if is_instance_valid(_multiplayer_manager_ref):
+		return _multiplayer_manager_ref
+	var root: Window = get_tree().root if is_inside_tree() else null
+	if root != null:
+		var existing: Node = root.get_node_or_null("MultiplayerManager")
+		if existing != null:
+			_multiplayer_manager_ref = existing
+			return _multiplayer_manager_ref
+	var local_child: Node = get_node_or_null("MultiplayerManager")
+	if local_child != null:
+		_multiplayer_manager_ref = local_child
+		return _multiplayer_manager_ref
+	if not allow_spawn or ProjectSettings.has_setting("autoload/MultiplayerManager"):
+		return null
+	get_account_manager(true)
+	var script_res: Variant = load("res://scripts/autoload/MultiplayerManager.gd")
+	if script_res is Script:
+		var inst: Node = (script_res as Script).new() as Node
+		if inst != null:
+			inst.name = "MultiplayerManager"
+			_multiplayer_manager_ref = inst
+			add_child(inst)
+			return _multiplayer_manager_ref
+	return null
 
 func _setup_sandbox_panel() -> void:
 	if sandbox_panel == null and SANDBOX_PANEL_SCRIPT != null:
@@ -348,9 +405,9 @@ func load_save_data() -> void:
 	var marker_ver: String = str(marker.get("origin_version", ""))
 	var marker_commit: String = str(marker.get("origin_commit", ""))
 	var marker_updated: bool = (not marker.is_empty()) and ((not marker_ver.is_empty() and marker_ver != current_version) or (not marker_commit.is_empty() and marker_commit != current_commit))
-	var has_prior_footprint: bool = UpdateManager.had_prior_user_data \
-		or UpdateManager.updated_on_this_boot \
-		or UpdateManager.pck_loaded_this_session \
+	var has_prior_footprint: bool = bool(UpdateManager.get("had_prior_user_data")) \
+		or bool(UpdateManager.get("updated_on_this_boot")) \
+		or bool(UpdateManager.get("pck_loaded_this_session")) \
 		or FileAccess.file_exists(SETTINGS_CONFIG_PATH) \
 		or FileAccess.file_exists(SAVE_BACKUP_PATH) \
 		or FileAccess.file_exists(SAVE_SHADOW_PATH) \
@@ -426,8 +483,8 @@ func load_save_data() -> void:
 		install_tutorial_state = "skipped_on_update"
 		needs_migration_save = true
 	elif saved_tutorial_state == "fresh_pending":
-		var is_updated_build: bool = UpdateManager.updated_on_this_boot \
-			or UpdateManager.pck_loaded_this_session \
+		var is_updated_build: bool = bool(UpdateManager.get("updated_on_this_boot")) \
+			or bool(UpdateManager.get("pck_loaded_this_session")) \
 			or marker_updated \
 			or (not tutorial_origin_version.is_empty() and tutorial_origin_version != current_version) \
 			or (not tutorial_origin_commit.is_empty() and tutorial_origin_commit != current_commit)
@@ -514,9 +571,10 @@ func save_game_data(explicit_write: bool = false, sync_cloud: bool = true) -> vo
 
 	if OS.has_feature("web"):
 		_sync_web_save_idbfs()
-	if sync_cloud and is_inside_tree() and get_tree().root.has_node("AccountManager"):
-		if AccountManager.can_access_online_modes():
-			AccountManager.sync_profile_to_cloud()
+	if sync_cloud:
+		var am: Variant = get_account_manager(false)
+		if am != null and am.can_access_online_modes():
+			am.sync_profile_to_cloud()
 
 func mark_tutorial_completed() -> void:
 	if not tutorial_completed or install_tutorial_state != "completed":
@@ -662,7 +720,8 @@ func _capture_world_snapshot(world_root: Node) -> Dictionary:
 	return world_data
 
 func save_active_run() -> bool:
-	if is_inside_tree() and get_tree().root.has_node("MultiplayerManager") and MultiplayerManager.is_online_session:
+	var mp: Variant = get_multiplayer_manager(false)
+	if mp != null and mp.is_online_session:
 		return false
 	if current_state != GameState.PLAYING or not is_instance_valid(player_character) or not (player_character is PlayerController):
 		return false
@@ -1107,7 +1166,8 @@ func apply_reward(reward: Dictionary) -> void:
 func deliver_stored_items(inventory: Node) -> void:
 	if is_resuming_saved_run:
 		return
-	if not MultiplayerManager.can_use_shop_items():
+	var mp: Variant = get_multiplayer_manager()
+	if mp != null and not mp.can_use_shop_items():
 		SignalBus.dialog_requested.emit(LocScript.pick(
 			"Penggunaan Item Toko dinonaktifkan oleh Host di room ini.",
 			"Shop items are disabled by the Host in this room."
@@ -1242,7 +1302,8 @@ func reset_sandbox_flags() -> void:
 	admin_god_mode = false
 
 func is_sandbox_owner_active() -> bool:
-	return is_sandbox_mode and MultiplayerManager.is_room_owner and is_in_active_gameplay()
+	var mp: Variant = get_multiplayer_manager(false)
+	return is_sandbox_mode and mp != null and mp.is_room_owner and is_in_active_gameplay()
 
 func toggle_sandbox_panel() -> void:
 	if not is_sandbox_owner_active():
@@ -1262,7 +1323,9 @@ func start_online_room_game(room: Dictionary) -> void:
 		_: diff = Difficulty.NORMAL
 	clear_run_save()
 	reset_sandbox_flags()
-	is_sandbox_mode = (str(room.get("mode", MultiplayerManager.session_mode)).to_lower() == "sandbox")
+	var mp: Variant = get_multiplayer_manager()
+	var fallback_mode: String = str(mp.session_mode) if mp != null else "singleplayer"
+	is_sandbox_mode = (str(room.get("mode", fallback_mode)).to_lower() == "sandbox")
 	var room_settings: Variant = room.get("settings", {})
 	if room_settings is Dictionary:
 		sandbox_time_scale = clampf(float((room_settings as Dictionary).get("timeScale", 1.0)), 0.25, 4.0)
@@ -1275,8 +1338,9 @@ func start_tutorial_game() -> void:
 
 func start_new_game(diff: Difficulty = Difficulty.NORMAL, tutorial: bool = false, preserve_online_session: bool = false) -> void:
 	if not preserve_online_session:
-		if is_inside_tree() and get_tree().root.has_node("MultiplayerManager") and MultiplayerManager.is_online_session:
-			MultiplayerManager.leave_room()
+		var mp_leave: Variant = get_multiplayer_manager(false)
+		if mp_leave != null and mp_leave.is_online_session:
+			mp_leave.leave_room()
 		is_sandbox_mode = false
 		sandbox_time_scale = 1.0
 		reset_sandbox_flags()
@@ -1322,7 +1386,8 @@ func start_new_game(diff: Difficulty = Difficulty.NORMAL, tutorial: bool = false
 	await get_tree().process_frame
 	_enter_act_1()
 	call_deferred("_apply_fog_state", sandbox_fog_enabled)
-	if preserve_online_session and MultiplayerManager.is_online_session and not MultiplayerManager.is_room_owner:
+	var mp_check: Variant = get_multiplayer_manager(false)
+	if preserve_online_session and mp_check != null and mp_check.is_online_session and not mp_check.is_room_owner:
 		call_deferred("_apply_client_world_state")
 
 func _sync_babak_1_progress() -> void:
@@ -1359,7 +1424,8 @@ func _sync_babak_1_progress() -> void:
 		)
 
 func _process(delta: float) -> void:
-	var in_online: bool = is_inside_tree() and get_tree().root.has_node("MultiplayerManager") and MultiplayerManager.is_online_session
+	var mp: Variant = get_multiplayer_manager(false)
+	var in_online: bool = mp != null and mp.is_online_session
 	if current_state == GameState.PLAYING and not in_online:
 		autosave_elapsed += delta
 		if autosave_elapsed >= AUTOSAVE_INTERVAL:
@@ -1372,7 +1438,7 @@ func _process(delta: float) -> void:
 		autosave_elapsed = 0.0
 	if current_state != GameState.PLAYING or get_tree().paused:
 		return
-	if in_online and not MultiplayerManager.is_room_owner:
+	if in_online and mp != null and not mp.is_room_owner:
 		_apply_client_world_state()
 		if furnace_burning:
 			furnace_time_left = maxf(0.0, furnace_time_left - delta)
@@ -1710,7 +1776,8 @@ func _on_torch_lit(_torch_id: int, total_lit: int, _req: int) -> void:
 			torches_lit >= REQUIRED_TORCHES
 		)
 	if current_act == Act.BABAK_1 and torches_lit >= REQUIRED_TORCHES and doors_barricaded >= REQUIRED_BARRICADES:
-		if not MultiplayerManager.is_online_session or MultiplayerManager.is_room_owner:
+		var mp: Variant = get_multiplayer_manager()
+		if mp == null or not mp.is_online_session or mp.is_room_owner:
 			_enter_act_2()
 		return
 	if total_lit == REQUIRED_TORCHES - 1:
@@ -1735,7 +1802,8 @@ func record_door_barricaded() -> void:
 			doors_barricaded >= REQUIRED_BARRICADES
 		)
 	if current_act == Act.BABAK_1 and torches_lit >= REQUIRED_TORCHES and doors_barricaded >= REQUIRED_BARRICADES:
-		if not MultiplayerManager.is_online_session or MultiplayerManager.is_room_owner:
+		var mp: Variant = get_multiplayer_manager()
+		if mp == null or not mp.is_online_session or mp.is_room_owner:
 			_enter_act_2()
 		return
 	if doors_barricaded == REQUIRED_BARRICADES - 1:
@@ -1771,7 +1839,8 @@ func _on_ritual_item_collected(item_name: String, count: int, total: int) -> voi
 			count >= total
 		)
 	if count >= total and current_act == Act.BABAK_2:
-		if not MultiplayerManager.is_online_session or MultiplayerManager.is_room_owner:
+		var mp: Variant = get_multiplayer_manager()
+		if mp == null or not mp.is_online_session or mp.is_room_owner:
 			_enter_act_3()
 		return
 	if count == total - 1:
@@ -1795,8 +1864,9 @@ func get_ritual_item_count() -> int:
 func trigger_victory() -> void:
 	if victory_sequence_active or death_sequence_active or current_state == GameState.GAMEOVER or current_state == GameState.VICTORY:
 		return
-	if MultiplayerManager.is_online_session and not _handling_network_victory:
-		MultiplayerManager.push_event("victory", {"reason": "ritual_complete"})
+	var mp: Variant = get_multiplayer_manager()
+	if mp != null and mp.is_online_session and not _handling_network_victory:
+		mp.push_event("victory", {"reason": "ritual_complete"})
 	victory_sequence_active = true
 	furnace_burning = false
 	clear_run_save()
@@ -1862,7 +1932,8 @@ func _execute_player_death(reason: String, ignore_extra_lives: bool = false, byp
 			death_sequence_active = false
 			return
 	# Nyawa tambahan menghidupkan kembali pemain di titik awal desa (kecuali batas pukul 05.00, force lose, sandbox, atau shop item nonaktif).
-	var allow_extra_life: bool = (not ignore_extra_lives) and (not is_sandbox_mode) and MultiplayerManager.can_use_shop_items()
+	var mp_life: Variant = get_multiplayer_manager()
+	var allow_extra_life: bool = (not ignore_extra_lives) and (not is_sandbox_mode) and (mp_life == null or mp_life.can_use_shop_items())
 	if allow_extra_life and extra_lives > 0 and is_instance_valid(player_character) and player_character.has_method("revive_from_extra_life"):
 		extra_lives -= 1
 		save_game_data()
@@ -2097,7 +2168,10 @@ func _recount_doors_barricaded() -> int:
 	return count
 
 func _apply_client_world_state() -> void:
-	var ws: Dictionary = MultiplayerManager.world_state
+	var mp: Variant = get_multiplayer_manager(false)
+	if mp == null:
+		return
+	var ws: Dictionary = mp.world_state
 	if ws.is_empty():
 		return
 
@@ -2204,11 +2278,12 @@ func _apply_client_world_state() -> void:
 				furnace_time_left = host_left
 
 func _on_multiplayer_event_received(event_type: String, payload: Dictionary, sender_name: String) -> void:
+	var am: Variant = get_account_manager(false)
 	if event_type == "player_kicked":
 		var target_uid: String = str(payload.get("targetUserId", payload.get("userId", "")))
 		var target_uname: String = str(payload.get("targetUsername", payload.get("username", "")))
-		var my_uid: String = AccountManager.user_id if (is_inside_tree() and get_tree().root.has_node("AccountManager")) else ""
-		var my_uname: String = AccountManager.username if (is_inside_tree() and get_tree().root.has_node("AccountManager")) else ""
+		var my_uid: String = am.user_id if am != null else ""
+		var my_uname: String = am.username if am != null else ""
 		if (not target_uid.is_empty() and target_uid == my_uid) or (not target_uname.is_empty() and target_uname == my_uname):
 			_handle_kicked_or_disconnected(LocScript.pick("Kamu dikeluarkan dari room oleh Host.", "You were kicked from the room by the Host."))
 		return
@@ -2219,7 +2294,7 @@ func _on_multiplayer_event_received(event_type: String, payload: Dictionary, sen
 			SignalBus.dialog_requested.emit("[SERVER] " + b_msg, 4.5)
 		return
 
-	var local_uname: String = AccountManager.username if (is_inside_tree() and get_tree().root.has_node("AccountManager")) else ""
+	var local_uname: String = am.username if am != null else ""
 	if not local_uname.is_empty() and sender_name == local_uname:
 		return
 
@@ -2259,7 +2334,8 @@ func _on_multiplayer_event_received(event_type: String, payload: Dictionary, sen
 					REQUIRED_BARRICADES,
 					doors_barricaded >= REQUIRED_BARRICADES
 				)
-				if torches_lit >= REQUIRED_TORCHES and doors_barricaded >= REQUIRED_BARRICADES and MultiplayerManager.is_room_owner:
+				var mp: Variant = get_multiplayer_manager(false)
+				if torches_lit >= REQUIRED_TORCHES and doors_barricaded >= REQUIRED_BARRICADES and mp != null and mp.is_room_owner:
 					_enter_act_2()
 		"pickup_taken":
 			var p_path: String = str(payload.get("node_path", ""))
@@ -2307,8 +2383,9 @@ func _handle_kicked_or_disconnected(reason: String) -> void:
 	is_sandbox_mode = false
 	sandbox_time_scale = 1.0
 	reset_sandbox_flags()
-	if is_inside_tree() and get_tree().root.has_node("MultiplayerManager"):
-		MultiplayerManager.reset_to_singleplayer()
+	var mp: Variant = get_multiplayer_manager(false)
+	if mp != null:
+		mp.reset_to_singleplayer()
 	if sandbox_panel and sandbox_panel.has_method("_force_close"):
 		sandbox_panel.call("_force_close")
 	if is_in_active_gameplay():
@@ -2372,8 +2449,9 @@ func _show_disconnect_notice(reason: String) -> void:
 	vbox.add_child(ok_btn)
 
 func apply_sandbox_command(cmd: String, params: Dictionary = {}, broadcast: bool = true) -> void:
-	if broadcast and MultiplayerManager.is_online_session:
-		MultiplayerManager.send_sandbox_command(cmd, params)
+	var mp: Variant = get_multiplayer_manager()
+	if broadcast and mp != null and mp.is_online_session:
+		mp.send_sandbox_command(cmd, params)
 	match cmd:
 		"god_mode":
 			admin_god_mode = bool(params.get("enabled", not admin_god_mode))
@@ -2404,7 +2482,7 @@ func apply_sandbox_command(cmd: String, params: Dictionary = {}, broadcast: bool
 					if node is LamporStateMachine:
 						(node as LamporStateMachine).velocity = Vector3.ZERO
 		"descend_lampor":
-			if not MultiplayerManager.is_online_session or MultiplayerManager.is_room_owner:
+			if mp == null or not mp.is_online_session or mp.is_room_owner:
 				for node: Node in get_tree().get_nodes_in_group("lampor"):
 					if node is LamporStateMachine:
 						var lampor := node as LamporStateMachine
@@ -2416,7 +2494,7 @@ func apply_sandbox_command(cmd: String, params: Dictionary = {}, broadcast: bool
 				if node.has_method("repel_from_kentongan"):
 					node.call("repel_from_kentongan", dur)
 		"push_lampor_away":
-			if not MultiplayerManager.is_online_session or MultiplayerManager.is_room_owner:
+			if mp == null or not mp.is_online_session or mp.is_room_owner:
 				var p_pos: Vector3 = player_character.global_position if is_instance_valid(player_character) and player_character is Node3D else Vector3.ZERO
 				for node: Node in get_tree().get_nodes_in_group("lampor"):
 					if node is LamporStateMachine:
@@ -2438,7 +2516,7 @@ func apply_sandbox_command(cmd: String, params: Dictionary = {}, broadcast: bool
 						if lampor.current_state != LamporStateMachine.State.DORMANT_SKY and lampor.current_state != LamporStateMachine.State.BANISHED:
 							lampor._set_state(LamporStateMachine.State.PATROL)
 		"pull_lampor_near":
-			if (not MultiplayerManager.is_online_session or MultiplayerManager.is_room_owner) and is_instance_valid(player_character) and player_character is Node3D:
+			if (mp == null or not mp.is_online_session or mp.is_room_owner) and is_instance_valid(player_character) and player_character is Node3D:
 				var pc_node := player_character as Node3D
 				var forward: Vector3 = -pc_node.global_transform.basis.z
 				forward.y = 0.0

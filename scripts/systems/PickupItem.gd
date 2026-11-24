@@ -150,8 +150,9 @@ func interact(player: Node) -> void:
 		GameManager.ritual_items[r_name] = true
 		var current_count: int = GameManager.get_ritual_item_count()
 		SignalBus.ritual_item_collected.emit(r_name, current_count, GameManager.TOTAL_RITUAL_ITEMS)
-		if MultiplayerManager.is_online_session:
-			MultiplayerManager.push_event("ritual_collected", {
+		var mp: Variant = GameManager.get_multiplayer_manager()
+		if mp != null and mp.is_online_session:
+			mp.push_event("ritual_collected", {
 				"ritual_name": r_name,
 				"item_id": item_id,
 				"node_path": npath_r
@@ -177,8 +178,9 @@ func interact(player: Node) -> void:
 	}
 	var success: bool = inv.add_item(item_data)
 	if success:
-		if MultiplayerManager.is_online_session:
-			MultiplayerManager.push_event("pickup_taken", {
+		var mp: Variant = GameManager.get_multiplayer_manager()
+		if mp != null and mp.is_online_session:
+			mp.push_event("pickup_taken", {
 				"item_id": item_id,
 				"node_path": _get_scene_node_path()
 			})

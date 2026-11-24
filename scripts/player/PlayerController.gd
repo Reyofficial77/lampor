@@ -1980,14 +1980,16 @@ func revive_from_extra_life() -> void:
 	SignalBus.flashlight_battery_changed.emit(flashlight_battery, 100.0)
 
 func try_friendly_revive() -> bool:
-	if not MultiplayerManager.is_online_session:
+	var mp: Variant = GameManager.get_multiplayer_manager()
+	if mp == null or not mp.is_online_session:
 		return false
-	if not bool(MultiplayerManager.get_room_setting("friendlyRevive", true)):
+	if not bool(mp.get_room_setting("friendlyRevive", true)):
 		return false
-	var my_uid: String = AccountManager.user_id
+	var am: Variant = GameManager.get_account_manager()
+	var my_uid: String = str(am.user_id) if am != null else ""
 	var has_living_teammate: bool = false
 	var alive_peer_pos: Variant = null
-	for p_var: Variant in MultiplayerManager.room_players:
+	for p_var: Variant in mp.room_players:
 		if not (p_var is Dictionary):
 			continue
 		var p: Dictionary = p_var as Dictionary
@@ -1998,8 +2000,8 @@ func try_friendly_revive() -> bool:
 		var peer_alive: bool = bool(pstate.get("isAlive", true)) if pstate is Dictionary else true
 		if peer_alive:
 			has_living_teammate = true
-			if MultiplayerManager.remote_players.has(uid):
-				var rp: Node3D = MultiplayerManager.remote_players[uid] as Node3D
+			if mp.remote_players.has(uid):
+				var rp: Node3D = mp.remote_players[uid] as Node3D
 				if is_instance_valid(rp):
 					alive_peer_pos = rp.global_position
 					break

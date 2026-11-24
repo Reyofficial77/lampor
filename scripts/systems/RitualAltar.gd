@@ -45,8 +45,9 @@ func interact(player: Node) -> void:
 		fire_mesh.visible = true
 		AudioManager.play_sound("lighter_ignite", 3.0)
 		AudioManager.play_sound("lampor_roar", 2.0)
-		if MultiplayerManager.is_online_session:
-			MultiplayerManager.push_event("furnace_started", {
+		var mp: Variant = GameManager.get_multiplayer_manager()
+		if mp != null and mp.is_online_session:
+			mp.push_event("furnace_started", {
 				"node_path": _get_scene_node_path()
 			})
 		# Pemain sudah berdiri di dalam area aman sebelum api menyala,

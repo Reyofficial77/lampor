@@ -561,9 +561,12 @@ func _refresh_toggle_states() -> void:
 func _refresh_players_list(force: bool = false) -> void:
 	if not is_instance_valid(players_vbox):
 		return
-	var host_id: String = str(MultiplayerManager.current_room.get("hostUserId", ""))
+	var mp: Variant = GameManager.get_multiplayer_manager()
+	if mp == null:
+		return
+	var host_id: String = str(mp.current_room.get("hostUserId", ""))
 	var sig_parts: PackedStringArray = PackedStringArray()
-	for p_var: Variant in MultiplayerManager.room_players:
+	for p_var: Variant in mp.room_players:
 		if p_var is Dictionary:
 			var p: Dictionary = p_var as Dictionary
 			var uid: String = str(p.get("userId", p.get("id", "")))
@@ -580,14 +583,14 @@ func _refresh_players_list(force: bool = false) -> void:
 		players_vbox.remove_child(child)
 		child.queue_free()
 
-	if MultiplayerManager.room_players.is_empty():
+	if mp.room_players.is_empty():
 		var empty_lbl := Label.new()
 		empty_lbl.text = "Belum ada pemain terhubung."
 		HorrorTheme.style_label(empty_lbl, "label-sm", HorrorTheme.TEXT_MUTED, 9)
 		players_vbox.add_child(empty_lbl)
 		return
 
-	for p_var: Variant in MultiplayerManager.room_players:
+	for p_var: Variant in mp.room_players:
 		if not (p_var is Dictionary):
 			continue
 		var p: Dictionary = p_var as Dictionary
@@ -617,7 +620,11 @@ func _refresh_players_list(force: bool = false) -> void:
 
 func _kick_peer(target_uid: String, target_name: String) -> void:
 	_set_status("Mengeluarkan %s..." % target_name)
-	var res: Dictionary = await MultiplayerManager.kick_player(target_uid)
+	var mp: Variant = GameManager.get_multiplayer_manager()
+	if mp == null:
+		_set_status("Layanan multiplayer tidak tersedia.")
+		return
+	var res: Dictionary = await mp.kick_player(target_uid)
 	if bool(res.get("ok", false)):
 		_set_status("%s dikeluarkan dari room." % target_name)
 		_refresh_players_list(true)

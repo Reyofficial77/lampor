@@ -371,7 +371,8 @@ func open_choice(act_num: int, pair: Dictionary) -> bool:
 		player.release_all_held_inputs()
 
 	_prev_paused = get_tree().paused
-	if not MultiplayerManager.is_online_session:
+	var mp: Variant = GameManager.get_multiplayer_manager()
+	if mp == null or not mp.is_online_session:
 		get_tree().paused = true
 		_paused_tree_by_overlay = true
 	else:

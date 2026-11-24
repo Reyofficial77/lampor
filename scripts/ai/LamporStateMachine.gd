@@ -73,7 +73,8 @@ func _ready() -> void:
 	SignalBus.lampor_state_changed.connect(func(new_state_str: String) -> void:
 		if GameManager.is_resuming_saved_run:
 			return
-		if _is_lampor_disabled_by_room() or (MultiplayerManager.is_online_session and not MultiplayerManager.is_room_owner):
+		var mp: Variant = _mp()
+		if _is_lampor_disabled_by_room() or (mp != null and mp.is_online_session and not mp.is_room_owner):
 			return
 		if new_state_str == "CHASE":
 			if current_state == State.DORMANT_SKY:
@@ -86,8 +87,12 @@ func _ready() -> void:
 	
 	call_deferred("_setup_waypoints")
 
+func _mp() -> Variant:
+	return GameManager.get_multiplayer_manager()
+
 func _is_lampor_disabled_by_room() -> bool:
-	return MultiplayerManager.is_online_session and not bool(MultiplayerManager.get_room_setting("lamporEnabled", true))
+	var mp: Variant = _mp()
+	return mp != null and mp.is_online_session and not bool(mp.get_room_setting("lamporEnabled", true))
 
 # ---------- Model keranda (dibangun lewat kode) ----------
 
@@ -284,13 +289,15 @@ func _setup_waypoints() -> void:
 func _on_act_started(act_number: int, _title: String) -> void:
 	if GameManager.is_resuming_saved_run or _is_lampor_disabled_by_room():
 		return
-	if MultiplayerManager.is_online_session and not MultiplayerManager.is_room_owner:
+	var mp: Variant = _mp()
+	if mp != null and mp.is_online_session and not mp.is_room_owner:
 		return
 	if act_number >= 2 and current_state == State.DORMANT_SKY:
 		trigger_descent(true)
 
 func trigger_descent(immediate_chase: bool = true) -> void:
-	if _is_lampor_disabled_by_room() or (MultiplayerManager.is_online_session and not MultiplayerManager.is_room_owner):
+	var mp: Variant = _mp()
+	if _is_lampor_disabled_by_room() or (mp != null and mp.is_online_session and not mp.is_room_owner):
 		return
 	if current_state != State.DORMANT_SKY:
 		return
@@ -407,7 +414,8 @@ func _physics_process(delta: float) -> void:
 		SignalBus.lampor_stare_detected.emit(0.0)
 		return
 
-	if MultiplayerManager.is_online_session and not MultiplayerManager.is_room_owner:
+	var mp: Variant = _mp()
+	if mp != null and mp.is_online_session and not mp.is_room_owner:
 		_sync_from_network_state(delta)
 		return
 
@@ -613,7 +621,8 @@ func _process_chase(delta: float, dist_to_player: float, hover_bob: float) -> vo
 func _start_catch() -> void:
 	if is_catching or GameManager.sandbox_freeze_lampor or _is_lampor_disabled_by_room():
 		return
-	if MultiplayerManager.is_online_session and not MultiplayerManager.is_room_owner:
+	var mp: Variant = _mp()
+	if mp != null and mp.is_online_session and not mp.is_room_owner:
 		return
 	is_catching = true
 	velocity = Vector3.ZERO
@@ -698,7 +707,8 @@ func _give_up_chase() -> void:
 func _on_player_noise(level: float, noise_pos: Vector3) -> void:
 	if _is_lampor_disabled_by_room() or GameManager.sandbox_freeze_lampor:
 		return
-	if MultiplayerManager.is_online_session and not MultiplayerManager.is_room_owner:
+	var mp: Variant = _mp()
+	if mp != null and mp.is_online_session and not mp.is_room_owner:
 		return
 	if current_state == State.DORMANT_SKY or current_state == State.DESCENDING or current_state == State.REPELLED or repel_timer > 0.0:
 		return
@@ -781,7 +791,10 @@ func _parse_network_state(raw_state: Variant) -> State:
 func _sync_from_network_state(delta: float) -> void:
 	velocity = Vector3.ZERO
 	hover_time += delta * 2.0
-	var raw_lampor: Variant = MultiplayerManager.world_state.get("lampor", {})
+	var mp: Variant = _mp()
+	if mp == null:
+		return
+	var raw_lampor: Variant = mp.world_state.get("lampor", {})
 	if raw_lampor is Dictionary and not (raw_lampor as Dictionary).is_empty():
 		var ld: Dictionary = raw_lampor as Dictionary
 		if ld.has("pos"):

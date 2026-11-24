@@ -50,8 +50,9 @@ func interact(player: Node) -> void:
 		_update_visuals()
 		AudioManager.play_sound("lighter_ignite", 2.0)
 		SignalBus.torch_lit.emit(torch_id, GameManager.torches_lit, GameManager.REQUIRED_TORCHES)
-		if MultiplayerManager.is_online_session:
-			MultiplayerManager.push_event("torch_lit", {
+		var mp: Variant = GameManager.get_multiplayer_manager()
+		if mp != null and mp.is_online_session:
+			mp.push_event("torch_lit", {
 				"torch_id": torch_id,
 				"node_path": _get_scene_node_path(),
 				"is_lit": true

@@ -401,7 +401,7 @@ func enter_guest_mode() -> void:
 	SignalBus.account_state_changed.emit()
 
 func logout_account() -> void:
-	var mp: Node = get_node_or_null("/root/MultiplayerManager")
+	var mp: Variant = GameManager.get_multiplayer_manager(false)
 	if mp and bool(mp.get("is_online_session")) and mp.has_method("leave_room"):
 		await mp.call("leave_room")
 	elif mp and mp.has_method("reset_to_singleplayer"):

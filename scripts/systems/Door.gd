@@ -154,9 +154,10 @@ func _get_scene_node_path() -> String:
 	return name
 
 func _broadcast_door_state() -> void:
-	if not MultiplayerManager.is_online_session:
+	var mp: Variant = GameManager.get_multiplayer_manager()
+	if mp == null or not mp.is_online_session:
 		return
-	MultiplayerManager.push_event("door_state", {
+	mp.push_event("door_state", {
 		"node_path": _get_scene_node_path(),
 		"is_open": is_open,
 		"is_barricaded": is_barricaded

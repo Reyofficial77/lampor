@@ -26,18 +26,24 @@ var _is_leaving: bool = false
 var _last_room_status: String = ""
 var _pending_events: Array[Dictionary] = []
 
+func _am() -> Variant:
+	return GameManager.get_account_manager()
+
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	SignalBus.account_state_changed.connect(_on_account_state_changed)
 
 func _on_account_state_changed() -> void:
-	if is_online_session and not AccountManager.can_access_online_modes() and not _sync_in_flight and not _is_leaving:
-		var reason: String = AccountManager.last_error if not AccountManager.last_error.is_empty() else LocScript.network_error_label(401)
+	var am: Variant = _am()
+	if is_online_session and (am == null or not am.can_access_online_modes()) and not _sync_in_flight and not _is_leaving:
+		var am_err: String = str(am.last_error) if am != null else ""
+		var reason: String = am_err if not am_err.is_empty() else LocScript.network_error_label(401)
 		reset_to_singleplayer()
 		SignalBus.multiplayer_disconnected.emit(reason)
 
 func _process(delta: float) -> void:
-	if not is_online_session or not AccountManager.can_access_online_modes() or current_room.is_empty():
+	var am: Variant = _am()
+	if not is_online_session or am == null or not am.can_access_online_modes() or current_room.is_empty():
 		return
 	if _sync_in_flight or _is_leaving:
 		return
@@ -49,17 +55,23 @@ func _process(delta: float) -> void:
 		_sync_tick()
 
 func check_server_health() -> Dictionary:
+	var am: Variant = _am()
+	if am == null:
+		return {"ok": false, "status": 0, "data": {}, "message": LocScript.pick("Sistem akun tidak tersedia.", "Account system unavailable.")}
 	var started_ms: int = Time.get_ticks_msec()
-	var res: Dictionary = await AccountManager.api_request("GET", "/api/health", null, false)
+	var res: Dictionary = await am.api_request("GET", "/api/health", null, false)
 	if bool(res.get("ok", false)):
 		ping_ms = maxi(1, Time.get_ticks_msec() - started_ms)
 	return res
 
 func list_rooms(mode_filter: String = "all") -> Dictionary:
+	var am: Variant = _am()
+	if am == null:
+		return {"ok": false, "status": 0, "data": {}, "message": LocScript.pick("Sistem akun tidak tersedia.", "Account system unavailable.")}
 	var safe_mode: String = mode_filter.strip_edges().to_lower()
 	if safe_mode not in ["all", "multiplayer", "sandbox"]:
 		safe_mode = "all"
-	var res: Dictionary = await AccountManager.api_request("GET", "/api/rooms/list?mode=" + safe_mode, null, true)
+	var res: Dictionary = await am.api_request("GET", "/api/rooms/list?mode=" + safe_mode, null, true)
 	if bool(res.get("ok", false)):
 		var data: Dictionary = res.get("data", {})
 		var rooms_raw: Variant = data.get("rooms", [])
@@ -96,7 +108,10 @@ func create_room(config: Dictionary) -> Dictionary:
 		body["settings"] = settings_copy
 	body["allowLateJoin"] = late_join
 
-	var res: Dictionary = await AccountManager.api_request("POST", "/api/rooms/create", body, true)
+	var am: Variant = _am()
+	if am == null:
+		return {"ok": false, "status": 0, "data": {}, "message": LocScript.pick("Sistem akun tidak tersedia.", "Account system unavailable.")}
+	var res: Dictionary = await am.api_request("POST", "/api/rooms/create", body, true)
 	if bool(res.get("ok", false)):
 		_apply_room_response(res.get("data", {}), true)
 		is_room_owner = true
@@ -113,7 +128,10 @@ func join_room(room_id_or_code: String, password: String = "") -> Dictionary:
 	if not password.is_empty():
 		body["password"] = password
 
-	var res: Dictionary = await AccountManager.api_request("POST", "/api/rooms/join", body, true)
+	var am: Variant = _am()
+	if am == null:
+		return {"ok": false, "status": 0, "data": {}, "message": LocScript.pick("Sistem akun tidak tersedia.", "Account system unavailable.")}
+	var res: Dictionary = await am.api_request("POST", "/api/rooms/join", body, true)
 	if bool(res.get("ok", false)):
 		_apply_room_response(res.get("data", {}), true)
 		SignalBus.multiplayer_room_updated.emit(current_room, room_players)
@@ -124,29 +142,36 @@ func join_room(room_id_or_code: String, password: String = "") -> Dictionary:
 func leave_room() -> void:
 	if _is_leaving:
 		return
+	var am: Variant = _am()
 	var room_id: String = _get_current_room_id()
-	var should_notify_server: bool = is_online_session and not room_id.is_empty() and AccountManager.can_access_online_modes()
+	var should_notify_server: bool = is_online_session and not room_id.is_empty() and am != null and am.can_access_online_modes()
 	_is_leaving = true
 	reset_to_singleplayer()
-	if should_notify_server:
-		await AccountManager.api_request("POST", "/api/rooms/leave", {"roomId": room_id}, true)
+	if should_notify_server and am != null:
+		await am.api_request("POST", "/api/rooms/leave", {"roomId": room_id}, true)
 	_is_leaving = false
 
 func set_ready(ready: bool) -> Dictionary:
+	var am: Variant = _am()
+	if am == null:
+		return {"ok": false, "status": 0, "data": {}, "message": LocScript.pick("Sistem akun tidak tersedia.", "Account system unavailable.")}
 	var room_id: String = _get_current_room_id()
 	if room_id.is_empty():
 		return {"ok": false, "status": 0, "data": {}, "message": LocScript.pick("Tidak sedang berada di room.", "Not currently in a room.")}
-	var res: Dictionary = await AccountManager.api_request("POST", "/api/rooms/ready", {"roomId": room_id, "isReady": ready}, true)
+	var res: Dictionary = await am.api_request("POST", "/api/rooms/ready", {"roomId": room_id, "isReady": ready}, true)
 	if bool(res.get("ok", false)):
 		_apply_room_response(res.get("data", {}), false)
 		SignalBus.multiplayer_room_updated.emit(current_room, room_players)
 	return res
 
 func start_room_game() -> Dictionary:
+	var am: Variant = _am()
+	if am == null:
+		return {"ok": false, "status": 0, "data": {}, "message": LocScript.pick("Sistem akun tidak tersedia.", "Account system unavailable.")}
 	var room_id: String = _get_current_room_id()
 	if room_id.is_empty():
 		return {"ok": false, "status": 0, "data": {}, "message": LocScript.pick("Tidak sedang berada di room.", "Not currently in a room.")}
-	var res: Dictionary = await AccountManager.api_request("POST", "/api/rooms/start", {"roomId": room_id}, true)
+	var res: Dictionary = await am.api_request("POST", "/api/rooms/start", {"roomId": room_id}, true)
 	if bool(res.get("ok", false)):
 		var prev_status: String = _last_room_status
 		_apply_room_response(res.get("data", {}), false)
@@ -156,10 +181,13 @@ func start_room_game() -> Dictionary:
 	return res
 
 func kick_player(target_user_id: String) -> Dictionary:
+	var am: Variant = _am()
+	if am == null:
+		return {"ok": false, "status": 0, "data": {}, "message": LocScript.pick("Sistem akun tidak tersedia.", "Account system unavailable.")}
 	var room_id: String = _get_current_room_id()
 	if room_id.is_empty():
 		return {"ok": false, "status": 0, "data": {}, "message": LocScript.pick("Tidak sedang berada di room.", "Not currently in a room.")}
-	var res: Dictionary = await AccountManager.api_request("POST", "/api/rooms/kick", {"roomId": room_id, "targetUserId": target_user_id}, true)
+	var res: Dictionary = await am.api_request("POST", "/api/rooms/kick", {"roomId": room_id, "targetUserId": target_user_id}, true)
 	if bool(res.get("ok", false)):
 		_apply_room_response(res.get("data", {}), false)
 		SignalBus.multiplayer_room_updated.emit(current_room, room_players)
@@ -235,7 +263,9 @@ func _apply_room_response(data: Dictionary, is_new_session: bool) -> void:
 		server_announcement = str(data.get("announcement", ""))
 
 	var host_uid: String = str(current_room.get("hostUserId", current_room.get("host_user_id", "")))
-	is_room_owner = (not AccountManager.user_id.is_empty()) and (host_uid == AccountManager.user_id)
+	var am: Variant = _am()
+	var my_uid: String = str(am.user_id) if am != null else ""
+	is_room_owner = (not my_uid.is_empty()) and (host_uid == my_uid)
 	is_online_session = not current_room.is_empty()
 	session_mode = str(current_room.get("mode", "multiplayer")).strip_edges().to_lower()
 	_last_room_status = str(current_room.get("status", "lobby")).strip_edges().to_lower()
@@ -314,7 +344,8 @@ func _collect_owner_world_state() -> Dictionary:
 	}
 
 func _sync_tick() -> void:
-	if _sync_in_flight or _is_leaving or not is_online_session or not AccountManager.can_access_online_modes():
+	var am: Variant = _am()
+	if _sync_in_flight or _is_leaving or not is_online_session or am == null or not am.can_access_online_modes():
 		return
 	var active_room_id: String = _get_current_room_id()
 	if active_room_id.is_empty():
@@ -340,7 +371,7 @@ func _sync_tick() -> void:
 			body["worldState"] = _collect_owner_world_state()
 
 	var started_ms: int = Time.get_ticks_msec()
-	var res: Dictionary = await AccountManager.api_request("POST", "/api/rooms/sync", body, true)
+	var res: Dictionary = await am.api_request("POST", "/api/rooms/sync", body, true)
 	_sync_in_flight = false
 
 	if _is_leaving or not is_online_session or _get_current_room_id() != active_room_id:
@@ -429,13 +460,15 @@ func _sync_remote_players() -> void:
 
 	var active_remote_ids: Dictionary = {}
 	var host_uid: String = str(current_room.get("hostUserId", current_room.get("host_user_id", "")))
+	var am: Variant = _am()
+	var my_uid: String = str(am.user_id) if am != null else ""
 
 	for p: Variant in room_players:
 		if not p is Dictionary:
 			continue
 		var p_dict: Dictionary = p as Dictionary
 		var uid: String = str(p_dict.get("userId", p_dict.get("user_id", p_dict.get("id", "")))).strip_edges()
-		if uid.is_empty() or uid == AccountManager.user_id:
+		if uid.is_empty() or uid == my_uid:
 			continue
 		active_remote_ids[uid] = true
 

@@ -21,7 +21,7 @@ const CHARACTER_MODEL_PATHS: Dictionary = {
 	"male": "res://assets/models/player/adult_male.glb",
 	"female": "res://assets/models/player/adult_female.glb"
 }
-const DEFAULT_SERVER_URL: String = "https://lampor-website.vercel.app"
+const DEFAULT_SERVER_URL: String = "https://lamporofficial.vercel.app"
 
 const REBINDABLE_ACTIONS: Array[String] = [
 	"move_forward",
@@ -133,8 +133,7 @@ func _apply_config_values(config: ConfigFile) -> void:
 		mobile_button_positions = loaded_button_positions.duplicate(true)
 	language = LocScript.normalize_language(str(config.get_value("general", "language", DEFAULT_LANGUAGE)))
 	character_model = normalize_character_model(str(config.get_value("general", "character_model", DEFAULT_CHARACTER_MODEL)))
-	var saved_server_url: String = _sanitize_server_url(str(config.get_value("network", "server_base_url", DEFAULT_SERVER_URL)))
-	server_base_url = saved_server_url if not saved_server_url.is_empty() else DEFAULT_SERVER_URL
+	server_base_url = DEFAULT_SERVER_URL
 	_sync_server_url_to_account_manager()
 	for action: String in REBINDABLE_ACTIONS:
 		if config.has_section_key("keybinds", action):
@@ -157,7 +156,6 @@ func _save_settings() -> void:
 	config.set_value("mobile", "joystick_scale", mobile_joystick_scale)
 	config.set_value("mobile", "joystick_position", mobile_joystick_position)
 	config.set_value("mobile", "button_positions", mobile_button_positions)
-	config.set_value("network", "server_base_url", server_base_url)
 	for action: String in REBINDABLE_ACTIONS:
 		if keybinds.has(action):
 			config.set_value("keybinds", action, keybinds[action])

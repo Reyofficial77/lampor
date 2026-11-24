@@ -127,12 +127,6 @@ var account_profile_section: VBoxContainer
 var account_profile_summary_label: Label
 var account_sync_btn: Button
 var account_logout_btn: Button
-var server_settings_toggle_btn: Button
-var server_settings_box: VBoxContainer
-var server_url_input: LineEdit
-var server_save_btn: Button
-var server_test_btn: Button
-var server_test_label: Label
 var guest_section: VBoxContainer
 var guest_btn: Button
 var account_close_btn: Button
@@ -2426,49 +2420,6 @@ func _build_account_modal() -> void:
 	account_status_label.visible = false
 	stack.add_child(account_status_label)
 
-	stack.add_child(HorrorTheme.make_hairline_divider())
-
-	server_settings_toggle_btn = _make_button(LocScript.pick("PENGATURAN SERVER ▸", "SERVER SETTINGS ▸"), false, "ghost")
-	server_settings_toggle_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	server_settings_toggle_btn.custom_minimum_size.y = 36.0
-	server_settings_toggle_btn.pressed.connect(_toggle_server_settings_box)
-	stack.add_child(server_settings_toggle_btn)
-
-	server_settings_box = VBoxContainer.new()
-	server_settings_box.visible = false
-	server_settings_box.add_theme_constant_override("separation", 8)
-	stack.add_child(server_settings_box)
-
-	var srv_url_lbl := _make_label(LocScript.pick("URL Server Vercel / Lokal", "Vercel / Local Server URL"), 11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm")
-	srv_url_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	server_settings_box.add_child(srv_url_lbl)
-
-	server_url_input = LineEdit.new()
-	server_url_input.text = SettingsManager.server_base_url
-	server_url_input.placeholder_text = "https://lampor-website.vercel.app"
-	server_url_input.custom_minimum_size.y = 40.0
-	HorrorTheme.style_line_edit(server_url_input)
-	server_settings_box.add_child(server_url_input)
-
-	var srv_btn_row := HBoxContainer.new()
-	srv_btn_row.add_theme_constant_override("separation", 8)
-	server_settings_box.add_child(srv_btn_row)
-
-	server_save_btn = _make_button(LocScript.pick("SIMPAN URL", "SAVE URL"), false, "secondary")
-	server_save_btn.custom_minimum_size.y = 38.0
-	server_save_btn.pressed.connect(_on_server_save_pressed)
-	srv_btn_row.add_child(server_save_btn)
-
-	server_test_btn = _make_button(LocScript.pick("TES KONEKSI", "TEST CONNECTION"), false, "secondary")
-	server_test_btn.custom_minimum_size.y = 38.0
-	server_test_btn.pressed.connect(_on_server_test_pressed)
-	srv_btn_row.add_child(server_test_btn)
-
-	server_test_label = _make_label("", 11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm")
-	server_test_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	server_test_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	server_settings_box.add_child(server_test_label)
-
 	guest_section = VBoxContainer.new()
 	guest_section.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	guest_section.add_theme_constant_override("separation", 8)
@@ -2500,8 +2451,8 @@ func _build_account_modal() -> void:
 	body.add_child(account_close_btn)
 
 func _open_account_modal(tab_idx: int = 0) -> void:
-	if server_url_input:
-		server_url_input.text = SettingsManager.server_base_url
+	if account_scroll:
+		account_scroll.scroll_vertical = 0
 	_set_account_status("", HorrorTheme.ON_SURFACE_VARIANT)
 	_select_account_tab(tab_idx)
 	_refresh_account_ui()
@@ -2523,15 +2474,6 @@ func _select_account_tab(tab_idx: int) -> void:
 		account_submit_btn.text = LocScript.pick("BUAT AKUN", "CREATE ACCOUNT") if is_register else LocScript.pick("MASUK", "SIGN IN")
 	_set_account_status("", HorrorTheme.ON_SURFACE_VARIANT)
 
-func _toggle_server_settings_box() -> void:
-	if not server_settings_box:
-		return
-	server_settings_box.visible = not server_settings_box.visible
-	if server_settings_toggle_btn:
-		server_settings_toggle_btn.text = LocScript.pick("PENGATURAN SERVER ▾", "SERVER SETTINGS ▾") if server_settings_box.visible else LocScript.pick("PENGATURAN SERVER ▸", "SERVER SETTINGS ▸")
-	if server_settings_box.visible and account_scroll:
-		call_deferred("_scroll_to_bottom", account_scroll)
-
 func _scroll_to_bottom(sc: ScrollContainer) -> void:
 	if not is_instance_valid(sc):
 		return
@@ -2548,7 +2490,7 @@ func _set_account_status(msg: String, col: Color = HorrorTheme.ON_SURFACE_VARIAN
 
 func _set_account_busy(busy: bool) -> void:
 	_account_busy = busy
-	for btn: Button in [account_submit_btn, guest_btn, account_sync_btn, account_logout_btn, server_save_btn, server_test_btn, account_login_tab_btn, account_register_tab_btn]:
+	for btn: Button in [account_submit_btn, guest_btn, account_sync_btn, account_logout_btn, account_login_tab_btn, account_register_tab_btn]:
 		if is_instance_valid(btn):
 			btn.disabled = busy
 			btn.mouse_default_cursor_shape = Control.CURSOR_ARROW if busy else Control.CURSOR_POINTING_HAND
@@ -2728,64 +2670,6 @@ func _on_account_logout_pressed() -> void:
 	_select_account_tab(0)
 	_refresh_account_ui()
 	_set_account_status(LocScript.pick("Kamu telah keluar. Masuk kembali atau pilih Mode Guest.", "Signed out. Sign in again or choose Guest Mode."), HorrorTheme.ON_SURFACE_VARIANT)
-
-func _on_server_save_pressed() -> void:
-	if not server_url_input:
-		return
-	var raw: String = server_url_input.text.strip_edges()
-	var cleaned: String = SettingsManager.set_server_base_url(raw)
-	if cleaned.is_empty():
-		if server_test_label:
-			server_test_label.text = LocScript.pick("URL server tidak valid. Harus diawali http:// atau https://.", "Invalid server URL. Must start with http:// or https://.")
-			server_test_label.add_theme_color_override("font_color", HorrorTheme.ERROR)
-		return
-	var am: Variant = _am()
-	if am != null:
-		am.server_base_url = cleaned
-	server_url_input.text = cleaned
-	if server_test_label:
-		server_test_label.text = LocScript.pick("URL server disimpan: %s" % cleaned, "Server URL saved: %s" % cleaned)
-		server_test_label.add_theme_color_override("font_color", HorrorTheme.SUCCESS_SAGE)
-
-func _on_server_test_pressed() -> void:
-	if _account_busy:
-		return
-	var am: Variant = _am()
-	if server_url_input and not server_url_input.text.strip_edges().is_empty():
-		var cleaned: String = SettingsManager.set_server_base_url(server_url_input.text)
-		if cleaned.is_empty():
-			if server_test_label:
-				server_test_label.text = LocScript.pick("URL server tidak valid. Harus diawali http:// atau https://.", "Invalid server URL. Must start with http:// or https://.")
-				server_test_label.add_theme_color_override("font_color", HorrorTheme.ERROR)
-			return
-		if am != null:
-			am.server_base_url = cleaned
-		server_url_input.text = cleaned
-	_set_account_busy(true)
-	if server_test_label:
-		server_test_label.text = LocScript.pick("Menguji koneksi ke %s..." % SettingsManager.server_base_url, "Testing connection to %s..." % SettingsManager.server_base_url)
-		server_test_label.add_theme_color_override("font_color", HorrorTheme.ON_SURFACE_VARIANT)
-	var mp: Variant = _mp()
-	var res: Dictionary = await mp.check_server_health() if mp != null else {"ok": false, "message": LocScript.pick("Layanan jaringan tidak tersedia.", "Network service unavailable.")}
-	if not is_instance_valid(self) or not is_inside_tree():
-		return
-	_set_account_busy(false)
-	if server_test_label:
-		if bool(res.get("ok", false)):
-			var data: Dictionary = _unwrap_payload(res)
-			var ver: String = str(data.get("version", "1.3.0"))
-			var db_ms: int = int(data.get("dbLatencyMs", 0))
-			var maint: bool = bool(data.get("maintenanceMode", false))
-			if maint:
-				var m_msg: String = str(data.get("maintenanceMessage", ""))
-				server_test_label.text = LocScript.pick("Server %s dalam MAINTENANCE (%s)" % [ver, m_msg], "Server %s in MAINTENANCE (%s)" % [ver, m_msg])
-				server_test_label.add_theme_color_override("font_color", HorrorTheme.RELIC_BRASS)
-			else:
-				server_test_label.text = LocScript.pick("Terhubung! Versi %s · DB %d ms" % [ver, db_ms], "Connected! Version %s · DB %d ms" % [ver, db_ms])
-				server_test_label.add_theme_color_override("font_color", HorrorTheme.SUCCESS_SAGE)
-		else:
-			server_test_label.text = _extract_error(res, "Gagal menghubungi server.", "Could not reach server.")
-			server_test_label.add_theme_color_override("font_color", HorrorTheme.ERROR)
 
 # ---------- Peramban Server Multiplayer & Sandbox ----------
 

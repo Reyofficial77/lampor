@@ -85,13 +85,9 @@ func validate_credentials_format(uname: String, pwd: String, is_register: bool) 
 	return ""
 
 func _get_effective_base_url() -> String:
-	var base: String = server_base_url.strip_edges()
-	if base.is_empty():
-		base = SettingsManager.server_base_url
+	var base: String = SettingsManager.DEFAULT_SERVER_URL.strip_edges()
 	while base.ends_with("/"):
 		base = base.left(base.length() - 1)
-	if base.is_empty():
-		base = SettingsManager.DEFAULT_SERVER_URL
 	return base
 
 func _transport_error_message(result_code: int) -> String:
@@ -203,7 +199,12 @@ func api_request(method: String, path: String, body: Variant = null, use_auth: b
 	var body_ok: bool = bool(parsed_data.get("ok", http_ok)) if not parsed_data.is_empty() else http_ok
 	var final_ok: bool = http_ok and body_ok
 
-	var msg: String = str(parsed_data.get("message", parsed_data.get("error", ""))).strip_edges()
+	var raw_err: Variant = parsed_data.get("message", parsed_data.get("error", ""))
+	var msg: String = ""
+	if raw_err is Dictionary:
+		msg = str((raw_err as Dictionary).get("message", (raw_err as Dictionary).get("error", ""))).strip_edges()
+	else:
+		msg = str(raw_err).strip_edges()
 	var ban_reason: String = str(parsed_data.get("reason", "")).strip_edges()
 	if not ban_reason.is_empty() and not msg.contains(ban_reason):
 		msg = (msg + " (" + ban_reason + ")") if not msg.is_empty() else ban_reason

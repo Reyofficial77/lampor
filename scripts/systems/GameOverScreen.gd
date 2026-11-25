@@ -74,6 +74,7 @@ func _build_horror_layout() -> void:
 	title_box.alignment = BoxContainer.ALIGNMENT_CENTER
 	title_box.add_theme_constant_override("separation", 12)
 	HorrorTheme.style_label(title_label, "display", HorrorTheme.ACCENT, 34)
+	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title_label.add_theme_constant_override("outline_size", 6)
 	title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 
@@ -86,6 +87,7 @@ func _build_horror_layout() -> void:
 	title_box.move_child(rule_line, 1)
 
 	HorrorTheme.style_label(reason_label, "body-lg", HorrorTheme.ON_SURFACE, 16)
+	reason_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	reason_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 
 	reward_label = Label.new()

@@ -7,6 +7,7 @@ const FATE_CARD_SYSTEM_SCRIPT = preload("res://scripts/systems/FateCardSystem.gd
 const FATE_CARD_OVERLAY_SCRIPT = preload("res://scripts/ui/FateCardOverlay.gd")
 const HORROR_TITLE_FONT: Font = preload("res://assets/fonts/HorrorTitle.ttf")
 const LocScript = preload("res://scripts/systems/Loc.gd")
+const ProfanityFilterScript = preload("res://scripts/systems/ProfanityFilter.gd")
 
 @onready var interaction_label: Label = $CenterContainer/InteractionLabel
 @onready var act_banner: Label = $CenterContainer/ActBanner
@@ -105,6 +106,7 @@ var cached_inventory_slots: Array = []
 var hud_bag_button: Button = null
 var touch_run_button: Button = null
 var sandbox_touch_btn: Button = null
+var admin_touch_btn: Button = null
 var mp_overlay_panel: PanelContainer = null
 var mp_room_title_lbl: Label = null
 var mp_room_meta_lbl: Label = null
@@ -114,6 +116,7 @@ var mp_roster_vbox: VBoxContainer = null
 var _mp_refresh_elapsed: float = 0.0
 var _mp_last_sig: String = ""
 var _last_sandbox_hint_active: bool = false
+var _last_admin_hint_active: bool = false
 var _pause_settings_box: VBoxContainer = null
 var _pause_language_option: OptionButton = null
 var _pause_listening_keybind_action: String = ""
@@ -153,7 +156,12 @@ func _ready() -> void:
 	SignalBus.fate_card_applied.connect(_on_fate_card_applied)
 	SignalBus.fate_cards_reset.connect(_on_fate_cards_reset)
 	if SignalBus.has_signal("multiplayer_room_updated"):
-		SignalBus.multiplayer_room_updated.connect(func(_r: Dictionary, _p: Array) -> void: _refresh_online_room_overlay(true))
+		SignalBus.multiplayer_room_updated.connect(func(_r: Dictionary, _p: Array) -> void:
+			_refresh_host_and_admin_controls()
+			_refresh_online_room_overlay(true)
+		)
+	if SignalBus.has_signal("account_state_changed"):
+		SignalBus.account_state_changed.connect(_refresh_host_and_admin_controls)
 	SettingsManager.keybinds_changed.connect(_on_settings_keybinds_changed)
 	SettingsManager.language_changed.connect(_on_language_changed)
 
@@ -601,9 +609,15 @@ func _populate_pause_settings_box() -> void:
 	lang_opt.custom_minimum_size.y = 42.0
 	lang_opt.add_item("Indonesia (ID)")
 	lang_opt.add_item("English (EN-US)")
-	lang_opt.select(1 if SettingsManager.is_en() else 0)
+	var pause_is_en: bool = SettingsManager.is_en() if SettingsManager.has_method("is_en") else LocScript.is_en()
+	lang_opt.select(1 if pause_is_en else 0)
 	lang_opt.item_selected.connect(func(index: int) -> void:
-		SettingsManager.set_language("en_US" if index == 1 else "id")
+		var target_lang: String = "en_US" if index == 1 else "id"
+		if SettingsManager.has_method("set_language"):
+			SettingsManager.set_language(target_lang)
+		else:
+			LocScript.set_language(target_lang)
+			_on_language_changed(target_lang)
 	)
 	HorrorTheme.style_option_button(lang_opt)
 	box.add_child(lang_opt)
@@ -634,37 +648,40 @@ func _populate_pause_settings_box() -> void:
 	HorrorTheme.style_check_button(auto_update)
 	box.add_child(auto_update)
 
-	box.add_child(HorrorTheme.make_hairline_divider())
-	var kb_title := Label.new()
-	kb_title.text = LocScript.pick("KEYBINDS (KLIK UNTUK UBAH)", "KEYBINDINGS (CLICK TO REBIND)")
-	HorrorTheme.style_label(kb_title, "label-sm", HorrorTheme.PRIMARY, 12)
-	box.add_child(kb_title)
-	for action: String in SettingsManager.REBINDABLE_ACTIONS:
-		var k_row := HBoxContainer.new()
-		k_row.add_theme_constant_override("separation", 8)
-		var k_lbl := Label.new()
-		k_lbl.text = LocScript.action_label(action)
-		k_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		HorrorTheme.style_label(k_lbl, "label-sm", HorrorTheme.ON_SURFACE, 12)
-		k_row.add_child(k_lbl)
-		var k_btn := Button.new()
-		k_btn.text = SettingsManager.get_action_key_text(action)
-		k_btn.custom_minimum_size = Vector2(108.0, 34.0)
-		HorrorTheme.style_button(k_btn, "secondary", 11, true)
-		k_btn.pressed.connect(func() -> void: _begin_pause_keybind_listen(action))
-		k_row.add_child(k_btn)
-		box.add_child(k_row)
-		_pause_keybind_buttons[action] = k_btn
-	var kb_reset := Button.new()
-	kb_reset.text = LocScript.pick("RESET TOMBOL BAWAAN", "RESET DEFAULT KEYBINDS")
-	kb_reset.custom_minimum_size.y = 38.0
-	HorrorTheme.style_button(kb_reset, "ghost", 11, true)
-	kb_reset.pressed.connect(func() -> void:
-		_cancel_pause_keybind_listening()
-		SettingsManager.reset_keybinds()
-		_refresh_pause_keybind_buttons()
-	)
-	box.add_child(kb_reset)
+	var pause_actions: Array = SettingsManager.get("REBINDABLE_ACTIONS") if "REBINDABLE_ACTIONS" in SettingsManager else []
+	if not pause_actions.is_empty():
+		box.add_child(HorrorTheme.make_hairline_divider())
+		var kb_title := Label.new()
+		kb_title.text = LocScript.pick("KEYBINDS (KLIK UNTUK UBAH)", "KEYBINDINGS (CLICK TO REBIND)")
+		HorrorTheme.style_label(kb_title, "label-sm", HorrorTheme.PRIMARY, 12)
+		box.add_child(kb_title)
+		for action: String in pause_actions:
+			var k_row := HBoxContainer.new()
+			k_row.add_theme_constant_override("separation", 8)
+			var k_lbl := Label.new()
+			k_lbl.text = LocScript.action_label(action)
+			k_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			HorrorTheme.style_label(k_lbl, "label-sm", HorrorTheme.ON_SURFACE, 12)
+			k_row.add_child(k_lbl)
+			var k_btn := Button.new()
+			k_btn.text = SettingsManager.get_action_key_text(action) if SettingsManager.has_method("get_action_key_text") else action.to_upper()
+			k_btn.custom_minimum_size = Vector2(108.0, 34.0)
+			HorrorTheme.style_button(k_btn, "secondary", 11, true)
+			k_btn.pressed.connect(func() -> void: _begin_pause_keybind_listen(action))
+			k_row.add_child(k_btn)
+			box.add_child(k_row)
+			_pause_keybind_buttons[action] = k_btn
+		var kb_reset := Button.new()
+		kb_reset.text = LocScript.pick("RESET TOMBOL BAWAAN", "RESET DEFAULT KEYBINDS")
+		kb_reset.custom_minimum_size.y = 38.0
+		HorrorTheme.style_button(kb_reset, "ghost", 11, true)
+		kb_reset.pressed.connect(func() -> void:
+			_cancel_pause_keybind_listening()
+			if SettingsManager.has_method("reset_keybinds"):
+				SettingsManager.reset_keybinds()
+			_refresh_pause_keybind_buttons()
+		)
+		box.add_child(kb_reset)
 
 	if _is_touch_device():
 		_add_pause_slider(box, LocScript.pick("Ukuran tombol mobile", "Mobile button size"), SettingsManager.mobile_button_scale * 100.0, 75.0, 150.0, func(v: float) -> void:
@@ -720,7 +737,7 @@ func _refresh_pause_keybind_buttons() -> void:
 			btn.text = LocScript.pick("TEKAN TOMBOL...", "PRESS KEY...")
 			HorrorTheme.style_button(btn, "primary", 11, true)
 		else:
-			btn.text = SettingsManager.get_action_key_text(action)
+			btn.text = SettingsManager.get_action_key_text(action) if SettingsManager.has_method("get_action_key_text") else action.to_upper()
 			HorrorTheme.style_button(btn, "secondary", 11, true)
 
 func _pause_settings_container_hide() -> void:
@@ -1149,12 +1166,19 @@ func _setup_mobile_controls() -> void:
 	sandbox_touch_btn = _make_touch_button("sandbox")
 	sandbox_touch_btn.pressed.connect(func() -> void: GameManager.toggle_sandbox_panel())
 	sandbox_touch_btn.visible = GameManager.is_sandbox_owner_active()
+	admin_touch_btn = _make_touch_button("admin")
+	admin_touch_btn.pressed.connect(func() -> void:
+		if GameManager.is_logged_in_admin() and GameManager.admin_panel and GameManager.admin_panel.has_method("toggle_panel"):
+			GameManager.admin_panel.call("toggle_panel")
+	)
+	admin_touch_btn.visible = GameManager.is_logged_in_admin()
 	touch_buttons.append(run_button)
 	touch_buttons.append(interact_button)
 	touch_buttons.append(flashlight_button)
 	touch_buttons.append(pause_button)
 	touch_buttons.append(bag_button)
 	touch_buttons.append(sandbox_touch_btn)
+	touch_buttons.append(admin_touch_btn)
 	for button: Button in touch_buttons:
 		touch_root.add_child(button)
 	get_viewport().size_changed.connect(_layout_touch_controls)
@@ -1165,8 +1189,8 @@ func _make_touch_button(icon_id: String) -> Button:
 	button.text = ""
 	button.set_meta("touch_icon", icon_id)
 	button.focus_mode = Control.FOCUS_NONE
-	var is_utility: bool = icon_id in ["pause", "bag", "sandbox"]
-	var is_sandbox_btn: bool = icon_id == "sandbox"
+	var is_utility: bool = icon_id in ["pause", "bag", "sandbox", "admin"]
+	var is_sandbox_btn: bool = icon_id in ["sandbox", "admin"]
 
 	var normal := StyleBoxFlat.new()
 	normal.bg_color = Color(HorrorTheme.SURFACE_LOW.r, HorrorTheme.SURFACE_LOW.g, HorrorTheme.SURFACE_LOW.b, 0.86) if is_utility else Color(HorrorTheme.SURFACE.r, HorrorTheme.SURFACE.g, HorrorTheme.SURFACE.b, 0.86)
@@ -1274,6 +1298,20 @@ func _draw_touch_button_icon(btn: Button, icon_id: String) -> void:
 				btn.draw_line(Vector2(c.x - u * 0.17, ry), Vector2(c.x + u * 0.17, ry), col, maxf(1.5, w * 0.85))
 				btn.draw_circle(Vector2(c.x + knob_x[idx], ry), u * 0.055, HorrorTheme.RELIC_BRASS)
 				btn.draw_arc(Vector2(c.x + knob_x[idx], ry), u * 0.055, 0.0, TAU, 16, col, maxf(1.0, w * 0.5), true)
+		"admin":
+			# Ikon perisai admin (vektor murni khusus akun admin)
+			var shield := PackedVector2Array([
+				c + Vector2(0.0, -u * 0.24),
+				c + Vector2(u * 0.20, -u * 0.14),
+				c + Vector2(u * 0.16, u * 0.10),
+				c + Vector2(0.0, u * 0.26),
+				c + Vector2(-u * 0.16, u * 0.10),
+				c + Vector2(-u * 0.20, -u * 0.14)
+			])
+			btn.draw_colored_polygon(shield, Color(HorrorTheme.PRIMARY.r, HorrorTheme.PRIMARY.g, HorrorTheme.PRIMARY.b, 0.35))
+			btn.draw_polyline(shield, HorrorTheme.RELIC_BRASS, maxf(1.6, w * 0.9), true)
+			btn.draw_line(c + Vector2(0.0, -u * 0.10), c + Vector2(0.0, u * 0.10), col, maxf(1.5, w * 0.85))
+			btn.draw_line(c + Vector2(-u * 0.09, 0.0), c + Vector2(u * 0.09, 0.0), col, maxf(1.5, w * 0.85))
 
 func _layout_touch_controls() -> void:
 	if not touch_controls_enabled or not joystick_base:
@@ -1302,13 +1340,15 @@ func _layout_touch_controls() -> void:
 	var bag_x: float = view_size.x - stats_width - 26.0 - util_size
 	var pause_x: float = bag_x - util_size - 14.0
 	var sandbox_x: float = pause_x - util_size - 14.0
+	var admin_x: float = sandbox_x - util_size - 14.0
 	var defaults: Array[Vector2] = [
 		Vector2(x_right, y_top),     # 0: run
 		Vector2(x_right, y_bottom),  # 1: interact
 		Vector2(x_left, y_bottom),   # 2: flashlight
 		Vector2(pause_x, 16.0),      # 3: pause
 		Vector2(bag_x, 16.0),        # 4: bag
-		Vector2(sandbox_x, 16.0)     # 5: sandbox
+		Vector2(sandbox_x, 16.0),    # 5: sandbox
+		Vector2(admin_x, 16.0)       # 6: admin
 	]
 	var stats_forbidden := Rect2(view_size.x - stats_width - 18.0, 8.0, stats_width + 18.0, 94.0)
 	var saved_positions: Array = SettingsManager.mobile_button_positions
@@ -1467,8 +1507,11 @@ func _populate_desktop_hints() -> void:
 	_add_gta_key_hint(row2, SettingsManager.get_action_key_text("drop_item"), LocScript.pick("BUANG", "DROP"), false)
 	if GameManager.is_sandbox_owner_active():
 		_add_gta_key_hint(row2, "Ctrl+F5", "Sandbox", true)
+	if GameManager.is_logged_in_admin():
+		_add_gta_key_hint(row2, "Alt+F2", "Admin", true)
 	_add_gta_key_hint(row2, "ESC", LocScript.pick("JEDA", "PAUSE"), false)
 	_last_sandbox_hint_active = GameManager.is_sandbox_owner_active()
+	_last_admin_hint_active = GameManager.is_logged_in_admin()
 
 func _build_online_room_overlay() -> void:
 	mp_overlay_panel = PanelContainer.new()
@@ -1557,21 +1600,25 @@ func _refresh_online_room_overlay(force: bool = false) -> void:
 
 	var room: Dictionary = mp.current_room
 	var mode_tag: String = "[SANDBOX]" if (GameManager.is_sandbox_mode or str(room.get("mode", "")) == "sandbox") else "[CO-OP]"
-	var room_name: String = str(room.get("name", "Desa Lampor"))
+	var room_name: String = ProfanityFilterScript.censor(str(room.get("name", "Desa Lampor")))
 	var room_code: String = str(room.get("roomCode", "------"))
 	var ping_val: int = maxi(0, int(mp.ping_ms))
-	var ann: String = str(mp.server_announcement).strip_edges()
-	var host_id: String = str(room.get("hostUserId", ""))
+	var ann: String = ProfanityFilterScript.censor(str(mp.server_announcement).strip_edges())
+	var host_id: String = str(room.get("hostUserId", "")).strip_edges().to_lower()
 
-	var sig_parts: PackedStringArray = PackedStringArray([mode_tag, room_name, room_code, str(ping_val), ann])
+	if mp_room_meta_lbl:
+		mp_room_meta_lbl.text = "Kode: %s  ·  %d ms" % [room_code, ping_val]
+
+	var sig_parts: PackedStringArray = PackedStringArray([mode_tag, room_name, room_code, ann])
 	for p_var: Variant in mp.room_players:
 		if p_var is Dictionary:
 			var p: Dictionary = p_var as Dictionary
 			var uid: String = str(p.get("userId", p.get("id", "")))
-			var uname: String = str(p.get("username", "Pemain"))
+			var uname: String = ProfanityFilterScript.censor(str(p.get("username", "Pemain")))
+			var is_h: bool = bool(p.get("isHost", false)) or (not host_id.is_empty() and uid.to_lower() == host_id)
 			var ps: Variant = p.get("playerState", {})
 			var san: int = clampi(int(round(float(ps.get("sanity", 100)) if ps is Dictionary else float(p.get("sanity", 100)))), 0, 100)
-			sig_parts.append("%s:%s:%d" % [uid, uname, san])
+			sig_parts.append("%s:%s:%s:%d" % [uid, uname, "H" if is_h else "P", san])
 	var sig: String = "|".join(sig_parts)
 	if not force and sig == _mp_last_sig:
 		return
@@ -1580,8 +1627,6 @@ func _refresh_online_room_overlay(force: bool = false) -> void:
 	if mp_room_title_lbl:
 		mp_room_title_lbl.text = "%s %s" % [mode_tag, room_name]
 		HorrorTheme.style_label(mp_room_title_lbl, "label-lg", HorrorTheme.RELIC_BRASS if mode_tag == "[SANDBOX]" else HorrorTheme.PRIMARY, 11)
-	if mp_room_meta_lbl:
-		mp_room_meta_lbl.text = "Kode: %s  ·  %d ms" % [room_code, ping_val]
 
 	if mp_announcement_panel and mp_announcement_lbl:
 		mp_announcement_panel.visible = not ann.is_empty()
@@ -1596,8 +1641,8 @@ func _refresh_online_room_overlay(force: bool = false) -> void:
 				continue
 			var p: Dictionary = p_var as Dictionary
 			var uid: String = str(p.get("userId", p.get("id", "")))
-			var uname: String = str(p.get("username", "Pemain"))
-			var is_host: bool = bool(p.get("isHost", false)) or (not host_id.is_empty() and uid == host_id)
+			var uname: String = ProfanityFilterScript.censor(str(p.get("username", "Pemain")))
+			var is_host: bool = bool(p.get("isHost", false)) or (not host_id.is_empty() and uid.to_lower() == host_id)
 			var ps: Variant = p.get("playerState", {})
 			var san: int = clampi(int(round(float(ps.get("sanity", 100)) if ps is Dictionary else float(p.get("sanity", 100)))), 0, 100)
 
@@ -2032,6 +2077,17 @@ func _on_touch_use() -> void:
 	if player:
 		player.touch_use_item()
 
+func _refresh_host_and_admin_controls() -> void:
+	var sb_active: bool = GameManager.is_sandbox_owner_active()
+	var adm_active: bool = GameManager.is_logged_in_admin()
+	var cut_active: bool = is_cutscene_active()
+	if is_instance_valid(sandbox_touch_btn):
+		sandbox_touch_btn.visible = sb_active and not cut_active
+	if is_instance_valid(admin_touch_btn):
+		admin_touch_btn.visible = adm_active and not cut_active
+	if sb_active != _last_sandbox_hint_active or adm_active != _last_admin_hint_active:
+		_populate_desktop_hints()
+
 func _process(delta: float) -> void:
 	if is_cutscene_active():
 		active_cutscene_elapsed += delta
@@ -2041,11 +2097,7 @@ func _process(delta: float) -> void:
 			player.set_virtual_sprint(false)
 	if noise_bar.value > 0:
 		noise_bar.value = move_toward(noise_bar.value, 0.0, delta * 1.5)
-	var sb_active: bool = GameManager.is_sandbox_owner_active()
-	if is_instance_valid(sandbox_touch_btn):
-		sandbox_touch_btn.visible = sb_active and not is_cutscene_active()
-	if sb_active != _last_sandbox_hint_active:
-		_populate_desktop_hints()
+	_refresh_host_and_admin_controls()
 	_mp_refresh_elapsed += delta
 	if _mp_refresh_elapsed >= 0.25:
 		_mp_refresh_elapsed = 0.0
@@ -2062,7 +2114,8 @@ func _on_sanity_changed(current: float, max_val: float) -> void:
 	var fear: float = 1.0 - clampf(current / maxf(1.0, max_val), 0.0, 1.0)
 	var dizzy: float = clampf((fear - 0.30) / 0.70, 0.0, 1.0)
 	if post_process_rect:
-		post_process_rect.visible = true
+		var m_low: bool = bool(post_process_rect.get_meta("mobile_low_mode", false))
+		post_process_rect.visible = (not m_low) or (fear >= 0.25)
 	if post_process_material:
 		post_process_material.set_shader_parameter("vignette_intensity", lerp(0.35, 1.25, fear))
 		post_process_material.set_shader_parameter("aberration_amount", lerp(0.001, 0.016, fear))
@@ -2242,10 +2295,14 @@ func _begin_cutscene_ui(cutscene_type: String, overlay_name: String, title_text:
 	title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	title_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	title_lbl.anchor_left = 0.06
+	title_lbl.anchor_left = 0.18 if touch else 0.22
 	title_lbl.anchor_top = 0.01
-	title_lbl.anchor_right = 0.78
+	title_lbl.anchor_right = 0.82 if touch else 0.78
 	title_lbl.anchor_bottom = 0.11
+	title_lbl.offset_left = 0.0
+	title_lbl.offset_top = 0.0
+	title_lbl.offset_right = 0.0
+	title_lbl.offset_bottom = 0.0
 	title_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	title_lbl.add_theme_font_override("font", HORROR_TITLE_FONT)
 	title_lbl.add_theme_font_size_override("font_size", 15 if touch else 19)
@@ -2264,6 +2321,10 @@ func _begin_cutscene_ui(cutscene_type: String, overlay_name: String, title_text:
 	subtitle_lbl.anchor_top = 0.85
 	subtitle_lbl.anchor_right = 0.95
 	subtitle_lbl.anchor_bottom = 0.98
+	subtitle_lbl.offset_left = 0.0
+	subtitle_lbl.offset_top = 0.0
+	subtitle_lbl.offset_right = 0.0
+	subtitle_lbl.offset_bottom = 0.0
 	subtitle_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	subtitle_lbl.add_theme_font_size_override("font_size", 14 if touch else 18)
 	subtitle_lbl.add_theme_color_override("font_color", Color(0.96, 0.88, 0.74, 1.0))
@@ -2273,7 +2334,7 @@ func _begin_cutscene_ui(cutscene_type: String, overlay_name: String, title_text:
 
 	var skip_box := HBoxContainer.new()
 	skip_box.name = "SkipContainer"
-	skip_box.anchor_left = 0.78
+	skip_box.anchor_left = 0.82 if touch else 0.78
 	skip_box.anchor_top = 0.018
 	skip_box.anchor_right = 0.98
 	skip_box.anchor_bottom = 0.095

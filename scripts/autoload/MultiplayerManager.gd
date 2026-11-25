@@ -1,10 +1,12 @@
 extends Node
 
 const LocScript = preload("res://scripts/systems/Loc.gd")
+const ProfanityFilterScript = preload("res://scripts/systems/ProfanityFilter.gd")
 const REMOTE_PLAYER_SCRIPT = preload("res://scripts/player/RemotePlayer.gd")
 
-const LOBBY_POLL_INTERVAL: float = 1.2
+const LOBBY_POLL_INTERVAL: float = 1.0
 const GAME_POLL_INTERVAL: float = 0.22
+const GAME_POLL_INTERVAL_MOBILE_LOW: float = 0.40
 const MAX_PENDING_EVENTS: int = 10
 const MAX_CHAT_HISTORY: int = 80
 
@@ -48,7 +50,9 @@ func _process(delta: float) -> void:
 	if _sync_in_flight or _is_leaving:
 		return
 	var status_str: String = str(current_room.get("status", "lobby")).to_lower()
-	var interval: float = GAME_POLL_INTERVAL if status_str == "playing" else LOBBY_POLL_INTERVAL
+	var is_mobile_low: bool = (OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios") or DisplayServer.is_touchscreen_available()) and SettingsManager.get_effective_graphics_quality() == "low"
+	var game_interval: float = GAME_POLL_INTERVAL_MOBILE_LOW if is_mobile_low else GAME_POLL_INTERVAL
+	var interval: float = game_interval if status_str == "playing" else LOBBY_POLL_INTERVAL
 	_poll_elapsed += delta
 	if _poll_elapsed >= interval:
 		_poll_elapsed = 0.0
@@ -204,7 +208,7 @@ func push_event(event_type: String, payload: Dictionary = {}) -> void:
 	})
 
 func send_chat_message(text: String) -> void:
-	var cleaned: String = text.strip_edges()
+	var cleaned: String = ProfanityFilterScript.censor(text.strip_edges())
 	if cleaned.is_empty():
 		return
 	if cleaned.length() > 300:
@@ -262,12 +266,32 @@ func _apply_room_response(data: Dictionary, is_new_session: bool) -> void:
 	if data.has("announcement"):
 		server_announcement = str(data.get("announcement", ""))
 
-	var host_uid: String = str(current_room.get("hostUserId", current_room.get("host_user_id", "")))
+	var host_uid: String = str(current_room.get("hostUserId", current_room.get("host_user_id", ""))).strip_edges().to_lower()
+	var host_uname: String = str(current_room.get("hostUsername", current_room.get("host_username", ""))).strip_edges().to_lower()
 	var am: Variant = _am()
-	var my_uid: String = str(am.user_id) if am != null else ""
-	is_room_owner = (not my_uid.is_empty()) and (host_uid == my_uid)
+	var my_uid: String = str(am.user_id).strip_edges().to_lower() if am != null else ""
+	var my_uname: String = str(am.username).strip_edges().to_lower() if am != null else ""
+	var owner_match: bool = false
+	if not my_uid.is_empty() and not host_uid.is_empty() and host_uid == my_uid:
+		owner_match = true
+	elif not my_uname.is_empty() and not host_uname.is_empty() and host_uname == my_uname:
+		owner_match = true
+	else:
+		for p_item: Variant in room_players:
+			if p_item is Dictionary:
+				var pd: Dictionary = p_item as Dictionary
+				var p_uid: String = str(pd.get("userId", pd.get("user_id", pd.get("id", "")))).strip_edges().to_lower()
+				var p_uname: String = str(pd.get("username", "")).strip_edges().to_lower()
+				if ((not my_uid.is_empty() and p_uid == my_uid) or (not my_uname.is_empty() and p_uname == my_uname)) and bool(pd.get("isHost", pd.get("is_host", false))):
+					owner_match = true
+					break
+	if not owner_match and host_uid.is_empty() and host_uname.is_empty() and is_room_owner:
+		owner_match = true
+	is_room_owner = owner_match
 	is_online_session = not current_room.is_empty()
 	session_mode = str(current_room.get("mode", "multiplayer")).strip_edges().to_lower()
+	if session_mode == "sandbox" and is_online_session and not GameManager.is_sandbox_mode:
+		GameManager.is_sandbox_mode = true
 	_last_room_status = str(current_room.get("status", "lobby")).strip_edges().to_lower()
 
 	if is_new_session:
@@ -424,12 +448,13 @@ func _sync_tick() -> void:
 			var ev_type: String = str(ev_dict.get("type", ev_dict.get("eventType", "")))
 			var raw_payload: Variant = ev_dict.get("payload", {})
 			var ev_payload: Dictionary = raw_payload if raw_payload is Dictionary else {}
-			var sender_name: String = str(ev_dict.get("senderUsername", ev_dict.get("senderName", ev_dict.get("username", ""))))
+			var sender_name: String = ProfanityFilterScript.censor(str(ev_dict.get("senderUsername", ev_dict.get("senderName", ev_dict.get("username", "")))))
 			if ev_type == "chat":
+				var chat_txt: String = ProfanityFilterScript.censor(str(ev_payload.get("text", "")))
 				lobby_chat_history.append({
 					"seq": ev_seq,
 					"sender": sender_name,
-					"text": str(ev_payload.get("text", "")),
+					"text": chat_txt,
 					"time": str(ev_dict.get("createdAt", ""))
 				})
 				if lobby_chat_history.size() > MAX_CHAT_HISTORY:
@@ -484,8 +509,8 @@ func _sync_remote_players() -> void:
 		var raw_state: Variant = p_dict.get("playerState", p_dict.get("state", {}))
 		var merged_state: Dictionary = (raw_state as Dictionary).duplicate(true) if raw_state is Dictionary else {}
 		merged_state["userId"] = uid
-		merged_state["username"] = str(p_dict.get("username", "Player"))
-		merged_state["isHost"] = bool(p_dict.get("isHost", uid == host_uid))
+		merged_state["username"] = ProfanityFilterScript.censor(str(p_dict.get("username", "Player")))
+		merged_state["isHost"] = bool(p_dict.get("isHost", not host_uid.is_empty() and uid.to_lower() == host_uid.to_lower()))
 		if rp.has_method("apply_network_state"):
 			rp.call("apply_network_state", merged_state)
 

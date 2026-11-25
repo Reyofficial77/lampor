@@ -262,6 +262,7 @@ var pck_manifest_url_idx: int = 0
 var pck_download_urls: Array[String] = []
 var pck_download_url_idx: int = 0
 var pending_download_commit: String = ""
+var _best_pck_manifest: Dictionary = {}
 var remote_fix_notes_markdown: String = ""
 var remote_fix_notes_commit: String = ""
 var is_fetching_fix_notes: bool = false
@@ -407,14 +408,19 @@ func _prepare_and_mount_pck() -> void:
 
 	if FileAccess.file_exists(PENDING_PCK_PATH):
 		if _is_valid_pck_file(PENDING_PCK_PATH) and not pending_pck_version.is_empty() and _compare_versions(pending_pck_version, base_version) >= 0:
-			_remove_user_file(PCK_PATH)
-			var rename_err: Error = DirAccess.rename_absolute(
-				ProjectSettings.globalize_path(PENDING_PCK_PATH),
-				ProjectSettings.globalize_path(PCK_PATH)
-			)
-			if rename_err != OK and _copy_user_file(PENDING_PCK_PATH, PCK_PATH):
-				_remove_user_file(PENDING_PCK_PATH)
-				rename_err = OK
+			var rename_err: Error = ERR_FILE_ALREADY_IN_USE
+			var pending_abs: String = ProjectSettings.globalize_path(PENDING_PCK_PATH)
+			var active_abs: String = ProjectSettings.globalize_path(PCK_PATH)
+			for attempt: int in range(15):
+				_remove_user_file(PCK_PATH)
+				rename_err = DirAccess.rename_absolute(pending_abs, active_abs)
+				if rename_err != OK and not FileAccess.file_exists(PCK_PATH):
+					if _copy_user_file(PENDING_PCK_PATH, PCK_PATH):
+						_remove_user_file(PENDING_PCK_PATH)
+						rename_err = OK
+				if rename_err == OK:
+					break
+				OS.delay_msec(120)
 			if rename_err == OK:
 				if not pending_pck_commit.is_empty():
 					active_pck_commit = pending_pck_commit
@@ -431,6 +437,12 @@ func _prepare_and_mount_pck() -> void:
 				config.set_value("pck", "pending_commit", "")
 				config.set_value("pck", "pending_version", "")
 				config.save(UPDATE_CONFIG_PATH)
+			else:
+				# Windows EXE sebelumnya mungkin masih memegang lock pada update.pck; mount update_pending.pck langsung agar update tetap aktif.
+				if ProjectSettings.load_resource_pack(PENDING_PCK_PATH, true):
+					pck_loaded_this_session = true
+					_reload_patched_scripts()
+					return
 		else:
 			_remove_user_file(PENDING_PCK_PATH)
 
@@ -444,6 +456,8 @@ func _prepare_and_mount_pck() -> void:
 
 func _reload_patched_scripts() -> void:
 	for script_path: String in [
+		"res://scripts/systems/Loc.gd",
+		"res://scripts/autoload/SettingsManager.gd",
 		"res://scripts/systems/RedemptionCodes.gd",
 		"res://scripts/ui/HorrorTheme.gd"
 	]:
@@ -628,6 +642,7 @@ func _start_pck_update_flow() -> void:
 	pck_manifest_commit = ""
 	pck_manifest_version = ""
 	pck_manifest_web_file = "update_web.pck"
+	_best_pck_manifest.clear()
 	if _is_web_build():
 		pck_manifest_urls = [RAW_PCK_MANIFEST_URL, JSDELIVR_PCK_BASE_URL + "pck_manifest.json"]
 	else:
@@ -644,6 +659,12 @@ func _request_next_pck_manifest() -> void:
 		if pck_manifest_request.request(url, headers) == OK:
 			return
 	is_fetching_pck_manifest = false
+	if not _best_pck_manifest.is_empty():
+		pck_manifest_commit = str(_best_pck_manifest.get("commit", ""))
+		pck_manifest_version = str(_best_pck_manifest.get("version", ""))
+		pck_manifest_web_file = str(_best_pck_manifest.get("web_pck", "update_web.pck"))
+		_download_pck_binary(pck_manifest_commit)
+		return
 	_fail("Tidak dapat memeriksa manifest PCK di GitHub.")
 
 func _on_pck_manifest_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
@@ -652,6 +673,12 @@ func _on_pck_manifest_completed(result: int, response_code: int, _headers: Packe
 			_request_next_pck_manifest()
 			return
 		is_fetching_pck_manifest = false
+		if not _best_pck_manifest.is_empty():
+			pck_manifest_commit = str(_best_pck_manifest.get("commit", ""))
+			pck_manifest_version = str(_best_pck_manifest.get("version", ""))
+			pck_manifest_web_file = str(_best_pck_manifest.get("web_pck", "update_web.pck"))
+			_download_pck_binary(pck_manifest_commit)
+			return
 		_fail("Manifest paket PCK belum tersedia (%s)." % _format_network_error(result, response_code, "Manifest PCK"))
 		return
 	var parsed: Variant = JSON.parse_string(body.get_string_from_utf8())
@@ -660,21 +687,57 @@ func _on_pck_manifest_completed(result: int, response_code: int, _headers: Packe
 			_request_next_pck_manifest()
 			return
 		is_fetching_pck_manifest = false
+		if not _best_pck_manifest.is_empty():
+			pck_manifest_commit = str(_best_pck_manifest.get("commit", ""))
+			pck_manifest_version = str(_best_pck_manifest.get("version", ""))
+			pck_manifest_web_file = str(_best_pck_manifest.get("web_pck", "update_web.pck"))
+			_download_pck_binary(pck_manifest_commit)
+			return
 		_fail("Manifest paket PCK tidak valid.")
 		return
-	is_fetching_pck_manifest = false
-	pck_manifest_commit = str(parsed.get("commit", "")).strip_edges()
-	pck_manifest_version = str(parsed.get("version", "")).strip_edges()
-	pck_manifest_web_file = str(parsed.get("web_pck", "update_web.pck")).strip_edges()
-	if pck_manifest_web_file.is_empty():
-		pck_manifest_web_file = "update.pck"
+	var candidate_commit: String = str(parsed.get("commit", "")).strip_edges()
+	var candidate_version: String = str(parsed.get("version", "")).strip_edges()
+	var candidate_web_file: String = str(parsed.get("web_pck", "update_web.pck")).strip_edges()
+	if candidate_web_file.is_empty():
+		candidate_web_file = "update.pck"
 	var local_version: String = str(ProjectSettings.get_setting("application/config/version", ""))
-	if pck_manifest_version.is_empty() or _compare_versions(pck_manifest_version, local_version) < 0:
-		_fail("Paket PCK di GitHub (%s) lebih lama daripada versi aplikasi ini (%s). Pembaruan dibatalkan." % [pck_manifest_version if not pck_manifest_version.is_empty() else "lama", local_version])
+	if candidate_version.is_empty() or _compare_versions(candidate_version, local_version) < 0:
+		if pck_manifest_url_idx < pck_manifest_urls.size():
+			_request_next_pck_manifest()
+			return
+		is_fetching_pck_manifest = false
+		if not _best_pck_manifest.is_empty():
+			pck_manifest_commit = str(_best_pck_manifest.get("commit", ""))
+			pck_manifest_version = str(_best_pck_manifest.get("version", ""))
+			pck_manifest_web_file = str(_best_pck_manifest.get("web_pck", "update_web.pck"))
+			_download_pck_binary(pck_manifest_commit)
+			return
+		_fail("Paket PCK di GitHub (%s) lebih lama daripada versi aplikasi ini (%s). Pembaruan dibatalkan." % [candidate_version if not candidate_version.is_empty() else "lama", local_version])
 		return
-	if pck_manifest_commit.is_empty() or pck_manifest_commit != latest_commit:
+	if not candidate_commit.is_empty() and candidate_commit != installed_commit:
+		if _best_pck_manifest.is_empty() or _compare_versions(candidate_version, str(_best_pck_manifest.get("version", ""))) >= 0:
+			_best_pck_manifest = {
+				"commit": candidate_commit,
+				"version": candidate_version,
+				"web_pck": candidate_web_file
+			}
+	if candidate_commit.is_empty() or candidate_commit != latest_commit:
+		if pck_manifest_url_idx < pck_manifest_urls.size():
+			_request_next_pck_manifest()
+			return
+		is_fetching_pck_manifest = false
+		if not _best_pck_manifest.is_empty():
+			pck_manifest_commit = str(_best_pck_manifest.get("commit", ""))
+			pck_manifest_version = str(_best_pck_manifest.get("version", ""))
+			pck_manifest_web_file = str(_best_pck_manifest.get("web_pck", "update_web.pck"))
+			_download_pck_binary(pck_manifest_commit)
+			return
 		_fail("Paket PCK untuk commit terbaru (%s) belum selesai dikompilasi di GitHub Actions." % latest_commit.substr(0, 7))
 		return
+	is_fetching_pck_manifest = false
+	pck_manifest_commit = candidate_commit
+	pck_manifest_version = candidate_version
+	pck_manifest_web_file = candidate_web_file
 	_download_pck_binary(pck_manifest_commit)
 
 func _download_pck_binary(target_commit: String) -> void:
@@ -941,9 +1004,6 @@ func _on_pck_downloaded(result: int, response_code: int, body: PackedByteArray =
 	has_update = false
 	_save_update_state()
 	_sync_web_idbfs()
-	if not pck_loaded_this_session and ProjectSettings.load_resource_pack(PENDING_PCK_PATH, true):
-		pck_loaded_this_session = true
-		_reload_patched_scripts()
 	update_installed.emit(ProjectSettings.globalize_path(PENDING_PCK_PATH), applied_commit, true)
 
 func _is_valid_pck_bytes(bytes: PackedByteArray) -> bool:

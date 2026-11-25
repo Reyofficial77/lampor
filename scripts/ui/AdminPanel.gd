@@ -26,14 +26,39 @@ var is_minimized: bool = false
 var last_in_gameplay: bool = false
 var drag_offset: Vector2 = Vector2.ZERO
 
+func _is_current_user_admin() -> bool:
+	return GameManager.is_logged_in_admin()
+
 func _ready() -> void:
 	layer = 120
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_build_ui()
 	root_control.visible = false
+	SignalBus.account_state_changed.connect(_on_account_state_changed)
+
+func _on_account_state_changed() -> void:
+	if not _is_current_user_admin():
+		is_authenticated = false
+		close_panel()
+
+func close_panel() -> void:
+	is_dragging = false
+	if root_control and root_control.visible:
+		root_control.visible = false
+		if password_input and password_input.has_focus():
+			password_input.release_focus()
+		if coins_input and coins_input.has_focus():
+			coins_input.release_focus()
+		if wins_input and wins_input.has_focus():
+			wins_input.release_focus()
+		_restore_mouse_mode_if_playing()
 
 func _process(_delta: float) -> void:
 	if not root_control or not root_control.visible:
+		return
+	if not _is_current_user_admin():
+		is_authenticated = false
+		close_panel()
 		return
 	var in_game: bool = GameManager.is_in_active_gameplay()
 	if in_game != last_in_gameplay:
@@ -42,6 +67,11 @@ func _process(_delta: float) -> void:
 		_fit_and_clamp_panel()
 
 func _input(event: InputEvent) -> void:
+	if not _is_current_user_admin():
+		if root_control and root_control.visible:
+			is_authenticated = false
+			close_panel()
+		return
 	if event is InputEventKey:
 		var ke := event as InputEventKey
 		if ke.pressed and not ke.echo and (ke.keycode == KEY_F2 or ke.physical_keycode == KEY_F2) and ke.alt_pressed:
@@ -74,30 +104,22 @@ func _input(event: InputEvent) -> void:
 func toggle_panel() -> void:
 	if not root_control:
 		return
+	if not _is_current_user_admin():
+		is_authenticated = false
+		close_panel()
+		return
 	var next_open: bool = not root_control.visible
-	root_control.visible = next_open
 	if next_open:
+		is_authenticated = true
+		root_control.visible = true
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		last_in_gameplay = GameManager.is_in_active_gameplay()
 		_sync_auth_view()
 		_refresh_panel_state()
 		_fit_and_clamp_panel()
 		HorrorTheme.animate_surface_enter(panel)
-		if not is_authenticated and password_input:
-			password_input.clear()
-			if auth_error_label:
-				auth_error_label.text = ""
-				auth_error_label.visible = false
-			password_input.call_deferred("grab_focus")
 	else:
-		is_dragging = false
-		if password_input and password_input.has_focus():
-			password_input.release_focus()
-		if coins_input and coins_input.has_focus():
-			coins_input.release_focus()
-		if wins_input and wins_input.has_focus():
-			wins_input.release_focus()
-		_restore_mouse_mode_if_playing()
+		close_panel()
 
 func _sync_auth_view() -> void:
 	if auth_vbox:

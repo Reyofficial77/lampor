@@ -2,6 +2,7 @@ class_name MainMenu
 extends Control
 
 const LocScript = preload("res://scripts/systems/Loc.gd")
+const ProfanityFilterScript = preload("res://scripts/systems/ProfanityFilter.gd")
 const GAME_VERSION: String = "v1.3.0"
 const FALLBACK_REDEEM_CODES: Dictionary = {
 	"LAMPORGIFT": {"type": "coins", "quantity": 2500, "description": "hadiah untuk kalian!"},
@@ -124,9 +125,23 @@ var account_confirm_input: LineEdit
 var account_submit_btn: Button
 var account_status_label: Label
 var account_profile_section: VBoxContainer
-var account_profile_summary_label: Label
-var account_sync_btn: Button
+var profile_avatar_rect: TextureRect
+var profile_avatar_pick_btn: Button
+var profile_avatar_reset_btn: Button
+var profile_avatar_preset_btns: Dictionary = {}
+var profile_avatar_dialog: FileDialog
+var profile_username_input: LineEdit
+var profile_display_name_input: LineEdit
+var profile_bio_input: TextEdit
+var profile_bio_count_label: Label
+var account_profile_save_btn: Button
 var account_logout_btn: Button
+var _profile_dirty: bool = false
+var _profile_draft_avatar: String = ""
+var _profile_avatar_filename: String = ""
+var _profile_loaded_for_uid: String = ""
+var _profile_syncing_inputs: bool = false
+var _account_me_refresh_accum: float = 0.0
 var guest_section: VBoxContainer
 var guest_btn: Button
 var account_close_btn: Button
@@ -150,6 +165,10 @@ var mp_rooms_list: VBoxContainer
 var mp_mode_filter: String = "multiplayer"
 var _mp_rooms_loading: bool = false
 var _mp_last_rooms: Array = []
+var _mp_auto_refresh_accum: float = 0.0
+var _mp_health_refresh_counter: int = 0
+var _mp_refresh_in_flight: bool = false
+var _mp_last_rooms_sig: String = ""
 
 var room_password_overlay: ColorRect
 var room_password_panel: PanelContainer
@@ -214,9 +233,12 @@ func _ready() -> void:
 	UpdateManager.update_failed.connect(_on_update_failed)
 	UpdateManager.up_to_date.connect(_on_update_up_to_date)
 	UpdateManager.fix_notes_updated.connect(_on_fix_notes_updated)
-	SettingsManager.keybinds_changed.connect(_on_settings_keybinds_changed)
-	SettingsManager.character_model_changed.connect(_on_settings_character_model_changed)
+	if SettingsManager.has_signal("keybinds_changed"):
+		SettingsManager.keybinds_changed.connect(_on_settings_keybinds_changed)
+	if SettingsManager.has_signal("character_model_changed"):
+		SettingsManager.character_model_changed.connect(_on_settings_character_model_changed)
 	SignalBus.account_state_changed.connect(_on_account_state_changed)
+	SignalBus.coins_changed.connect(_on_coins_changed)
 	SignalBus.multiplayer_rooms_updated.connect(_on_multiplayer_rooms_updated)
 	SignalBus.multiplayer_room_updated.connect(_on_multiplayer_room_updated)
 	SignalBus.multiplayer_game_started.connect(_on_multiplayer_game_started)
@@ -234,11 +256,31 @@ func _ready() -> void:
 		call_deferred("_run_initial_account_gate")
 	else:
 		_refresh_account_ui()
+		if am != null and am.can_access_online_modes() and am.has_method("refresh_profile_from_server"):
+			am.call_deferred("refresh_profile_from_server")
+
+func _on_coins_changed(_new_coins: int) -> void:
+	_refresh_currency_display()
+	if shop_overlay and shop_overlay.visible:
+		_refresh_shop_display()
 
 func _process(delta: float) -> void:
 	menu_anim_time += delta
 	if horror_backdrop:
 		horror_backdrop.queue_redraw()
+	if mp_server_overlay and mp_server_overlay.visible:
+		_mp_auto_refresh_accum += delta
+		if _mp_auto_refresh_accum >= 1.0:
+			_mp_auto_refresh_accum = 0.0
+			_refresh_mp_server_and_rooms(true)
+	var am: Variant = _am()
+	if am != null and am.can_access_online_modes() and am.has_method("refresh_profile_from_server"):
+		var editing_profile_now: bool = account_overlay != null and account_overlay.visible and _profile_dirty
+		if not editing_profile_now:
+			_account_me_refresh_accum += delta
+			if _account_me_refresh_accum >= 2.0:
+				_account_me_refresh_accum = 0.0
+				am.refresh_profile_from_server()
 
 func _build_menu() -> void:
 	var background := ColorRect.new()
@@ -320,6 +362,9 @@ func _build_menu() -> void:
 
 	var shop_button := _make_nav_button(LocScript.pick("TOKO BEKAL", "SUPPLY SHOP"))
 	shop_button.pressed.connect(func() -> void:
+		var am_s: Variant = _am()
+		if am_s != null and am_s.can_access_online_modes() and am_s.has_method("refresh_profile_from_server"):
+			am_s.refresh_profile_from_server()
 		_refresh_shop_display()
 		_open_modal(shop_overlay, shop_panel)
 	)
@@ -798,7 +843,7 @@ func _build_settings_modal() -> void:
 	language_option.custom_minimum_size.y = 40.0
 	language_option.add_item("Indonesia (ID)")
 	language_option.add_item("English (EN-US)")
-	language_option.select(1 if SettingsManager.is_en() else 0)
+	language_option.select(1 if _sm_is_en() else 0)
 	language_option.item_selected.connect(_on_language_selected)
 	HorrorTheme.style_option_button(language_option)
 	lang_row.add_child(language_option)
@@ -815,14 +860,14 @@ func _build_settings_modal() -> void:
 
 	var initial_volume: float = clampf(db_to_linear(AudioServer.get_bus_volume_db(0)) * 100.0, 0.0, 100.0)
 	volume_slider = _add_slider_setting(settings_tab_box, LocScript.pick("Volume", "Volume"), initial_volume, 0.0, 100.0, 1.0, _on_volume_changed)
-	mouse_sensitivity_slider = _add_slider_setting(settings_tab_box, LocScript.pick("Sensitivitas Mouse", "Mouse Sensitivity"), SettingsManager.mouse_sensitivity * 100.0, 25.0, 200.0, 5.0, _on_mouse_sensitivity_changed)
-	camera_sensitivity_slider = _add_slider_setting(settings_tab_box, LocScript.pick("Sensitivitas Kamera", "Camera Sensitivity"), SettingsManager.camera_sensitivity * 100.0, 25.0, 200.0, 5.0, _on_camera_sensitivity_changed)
+	mouse_sensitivity_slider = _add_slider_setting(settings_tab_box, LocScript.pick("Sensitivitas Mouse", "Mouse Sensitivity"), float(SettingsManager.mouse_sensitivity) * 100.0, 25.0, 200.0, 5.0, _on_mouse_sensitivity_changed)
+	camera_sensitivity_slider = _add_slider_setting(settings_tab_box, LocScript.pick("Sensitivitas Kamera", "Camera Sensitivity"), float(SettingsManager.camera_sensitivity) * 100.0, 25.0, 200.0, 5.0, _on_camera_sensitivity_changed)
 	var sensitivity_note := _make_label(
 		LocScript.pick("Mouse untuk desktop · Kamera untuk geser layar sentuh", "Mouse for desktop · Camera for touch swipe"),
 		11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm"
 	)
 	settings_tab_box.add_child(sensitivity_note)
-	brightness_slider = _add_slider_setting(settings_tab_box, LocScript.pick("Kecerahan", "Brightness"), SettingsManager.brightness * 100.0, 50.0, 150.0, 5.0, _on_brightness_changed)
+	brightness_slider = _add_slider_setting(settings_tab_box, LocScript.pick("Kecerahan", "Brightness"), float(SettingsManager.brightness) * 100.0, 50.0, 150.0, 5.0, _on_brightness_changed)
 
 	var graphics_row := HBoxContainer.new()
 	var graphics_label := _make_label(LocScript.pick("Grafik", "Graphics"), 13, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "body-md")
@@ -856,40 +901,44 @@ func _build_settings_modal() -> void:
 
 	settings_tab_box.add_child(HorrorTheme.make_hairline_divider())
 
-	var keybinds_title := _make_label(LocScript.pick("PENGATURAN TOMBOL (KEYBINDS)", "KEYBINDINGS"), 13, HorrorTheme.PRIMARY, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
-	settings_tab_box.add_child(keybinds_title)
-	var keybinds_hint := _make_label(
-		LocScript.pick("Klik tombol untuk mengganti tombol kontrol (Esc untuk batal).", "Click a binding to assign a new key or mouse button (Esc to cancel)."),
-		11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm"
-	)
-	keybinds_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	settings_tab_box.add_child(keybinds_hint)
+	var keybinds_actions: Array = _sm_rebindable_actions()
+	if not keybinds_actions.is_empty():
+		var keybinds_title := _make_label(LocScript.pick("PENGATURAN TOMBOL (KEYBINDS)", "KEYBINDINGS"), 13, HorrorTheme.PRIMARY, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
+		settings_tab_box.add_child(keybinds_title)
+		var keybinds_hint := _make_label(
+			LocScript.pick("Klik tombol untuk mengganti tombol kontrol (Esc untuk batal).", "Click a binding to assign a new key or mouse button (Esc to cancel)."),
+			11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm"
+		)
+		keybinds_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		settings_tab_box.add_child(keybinds_hint)
 
-	_keybind_buttons.clear()
-	for action: String in SettingsManager.REBINDABLE_ACTIONS:
-		var k_row := HBoxContainer.new()
-		k_row.mouse_filter = Control.MOUSE_FILTER_PASS
-		k_row.add_theme_constant_override("separation", 8)
-		var k_lbl := _make_label(LocScript.action_label(action), 12, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "body-md")
-		k_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		k_row.add_child(k_lbl)
-		var k_btn := _make_button(SettingsManager.get_action_key_text(action), false, "secondary")
-		k_btn.custom_minimum_size = Vector2(118.0, 36.0)
-		k_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
-		k_btn.pressed.connect(func() -> void: _begin_keybind_listen(action))
-		k_row.add_child(k_btn)
-		settings_tab_box.add_child(k_row)
-		_keybind_buttons[action] = k_btn
+		_keybind_buttons.clear()
+		for action_var: Variant in keybinds_actions:
+			var action: String = str(action_var)
+			var k_row := HBoxContainer.new()
+			k_row.mouse_filter = Control.MOUSE_FILTER_PASS
+			k_row.add_theme_constant_override("separation", 8)
+			var k_lbl := _make_label(LocScript.action_label(action), 12, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "body-md")
+			k_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			k_row.add_child(k_lbl)
+			var k_btn := _make_button(_sm_get_action_key_text(action), false, "secondary")
+			k_btn.custom_minimum_size = Vector2(118.0, 36.0)
+			k_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
+			k_btn.pressed.connect(func() -> void: _begin_keybind_listen(action))
+			k_row.add_child(k_btn)
+			settings_tab_box.add_child(k_row)
+			_keybind_buttons[action] = k_btn
 
-	var reset_kb_btn := _make_button(LocScript.pick("RESET TOMBOL BAWAAN", "RESET DEFAULT KEYBINDS"), false, "ghost")
-	reset_kb_btn.pressed.connect(func() -> void:
-		_cancel_keybind_listening()
-		SettingsManager.reset_keybinds()
-		_refresh_keybind_buttons()
-	)
-	settings_tab_box.add_child(reset_kb_btn)
+		var reset_kb_btn := _make_button(LocScript.pick("RESET TOMBOL BAWAAN", "RESET DEFAULT KEYBINDS"), false, "ghost")
+		reset_kb_btn.pressed.connect(func() -> void:
+			_cancel_keybind_listening()
+			if SettingsManager.has_method("reset_keybinds"):
+				SettingsManager.reset_keybinds()
+			_refresh_keybind_buttons()
+		)
+		settings_tab_box.add_child(reset_kb_btn)
 
-	settings_tab_box.add_child(HorrorTheme.make_hairline_divider())
+		settings_tab_box.add_child(HorrorTheme.make_hairline_divider())
 
 	auto_update_check = CheckButton.new()
 	auto_update_check.text = LocScript.pick("Unduh & pasang update otomatis", "Auto-download & install updates")
@@ -971,16 +1020,43 @@ func _build_settings_modal() -> void:
 	body.add_child(close)
 
 func _build_guide_bbcode() -> String:
-	var move_k: String = SettingsManager.get_move_keys_summary()
-	var sprint_k: String = SettingsManager.get_action_key_text("sprint")
-	var act_k: String = SettingsManager.get_action_key_text("interact")
-	var flash_k: String = SettingsManager.get_action_key_text("flashlight")
-	var bag_k: String = SettingsManager.get_action_key_text("toggle_inventory")
-	var drop_k: String = SettingsManager.get_action_key_text("drop_item")
-	var slot_k: String = "%s-%s" % [SettingsManager.get_action_key_text("slot_1"), SettingsManager.get_action_key_text("slot_5")]
+	var move_k: String = _sm_get_move_keys_summary()
+	var sprint_k: String = _sm_get_action_key_text("sprint")
+	var act_k: String = _sm_get_action_key_text("interact")
+	var flash_k: String = _sm_get_action_key_text("flashlight")
+	var bag_k: String = _sm_get_action_key_text("toggle_inventory")
+	var drop_k: String = _sm_get_action_key_text("drop_item")
+	var slot_k: String = "%s-%s" % [_sm_get_action_key_text("slot_1"), _sm_get_action_key_text("slot_5")]
 	if LocScript.is_en():
 		return "[color=#ffb4ac][b]OBJECTIVE[/b][/color]\nSurvive from 01:00 WIB until the ritual completes before 05:00 WIB. Light 5 torches, barricade 3 house doors, collect 4 ritual relics, and burn them all at the Village Hall furnace. If 05:00 WIB strikes before completion, Lampor devours your soul.\n\n[color=#ffb4ac][b]DESKTOP CONTROLS[/b][/color]\n• %s: Move\n• Mouse: Look around\n• %s: Sprint (Hold)\n• %s: Interact, light torches, barricade doors, hide, & use Herbal Elixir / Battery / Energy Drink / Kentongan\n• %s: Flashlight\n• %s: Select hotbar slot\n• %s: Toggle inventory bag (15 slots)\n• %s: Drop item\n• Esc: Pause game\n\n[color=#ffb4ac][b]MOBILE CONTROLS[/b][/color]\nUse the left joystick to move, swipe the right half to look, and tap action buttons to run, interact (Hand icon), toggle flashlight, open bag, or pause.\n\n[color=#ffb4ac][b]SURVIVING LAMPOR[/b][/color]\n• Never stare directly at Lampor's green coffin; look away immediately.\n• When bells chime nearby, kill your flashlight and hide inside houses or closets.\n• Strike Kentongan [%s] to repel Lampor's chase for 5 seconds (Supply Shop only, 1-time use, max 5).\n• Drink Energy Drink [%s] to lock 100%% stamina for 3 seconds (anti-spam cooldown).\n• Lit torch areas steadily restore your Sanity.\n• Nightmare mode unlocks after 5 victories." % [move_k, sprint_k, act_k, flash_k, slot_k, bag_k, drop_k, act_k, act_k]
 	return "[color=#ffb4ac][b]TUJUAN PERMAINAN[/b][/color]\nBertahan mulai pukul 01.00 WIB hingga ritual tuntas sebelum pukul 05.00 WIB. Nyalakan 5 obor, amankan 3 pintu rumah, kumpulkan 4 benda ritual, lalu bakar semuanya di tungku balai desa. Bila pukul 05.00 WIB tiba sebelum tuntas, Lampor akan langsung melahapmu.\n\n[color=#ffb4ac][b]KONTROL DESKTOP[/b][/color]\n• %s: Bergerak\n• Mouse: Melihat ke sekitar\n• %s: Berlari (Tahan)\n• %s: Interaksi, nyalakan obor, palang pintu, sembunyi, & pakai Jamu/Baterai/Energy Drink/Kentongan\n• %s: Senter\n• %s: Pilih slot hotbar\n• %s: Buka tas inventori (15 slot)\n• %s: Jatuhkan barang\n• Esc: Jeda permainan\n\n[color=#ffb4ac][b]KONTROL MOBILE[/b][/color]\nGunakan joystick kiri untuk bergerak, geser sisi kanan layar untuk menoleh, dan sentuh tombol aksi di layar untuk lari, interaksi (ikon Tangan), senter, tas, serta jeda.\n\n[color=#ffb4ac][b]MENGHADAPI LAMPOR[/b][/color]\n• Jangan menatap langsung keranda Lampor; segera palingkan pandangan.\n• Saat lonceng mendekat, matikan senter dan bersembunyilah di rumah atau lemari.\n• Pukul Kentongan [%s] untuk mengusir kejaran Lampor selama 5 detik (hanya tersedia di Toko Bekal, 1x pakai, maks. 5).\n• Minum Energy Drink [%s] untuk mengunci stamina 100%% selama 3 detik (ada jeda anti-spam).\n• Area obor yang menyala membantu memulihkan kewarasan.\n• Mode Nightmare terbuka setelah 5 kemenangan." % [move_k, sprint_k, act_k, flash_k, slot_k, bag_k, drop_k, act_k, act_k]
+
+func _sm_is_en() -> bool:
+	if SettingsManager.has_method("is_en"):
+		return SettingsManager.is_en()
+	return LocScript.is_en()
+
+func _sm_character_model() -> String:
+	if SettingsManager.has_method("normalize_character_model") and "character_model" in SettingsManager:
+		return SettingsManager.normalize_character_model(str(SettingsManager.get("character_model")))
+	if "character_model" in SettingsManager:
+		return "female" if str(SettingsManager.get("character_model")).strip_edges().to_lower() == "female" else "male"
+	return "male"
+
+func _sm_rebindable_actions() -> Array:
+	if "REBINDABLE_ACTIONS" in SettingsManager:
+		return SettingsManager.get("REBINDABLE_ACTIONS") as Array
+	return []
+
+func _sm_get_action_key_text(action: String) -> String:
+	if SettingsManager.has_method("get_action_key_text"):
+		return str(SettingsManager.get_action_key_text(action))
+	return action.to_upper()
+
+func _sm_get_move_keys_summary() -> String:
+	if SettingsManager.has_method("get_move_keys_summary"):
+		return str(SettingsManager.get_move_keys_summary())
+	return "W / A / S / D"
 
 func _create_character_option_button() -> OptionButton:
 	var opt := OptionButton.new()
@@ -988,20 +1064,23 @@ func _create_character_option_button() -> OptionButton:
 	opt.custom_minimum_size.y = 40.0
 	opt.add_item(LocScript.pick("Laki-laki Dewasa", "Adult Male"))
 	opt.add_item(LocScript.pick("Perempuan Dewasa", "Adult Female"))
-	opt.select(1 if SettingsManager.normalize_character_model(SettingsManager.character_model) == "female" else 0)
+	opt.select(1 if _sm_character_model() == "female" else 0)
 	opt.item_selected.connect(_on_character_model_selected)
 	HorrorTheme.style_option_button(opt)
 	return opt
 
 func _sync_character_option_buttons() -> void:
-	var selected_idx: int = 1 if SettingsManager.normalize_character_model(SettingsManager.character_model) == "female" else 0
+	var selected_idx: int = 1 if _sm_character_model() == "female" else 0
 	for opt: OptionButton in [character_option, mode_character_option]:
 		if is_instance_valid(opt) and opt.selected != selected_idx:
 			opt.select(selected_idx)
 
 func _on_character_model_selected(index: int) -> void:
 	var target_model: String = "female" if index == 1 else "male"
-	SettingsManager.set_character_model(target_model)
+	if SettingsManager.has_method("set_character_model"):
+		SettingsManager.set_character_model(target_model)
+	elif "character_model" in SettingsManager:
+		SettingsManager.set("character_model", target_model)
 	_sync_character_option_buttons()
 
 func _on_settings_character_model_changed(_model_id: String) -> void:
@@ -1009,13 +1088,20 @@ func _on_settings_character_model_changed(_model_id: String) -> void:
 
 func _on_language_selected(index: int) -> void:
 	var target_lang: String = "en_US" if index == 1 else "id"
-	if target_lang != SettingsManager.language:
-		SettingsManager.set_language(target_lang)
+	var cur_lang: String = str(SettingsManager.get("language")) if "language" in SettingsManager else LocScript.get_language()
+	if target_lang != cur_lang:
+		if SettingsManager.has_method("set_language"):
+			SettingsManager.set_language(target_lang)
+		else:
+			LocScript.set_language(target_lang)
 		_rebuild_for_language_change()
 
 func _rebuild_for_language_change() -> void:
 	_listening_keybind_action = ""
 	_keybind_buttons.clear()
+	profile_avatar_preset_btns.clear()
+	_profile_dirty = false
+	_profile_loaded_for_uid = ""
 	modal_overlays.clear()
 	modal_panels.clear()
 	difficulty_buttons.clear()
@@ -1066,7 +1152,7 @@ func _refresh_keybind_buttons() -> void:
 			btn.text = LocScript.pick("TEKAN TOMBOL...", "PRESS KEY...")
 			HorrorTheme.style_button(btn, "primary", 11, true)
 		else:
-			btn.text = SettingsManager.get_action_key_text(action)
+			btn.text = _sm_get_action_key_text(action)
 			HorrorTheme.style_button(btn, "secondary", 11, true)
 	if guide_rich_text:
 		guide_rich_text.text = _build_guide_bbcode()
@@ -1334,45 +1420,60 @@ func _check_for_game_updates() -> void:
 	UpdateManager.check_for_updates()
 
 func _on_update_available(commit_sha: String, commit_message: String) -> void:
-	update_button.disabled = false
-	update_check_button.text = LocScript.pick("PERIKSA PEMBARUAN GAME", "CHECK FOR UPDATES")
+	if is_instance_valid(update_button):
+		update_button.disabled = false
+	if is_instance_valid(update_check_button):
+		update_check_button.text = LocScript.pick("PERIKSA PEMBARUAN GAME", "CHECK FOR UPDATES")
 	if UpdateManager.is_git_working_copy():
-		update_button.visible = false
-		update_status_label.text = LocScript.pick(
-			"Mode Developer (Git/Editor): Commit GitHub %s (%s). Gunakan git pull/push agar perubahan lokal tidak tertimpa." % [commit_sha.substr(0, 10), commit_message],
-			"Developer Mode (Git/Editor): GitHub commit %s (%s). Use git pull/push so local edits aren't overwritten." % [commit_sha.substr(0, 10), commit_message]
-		)
+		if is_instance_valid(update_button):
+			update_button.visible = false
+		if is_instance_valid(update_status_label):
+			update_status_label.text = LocScript.pick(
+				"Mode Developer (Git/Editor): Commit GitHub %s (%s). Gunakan git pull/push agar perubahan lokal tidak tertimpa." % [commit_sha.substr(0, 10), commit_message],
+				"Developer Mode (Git/Editor): GitHub commit %s (%s). Use git pull/push so local edits aren't overwritten." % [commit_sha.substr(0, 10), commit_message]
+			)
 		return
-	update_button.visible = not UpdateManager.is_update_processed()
-	update_button.text = LocScript.pick("PASANG PEMBARUAN", "INSTALL UPDATE")
-	update_button.tooltip_text = commit_message
-	if UpdateManager.is_update_processed():
-		update_status_label.text = LocScript.pick("Commit %s sudah terpasang." % commit_sha.substr(0, 10), "Commit %s is already installed." % commit_sha.substr(0, 10))
-	else:
-		update_status_label.text = LocScript.pick("Commit terbaru %s: %s" % [commit_sha.substr(0, 10), commit_message], "Latest commit %s: %s" % [commit_sha.substr(0, 10), commit_message])
+	if is_instance_valid(update_button):
+		update_button.visible = not UpdateManager.is_update_processed()
+		update_button.text = LocScript.pick("PASANG PEMBARUAN", "INSTALL UPDATE")
+		update_button.tooltip_text = commit_message
+	if is_instance_valid(update_status_label):
+		if UpdateManager.is_update_processed():
+			update_status_label.text = LocScript.pick("Commit %s sudah terpasang." % commit_sha.substr(0, 10), "Commit %s is already installed." % commit_sha.substr(0, 10))
+		else:
+			update_status_label.text = LocScript.pick("Commit terbaru %s: %s" % [commit_sha.substr(0, 10), commit_message], "Latest commit %s: %s" % [commit_sha.substr(0, 10), commit_message])
 
 func _on_update_up_to_date(commit_sha: String) -> void:
-	update_check_button.text = LocScript.pick("PERIKSA PEMBARUAN GAME", "CHECK FOR UPDATES")
-	update_status_label.text = LocScript.pick("Game sudah sama dengan commit terbaru (%s)." % commit_sha.substr(0, 10), "Game is up to date (%s)." % commit_sha.substr(0, 10))
-	update_button.visible = false
+	if is_instance_valid(update_check_button):
+		update_check_button.text = LocScript.pick("PERIKSA PEMBARUAN GAME", "CHECK FOR UPDATES")
+	if is_instance_valid(update_status_label):
+		update_status_label.text = LocScript.pick("Game sudah sama dengan commit terbaru (%s)." % commit_sha.substr(0, 10), "Game is up to date (%s)." % commit_sha.substr(0, 10))
+	if is_instance_valid(update_button):
+		update_button.visible = false
 
 func _on_update_installed(destination_path: String, commit_sha: String, applied_to_project: bool) -> void:
-	update_button.disabled = false
-	update_button.visible = false
-	update_check_button.text = LocScript.pick("PERIKSA PEMBARUAN GAME", "CHECK FOR UPDATES")
+	if is_instance_valid(update_button):
+		update_button.disabled = false
+		update_button.visible = false
+	if is_instance_valid(update_check_button):
+		update_check_button.text = LocScript.pick("PERIKSA PEMBARUAN GAME", "CHECK FOR UPDATES")
 	if applied_to_project:
-		update_status_label.text = LocScript.pick(
-			"Update %s berhasil diterapkan. Mulai ulang permainan agar seluruh perubahan dimuat." % commit_sha.substr(0, 10),
-			"Update %s applied. Restart the game to load all changes." % commit_sha.substr(0, 10)
-		)
-		update_button.tooltip_text = LocScript.pick("Proyek sudah sama dengan commit %s" % commit_sha.substr(0, 10), "Project matches commit %s" % commit_sha.substr(0, 10))
+		if is_instance_valid(update_status_label):
+			update_status_label.text = LocScript.pick(
+				"Update %s berhasil diterapkan. Mulai ulang permainan agar seluruh perubahan dimuat." % commit_sha.substr(0, 10),
+				"Update %s applied. Restart the game to load all changes." % commit_sha.substr(0, 10)
+			)
+		if is_instance_valid(update_button):
+			update_button.tooltip_text = LocScript.pick("Proyek sudah sama dengan commit %s" % commit_sha.substr(0, 10), "Project matches commit %s" % commit_sha.substr(0, 10))
 		_show_update_restart_prompt(commit_sha)
 	else:
-		update_status_label.text = LocScript.pick(
-			"Paket source %s sudah diekstrak ke penyimpanan aplikasi, tetapi belum dapat mengganti APK/PCK yang sedang berjalan." % commit_sha.substr(0, 10),
-			"Source package %s was extracted, but cannot replace the running APK/PCK directly." % commit_sha.substr(0, 10)
-		)
-		update_button.tooltip_text = destination_path
+		if is_instance_valid(update_status_label):
+			update_status_label.text = LocScript.pick(
+				"Paket source %s sudah diekstrak ke penyimpanan aplikasi, tetapi belum dapat mengganti APK/PCK yang sedang berjalan." % commit_sha.substr(0, 10),
+				"Source package %s was extracted, but cannot replace the running APK/PCK directly." % commit_sha.substr(0, 10)
+			)
+		if is_instance_valid(update_button):
+			update_button.tooltip_text = destination_path
 
 func _build_update_restart_modal() -> void:
 	var modal: Dictionary = _create_modal(LocScript.pick("PEMBARUAN SIAP", "UPDATE READY"))
@@ -2392,24 +2493,161 @@ func _build_account_modal() -> void:
 	account_profile_section.add_theme_constant_override("separation", 10)
 	stack.add_child(account_profile_section)
 
-	var profile_card := PanelContainer.new()
-	profile_card.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOW, HorrorTheme.BORDER_SUBTLE, 2, 14, 12))
-	account_profile_section.add_child(profile_card)
+	var avatar_card := PanelContainer.new()
+	avatar_card.mouse_filter = Control.MOUSE_FILTER_PASS
+	avatar_card.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOW, HorrorTheme.BORDER_SUBTLE, 2, 12, 12))
+	account_profile_section.add_child(avatar_card)
 
-	account_profile_summary_label = _make_label("", 13, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm")
-	account_profile_summary_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	account_profile_summary_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	profile_card.add_child(account_profile_summary_label)
+	var avatar_vbox := VBoxContainer.new()
+	avatar_vbox.mouse_filter = Control.MOUSE_FILTER_PASS
+	avatar_vbox.add_theme_constant_override("separation", 10)
+	avatar_card.add_child(avatar_vbox)
+
+	var avatar_top_row := HBoxContainer.new()
+	avatar_top_row.mouse_filter = Control.MOUSE_FILTER_PASS
+	avatar_top_row.add_theme_constant_override("separation", 14)
+	avatar_vbox.add_child(avatar_top_row)
+
+	var avatar_frame := PanelContainer.new()
+	avatar_frame.custom_minimum_size = Vector2(82.0, 82.0)
+	avatar_frame.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	avatar_frame.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	avatar_frame.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOWEST, HorrorTheme.BORDER_INTERACTIVE, 4, 3, 3))
+	avatar_top_row.add_child(avatar_frame)
+
+	profile_avatar_rect = TextureRect.new()
+	profile_avatar_rect.custom_minimum_size = Vector2(74.0, 74.0)
+	profile_avatar_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	profile_avatar_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	profile_avatar_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	avatar_frame.add_child(profile_avatar_rect)
+
+	var avatar_ctrl_col := VBoxContainer.new()
+	avatar_ctrl_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	avatar_ctrl_col.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	avatar_ctrl_col.add_theme_constant_override("separation", 6)
+	avatar_top_row.add_child(avatar_ctrl_col)
+
+	var avatar_hdr := _make_label(LocScript.pick("Foto Profil", "Profile Photo"), 12, HorrorTheme.PRIMARY, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
+	avatar_hdr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	avatar_ctrl_col.add_child(avatar_hdr)
+
+	var avatar_btn_row := HBoxContainer.new()
+	avatar_btn_row.add_theme_constant_override("separation", 8)
+	avatar_ctrl_col.add_child(avatar_btn_row)
+
+	if not OS.has_feature("web"):
+		profile_avatar_pick_btn = _make_button(LocScript.pick("PILIH FOTO...", "CHOOSE PHOTO..."), false, "secondary")
+		profile_avatar_pick_btn.custom_minimum_size.y = 36.0
+		profile_avatar_pick_btn.pressed.connect(_on_profile_pick_photo_pressed)
+		avatar_btn_row.add_child(profile_avatar_pick_btn)
+
+	profile_avatar_reset_btn = _make_button(LocScript.pick("HAPUS", "CLEAR"), false, "ghost")
+	profile_avatar_reset_btn.custom_minimum_size = Vector2(84.0, 36.0)
+	profile_avatar_reset_btn.size_flags_horizontal = Control.SIZE_SHRINK_END if not OS.has_feature("web") else Control.SIZE_SHRINK_BEGIN
+	profile_avatar_reset_btn.pressed.connect(_on_profile_reset_photo_pressed)
+	avatar_btn_row.add_child(profile_avatar_reset_btn)
+
+	var preset_hint := _make_label(
+		LocScript.pick("Atau pilih ikon cepat (JPG/PNG/WEBP atau ikon):", "Or choose a quick preset icon:"),
+		11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm"
+	)
+	preset_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	preset_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	avatar_vbox.add_child(preset_hint)
+
+	var preset_row := HBoxContainer.new()
+	preset_row.add_theme_constant_override("separation", 6)
+	avatar_vbox.add_child(preset_row)
+
+	profile_avatar_preset_btns.clear()
+	for preset_def: Array in [
+		["preset:obor", LocScript.pick("Obor", "Torch")],
+		["preset:keris", "Keris"],
+		["preset:bulan", LocScript.pick("Bulan", "Moon")],
+		["preset:keranda", "Lampor"],
+		["preset:desa", LocScript.pick("Desa", "Village")]
+	]:
+		var p_id: String = str(preset_def[0])
+		var p_label: String = str(preset_def[1])
+		var p_btn := _make_button(p_label, false, "secondary")
+		p_btn.custom_minimum_size.y = 32.0
+		p_btn.add_theme_font_size_override("font_size", 11)
+		p_btn.pressed.connect(_on_profile_preset_selected.bind(p_id))
+		preset_row.add_child(p_btn)
+		profile_avatar_preset_btns[p_id] = p_btn
+
+	if not OS.has_feature("web"):
+		profile_avatar_dialog = FileDialog.new()
+		profile_avatar_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+		profile_avatar_dialog.access = FileDialog.ACCESS_FILESYSTEM
+		profile_avatar_dialog.title = LocScript.pick("Pilih Foto Profil", "Choose Profile Photo")
+		profile_avatar_dialog.filters = PackedStringArray(["*.png, *.jpg, *.jpeg, *.webp ; Gambar / Image"])
+		profile_avatar_dialog.file_selected.connect(_on_profile_photo_file_selected)
+		add_child(profile_avatar_dialog)
+
+	var uname_ro_lbl := _make_label(
+		LocScript.pick("Username (tidak dapat diganti)", "Username (cannot be changed)"),
+		12, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm"
+	)
+	uname_ro_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	account_profile_section.add_child(uname_ro_lbl)
+
+	profile_username_input = LineEdit.new()
+	profile_username_input.editable = false
+	profile_username_input.selecting_enabled = true
+	profile_username_input.focus_mode = Control.FOCUS_CLICK
+	profile_username_input.custom_minimum_size.y = 40.0
+	HorrorTheme.style_line_edit(profile_username_input)
+	profile_username_input.add_theme_color_override("font_uneditable_color", HorrorTheme.TEXT_MUTED)
+	profile_username_input.add_theme_color_override("font_color", HorrorTheme.TEXT_MUTED)
+	account_profile_section.add_child(profile_username_input)
+
+	var disp_lbl := _make_label(
+		LocScript.pick("Display Name (maks. 32 karakter)", "Display Name (max 32 characters)"),
+		12, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "label-sm"
+	)
+	disp_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	account_profile_section.add_child(disp_lbl)
+
+	profile_display_name_input = LineEdit.new()
+	profile_display_name_input.placeholder_text = LocScript.pick("Masukkan nama tampilan...", "Enter display name...")
+	profile_display_name_input.max_length = 32
+	profile_display_name_input.custom_minimum_size.y = 42.0
+	HorrorTheme.style_line_edit(profile_display_name_input)
+	profile_display_name_input.text_changed.connect(func(_t: String) -> void: _on_profile_field_edited())
+	account_profile_section.add_child(profile_display_name_input)
+
+	var bio_hdr_row := HBoxContainer.new()
+	bio_hdr_row.add_theme_constant_override("separation", 8)
+	account_profile_section.add_child(bio_hdr_row)
+
+	var bio_lbl := _make_label("Bio", 12, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "label-sm")
+	bio_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bio_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bio_hdr_row.add_child(bio_lbl)
+
+	profile_bio_count_label = _make_label("0/200", 11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_RIGHT, "mono-sm")
+	profile_bio_count_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bio_hdr_row.add_child(profile_bio_count_label)
+
+	profile_bio_input = TextEdit.new()
+	profile_bio_input.placeholder_text = LocScript.pick("Ceritakan tentang dirimu di desa Lampor...", "Write something about yourself...")
+	profile_bio_input.custom_minimum_size = Vector2(0.0, 84.0)
+	profile_bio_input.wrap_mode = TextEdit.LINE_WRAPPING_BOUNDARY
+	_style_text_edit(profile_bio_input)
+	profile_bio_input.text_changed.connect(_on_profile_bio_changed)
+	account_profile_section.add_child(profile_bio_input)
 
 	var profile_btns := HBoxContainer.new()
 	profile_btns.add_theme_constant_override("separation", 8)
 	account_profile_section.add_child(profile_btns)
 
-	account_sync_btn = _make_button(LocScript.pick("SINKRONKAN KE CLOUD", "SYNC TO CLOUD"), false, "secondary")
-	account_sync_btn.pressed.connect(_on_account_sync_pressed)
-	profile_btns.add_child(account_sync_btn)
+	account_profile_save_btn = _make_button(LocScript.pick("SIMPAN PROFIL", "SAVE PROFILE"), true)
+	account_profile_save_btn.pressed.connect(_on_account_profile_save_pressed)
+	profile_btns.add_child(account_profile_save_btn)
 
-	account_logout_btn = _make_button(LocScript.pick("KELUAR AKUN (LOGOUT)", "LOGOUT"), false, "danger")
+	account_logout_btn = _make_button(LocScript.pick("KELUAR AKUN", "LOGOUT"), false, "danger")
 	account_logout_btn.pressed.connect(_on_account_logout_pressed)
 	profile_btns.add_child(account_logout_btn)
 
@@ -2454,11 +2692,17 @@ func _open_account_modal(tab_idx: int = 0) -> void:
 		account_scroll.scroll_vertical = 0
 	_set_account_status("", HorrorTheme.ON_SURFACE_VARIANT)
 	_select_account_tab(tab_idx)
+	_profile_dirty = false
+	_sync_profile_inputs_from_account(true)
 	_refresh_account_ui()
 	_open_modal(account_overlay, account_panel)
 	var am: Variant = _am()
+	if am != null and am.can_access_online_modes() and am.has_method("refresh_profile_from_server"):
+		am.refresh_profile_from_server()
 	if (am == null or not am.can_access_online_modes()) and account_username_input:
 		call_deferred("_focus_control_safely", account_username_input)
+	elif profile_display_name_input and am != null and am.can_access_online_modes():
+		call_deferred("_focus_control_safely", profile_display_name_input)
 
 func _select_account_tab(tab_idx: int) -> void:
 	account_tab_index = clampi(tab_idx, 0, 1)
@@ -2489,22 +2733,34 @@ func _set_account_status(msg: String, col: Color = HorrorTheme.ON_SURFACE_VARIAN
 
 func _set_account_busy(busy: bool) -> void:
 	_account_busy = busy
-	for btn: Button in [account_submit_btn, guest_btn, account_sync_btn, account_logout_btn, account_login_tab_btn, account_register_tab_btn]:
+	for btn: Button in [account_submit_btn, guest_btn, account_profile_save_btn, account_logout_btn, account_login_tab_btn, account_register_tab_btn, profile_avatar_pick_btn, profile_avatar_reset_btn]:
 		if is_instance_valid(btn):
 			btn.disabled = busy
 			btn.mouse_default_cursor_shape = Control.CURSOR_ARROW if busy else Control.CURSOR_POINTING_HAND
+	for p_btn_var: Variant in profile_avatar_preset_btns.values():
+		var p_btn: Button = p_btn_var as Button
+		if is_instance_valid(p_btn):
+			p_btn.disabled = busy
+	if is_instance_valid(profile_display_name_input):
+		profile_display_name_input.editable = not busy
+	if is_instance_valid(profile_bio_input):
+		profile_bio_input.editable = not busy
 
 func _refresh_account_ui() -> void:
 	var am: Variant = _am()
 	var logged_in: bool = am != null and am.can_access_online_modes()
 	var is_guest: bool = am != null and am.is_guest_mode
 	var gate_resolved: bool = am == null or am.account_gate_resolved
-	var uname_disp: String = str(am.username) if am != null else ""
-	var role_disp: String = str(am.role).to_upper() if am != null else "PLAYER"
+	var uname_disp: String = ProfanityFilterScript.censor(str(am.username)) if am != null else ""
+	var shown_name: String = uname_disp
+	if am != null and am.has_method("get_effective_display_name"):
+		shown_name = ProfanityFilterScript.censor(str(am.call("get_effective_display_name")))
+	if shown_name.strip_edges().is_empty():
+		shown_name = uname_disp
 	var chip_text: String = ""
 	var chip_color: Color = HorrorTheme.TEXT_MUTED
 	if logged_in:
-		chip_text = LocScript.pick("AKUN: %s" % uname_disp, "ACCOUNT: %s" % uname_disp)
+		chip_text = LocScript.pick("AKUN: %s" % shown_name, "ACCOUNT: %s" % shown_name)
 		chip_color = HorrorTheme.SUCCESS_SAGE
 	elif is_guest:
 		chip_text = "GUEST (OFFLINE)"
@@ -2532,26 +2788,13 @@ func _refresh_account_ui() -> void:
 		if not gate_resolved:
 			account_title_label.text = LocScript.pick("GERBANG AKUN LAMPOR", "LAMPOR ACCOUNT GATE")
 		else:
-			account_title_label.text = LocScript.pick("PROFIL AKUN LAMPOR", "LAMPOR ACCOUNT PROFILE") if logged_in else LocScript.pick("AKUN LAMPOR", "LAMPOR ACCOUNT")
-	if logged_in and account_profile_summary_label:
-		account_profile_summary_label.text = LocScript.pick(
-			"Username    : %s\nRole        : %s\nTotal Win   : %d\nKoin Emas   : %d\nNyawa       : %d/%d" % [
-				uname_disp,
-				role_disp,
-				GameManager.total_wins,
-				GameManager.coins,
-				GameManager.extra_lives,
-				GameManager.MAX_EXTRA_LIVES
-			],
-			"Username    : %s\nRole        : %s\nTotal Wins  : %d\nGold Coins  : %d\nExtra Lives : %d/%d" % [
-				uname_disp,
-				role_disp,
-				GameManager.total_wins,
-				GameManager.coins,
-				GameManager.extra_lives,
-				GameManager.MAX_EXTRA_LIVES
-			]
-		)
+			account_title_label.text = LocScript.pick("PROFIL PENGGUNA", "USER PROFILE") if logged_in else LocScript.pick("AKUN LAMPOR", "LAMPOR ACCOUNT")
+	if logged_in:
+		_sync_profile_inputs_from_account(false)
+	else:
+		_profile_dirty = false
+		_profile_loaded_for_uid = ""
+		_profile_draft_avatar = ""
 
 func _on_account_state_changed() -> void:
 	_refresh_account_ui()
@@ -2631,23 +2874,280 @@ func _on_guest_pressed() -> void:
 	if start_button:
 		call_deferred("_focus_control_safely", start_button)
 
-func _on_account_sync_pressed() -> void:
+func _on_account_profile_save_pressed() -> void:
 	var am: Variant = _am()
 	if _account_busy or am == null or not am.can_access_online_modes():
 		return
+	var next_disp: String = ProfanityFilterScript.censor(profile_display_name_input.text.strip_edges().left(32)) if is_instance_valid(profile_display_name_input) else ""
+	var next_bio: String = ProfanityFilterScript.censor(profile_bio_input.text.strip_edges().left(200)) if is_instance_valid(profile_bio_input) else ""
+	var next_avatar: String = _profile_draft_avatar.strip_edges()
+	var safe_filename: String = _profile_avatar_filename
+	if next_avatar.begins_with("data:image/") and safe_filename.is_empty() and am.has_method("generate_safe_avatar_filename"):
+		safe_filename = str(am.call("generate_safe_avatar_filename", "jpg"))
 	_set_account_busy(true)
-	_set_account_status(LocScript.pick("Menyinkronkan progres ke Neon DB...", "Syncing progress to Neon DB..."), HorrorTheme.ON_SURFACE_VARIANT)
-	await am.sync_profile_to_cloud()
+	_set_account_status(LocScript.pick("Menyimpan perubahan profil...", "Saving profile changes..."), HorrorTheme.ON_SURFACE_VARIANT)
+	var res: Dictionary = await am.update_profile(next_disp, next_bio, next_avatar, safe_filename)
 	if not is_instance_valid(self) or not is_inside_tree():
 		return
 	_set_account_busy(false)
-	_refresh_account_ui()
-	_refresh_currency_display()
-	var sync_err: String = str(am.last_error) if is_instance_valid(am) else ""
-	if sync_err.is_empty():
-		_set_account_status(LocScript.pick("Progres berhasil disinkronkan ke cloud.", "Progress synced to cloud."), HorrorTheme.SUCCESS_SAGE)
+	if bool(res.get("ok", false)):
+		_profile_dirty = false
+		_profile_avatar_filename = ""
+		_sync_profile_inputs_from_account(true)
+		_refresh_account_ui()
+		_set_account_status(LocScript.pick("Profil berhasil disimpan.", "Profile saved successfully."), HorrorTheme.SUCCESS_SAGE)
 	else:
-		_set_account_status(sync_err, HorrorTheme.ERROR)
+		_set_account_status(_extract_error(res, "Gagal menyimpan profil.", "Failed to save profile."), HorrorTheme.ERROR)
+
+func _style_text_edit(te: TextEdit) -> void:
+	if not te:
+		return
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = HorrorTheme.SURFACE_LOWEST
+	normal.border_color = HorrorTheme.BORDER_INTERACTIVE
+	normal.set_border_width_all(1)
+	normal.set_corner_radius_all(2)
+	normal.content_margin_left = 10.0
+	normal.content_margin_right = 10.0
+	normal.content_margin_top = 8.0
+	normal.content_margin_bottom = 8.0
+	var focus := normal.duplicate() as StyleBoxFlat
+	focus.bg_color = HorrorTheme.SURFACE_LOW
+	focus.border_color = HorrorTheme.PRIMARY
+	focus.set_border_width_all(2)
+	te.add_theme_stylebox_override("normal", normal)
+	te.add_theme_stylebox_override("focus", focus)
+	te.add_theme_color_override("font_color", HorrorTheme.ON_SURFACE)
+	te.add_theme_color_override("font_placeholder_color", HorrorTheme.TEXT_MUTED)
+	te.add_theme_color_override("caret_color", HorrorTheme.PRIMARY)
+	te.add_theme_color_override("selection_color", Color(HorrorTheme.PRIMARY_CONTAINER.r, HorrorTheme.PRIMARY_CONTAINER.g, HorrorTheme.PRIMARY_CONTAINER.b, 0.65))
+	te.add_theme_font_override("font", HorrorTheme.get_body_font())
+	te.add_theme_font_size_override("font_size", 13)
+
+func _sync_profile_inputs_from_account(force: bool) -> void:
+	var am: Variant = _am()
+	if am == null or not am.can_access_online_modes():
+		return
+	var uid_now: String = str(am.get("user_id")) if "user_id" in am else str(am.username)
+	if not force and _profile_dirty and uid_now == _profile_loaded_for_uid:
+		return
+	if not force and uid_now == _profile_loaded_for_uid and is_instance_valid(profile_username_input) and not profile_username_input.text.is_empty():
+		return
+	_profile_syncing_inputs = true
+	_profile_loaded_for_uid = uid_now
+	_profile_dirty = false
+	var uname_val: String = str(am.get("username")) if "username" in am else ""
+	var disp_val: String = str(am.get("display_name")) if "display_name" in am else ""
+	var bio_val: String = str(am.get("bio")) if "bio" in am else ""
+	_profile_draft_avatar = str(am.get("avatar_url")) if "avatar_url" in am else ""
+	if is_instance_valid(profile_username_input):
+		profile_username_input.text = uname_val
+	if is_instance_valid(profile_display_name_input):
+		profile_display_name_input.text = disp_val
+	if is_instance_valid(profile_bio_input):
+		profile_bio_input.text = bio_val
+	_update_profile_bio_counter()
+	_refresh_profile_avatar_preview()
+	_update_profile_save_button_label()
+	_profile_syncing_inputs = false
+
+func _on_profile_field_edited() -> void:
+	if _profile_syncing_inputs:
+		return
+	_profile_dirty = true
+	_update_profile_save_button_label()
+	_set_account_status(LocScript.pick("Ada perubahan belum disimpan. Klik SIMPAN PROFIL.", "Unsaved changes. Click SAVE PROFILE."), HorrorTheme.RELIC_BRASS)
+
+func _on_profile_bio_changed() -> void:
+	if not is_instance_valid(profile_bio_input):
+		return
+	if profile_bio_input.text.length() > 200:
+		var col_idx: int = profile_bio_input.get_caret_column()
+		var line_idx: int = profile_bio_input.get_caret_line()
+		profile_bio_input.text = profile_bio_input.text.left(200)
+		profile_bio_input.set_caret_line(mini(line_idx, profile_bio_input.get_line_count() - 1))
+		profile_bio_input.set_caret_column(mini(col_idx, profile_bio_input.get_line(profile_bio_input.get_caret_line()).length()))
+	_update_profile_bio_counter()
+	_on_profile_field_edited()
+
+func _update_profile_bio_counter() -> void:
+	if not is_instance_valid(profile_bio_count_label):
+		return
+	var cur_len: int = profile_bio_input.text.length() if is_instance_valid(profile_bio_input) else 0
+	profile_bio_count_label.text = "%d/200" % cur_len
+	profile_bio_count_label.add_theme_color_override("font_color", HorrorTheme.RELIC_BRASS if cur_len >= 180 else HorrorTheme.TEXT_MUTED)
+
+func _update_profile_save_button_label() -> void:
+	if not is_instance_valid(account_profile_save_btn):
+		return
+	if _profile_dirty:
+		account_profile_save_btn.text = LocScript.pick("SIMPAN PROFIL *", "SAVE PROFILE *")
+	else:
+		account_profile_save_btn.text = LocScript.pick("SIMPAN PROFIL", "SAVE PROFILE")
+
+func _on_profile_pick_photo_pressed() -> void:
+	if _account_busy or not is_instance_valid(profile_avatar_dialog):
+		return
+	profile_avatar_dialog.popup_centered_ratio(0.75)
+
+func _on_profile_reset_photo_pressed() -> void:
+	if _account_busy:
+		return
+	_profile_draft_avatar = ""
+	_profile_avatar_filename = ""
+	_refresh_profile_avatar_preview()
+	_on_profile_field_edited()
+
+func _on_profile_preset_selected(preset_id: String) -> void:
+	if _account_busy:
+		return
+	_profile_draft_avatar = preset_id
+	_profile_avatar_filename = ""
+	_refresh_profile_avatar_preview()
+	_on_profile_field_edited()
+
+func _on_profile_photo_file_selected(file_path: String) -> void:
+	var img := Image.new()
+	if img.load(file_path) != OK or img.is_empty():
+		_set_account_status(LocScript.pick("File gambar tidak dapat dibaca. Gunakan PNG, JPG, atau WEBP.", "Could not read image file. Use PNG, JPG, or WEBP."), HorrorTheme.ERROR)
+		return
+	var encoded: String = _encode_profile_avatar_data_url(img)
+	if encoded.is_empty():
+		_set_account_status(LocScript.pick("Ukuran gambar terlalu besar setelah kompresi. Pilih gambar lebih sederhana.", "Image size still exceeds limit after compression."), HorrorTheme.ERROR)
+		return
+	var am: Variant = _am()
+	_profile_avatar_filename = str(am.call("generate_safe_avatar_filename", "jpg")) if (am != null and am.has_method("generate_safe_avatar_filename")) else ("avatar_%08x.jpg" % randi())
+	_profile_draft_avatar = encoded
+	_refresh_profile_avatar_preview()
+	_on_profile_field_edited()
+	_set_account_status(
+		LocScript.pick("Foto siap dikirim sebagai %s. Klik SIMPAN PROFIL." % _profile_avatar_filename, "Photo queued as %s. Click SAVE PROFILE." % _profile_avatar_filename),
+		HorrorTheme.RELIC_BRASS
+	)
+
+func _encode_profile_avatar_data_url(src_img: Image) -> String:
+	var work := src_img.duplicate() as Image
+	if work == null or work.is_empty():
+		return ""
+	if work.get_format() != Image.FORMAT_RGBA8:
+		work.convert(Image.FORMAT_RGBA8)
+	var w: int = work.get_width()
+	var h: int = work.get_height()
+	var side: int = mini(w, h)
+	if side <= 0:
+		return ""
+	var crop_rect := Rect2i((w - side) / 2, (h - side) / 2, side, side)
+	var square := work.get_region(crop_rect)
+	for attempt: Array in [[96, 0.78], [84, 0.68], [72, 0.56], [64, 0.48]]:
+		var target_px: int = int(attempt[0])
+		var jpg_q: float = float(attempt[1])
+		var scaled := square.duplicate() as Image
+		scaled.resize(target_px, target_px, Image.INTERPOLATE_LANCZOS)
+		var jpg_bytes: PackedByteArray = scaled.save_jpg_to_buffer(jpg_q)
+		var data_url: String = "data:image/jpeg;base64," + Marshalls.raw_to_base64(jpg_bytes)
+		if data_url.length() <= 19000:
+			return data_url
+	return ""
+
+func _refresh_profile_avatar_preview() -> void:
+	var am: Variant = _am()
+	var uname_val: String = str(am.get("username")) if am != null and "username" in am else "L"
+	if is_instance_valid(profile_avatar_rect):
+		profile_avatar_rect.texture = _build_profile_avatar_texture(_profile_draft_avatar, uname_val)
+	for p_id: String in profile_avatar_preset_btns.keys():
+		var p_btn: Button = profile_avatar_preset_btns[p_id] as Button
+		if is_instance_valid(p_btn):
+			HorrorTheme.style_button(p_btn, "primary" if _profile_draft_avatar == p_id else "secondary", 11, true)
+
+func _build_profile_avatar_texture(avatar_str: String, uname: String) -> Texture2D:
+	var cleaned: String = avatar_str.strip_edges()
+	if cleaned.begins_with("data:image/") and cleaned.contains(";base64,"):
+		var parts: PackedStringArray = cleaned.split(";base64,", false, 2)
+		if parts.size() == 2:
+			var raw: PackedByteArray = Marshalls.base64_to_raw(parts[1])
+			if raw.size() > 8:
+				var img := Image.new()
+				var header: String = parts[0].to_lower()
+				var load_err: Error = ERR_INVALID_DATA
+				if header.contains("png"):
+					load_err = img.load_png_from_buffer(raw)
+				elif header.contains("webp"):
+					load_err = img.load_webp_from_buffer(raw)
+				else:
+					load_err = img.load_jpg_from_buffer(raw)
+				if load_err != OK:
+					if img.load_png_from_buffer(raw) == OK or img.load_jpg_from_buffer(raw) == OK or img.load_webp_from_buffer(raw) == OK:
+						load_err = OK
+				if load_err == OK and not img.is_empty():
+					return ImageTexture.create_from_image(img)
+	return _generate_preset_avatar_texture(cleaned, uname)
+
+func _generate_preset_avatar_texture(preset_id: String, uname: String) -> Texture2D:
+	var sz: int = 96
+	var img := Image.create(sz, sz, false, Image.FORMAT_RGBA8)
+	var bg := Color("190c0b")
+	var accent := HorrorTheme.ACCENT
+	match preset_id:
+		"preset:obor":
+			bg = Color("24120c")
+			accent = Color("e87b35")
+		"preset:keris":
+			bg = Color("16121a")
+			accent = HorrorTheme.RELIC_BRASS
+		"preset:bulan":
+			bg = Color("1f0a0b")
+			accent = HorrorTheme.ACCENT
+		"preset:keranda":
+			bg = Color("0c1c14")
+			accent = HorrorTheme.KERANDA_GLOW.lightened(0.35)
+		"preset:desa":
+			bg = Color("141210")
+			accent = HorrorTheme.PRIMARY
+	img.fill(bg)
+	var center := Vector2(sz * 0.5, sz * 0.5)
+	for y: int in range(sz):
+		for x: int in range(sz):
+			var border: bool = x < 2 or x >= sz - 2 or y < 2 or y >= sz - 2
+			if border:
+				img.set_pixel(x, y, Color(accent.r, accent.g, accent.b, 0.72))
+				continue
+			var p := Vector2(float(x), float(y))
+			var dist: float = p.distance_to(center)
+			if preset_id == "preset:bulan":
+				if dist < 24.0 and p.distance_to(center + Vector2(8.0, -5.0)) >= 18.0:
+					img.set_pixel(x, y, accent)
+			elif preset_id == "preset:obor":
+				if absf(p.x - center.x) < 5.0 and p.y >= 48.0 and p.y <= 78.0:
+					img.set_pixel(x, y, HorrorTheme.RELIC_BRASS)
+				elif p.y < 52.0 and p.y >= 20.0:
+					var flame_w: float = (1.0 - absf(p.y - 36.0) / 18.0) * 14.0
+					if absf(p.x - center.x) < flame_w:
+						img.set_pixel(x, y, accent if p.y < 38.0 else HorrorTheme.PRIMARY)
+			elif preset_id == "preset:keris":
+				var wave_x: float = center.x + sin((p.y - 16.0) * 0.22) * 5.0
+				if p.y >= 16.0 and p.y <= 66.0 and absf(p.x - wave_x) < 3.5:
+					img.set_pixel(x, y, accent)
+				elif p.y > 66.0 and p.y <= 78.0 and absf(p.x - center.x) < 6.5:
+					img.set_pixel(x, y, HorrorTheme.BORDER_INTERACTIVE)
+			elif preset_id == "preset:keranda":
+				if absf(p.x - center.x) <= 22.0 and absf(p.y - center.y) <= 14.0:
+					img.set_pixel(x, y, accent)
+				elif absf(p.x - center.x) <= 30.0 and absf(p.y - (center.y + 11.0)) <= 2.0:
+					img.set_pixel(x, y, HorrorTheme.RELIC_BRASS)
+			elif preset_id == "preset:desa":
+				if p.y >= 34.0 and p.y <= 50.0 and absf(p.x - center.x) <= (p.y - 30.0) * 1.35:
+					img.set_pixel(x, y, accent)
+				elif p.y > 50.0 and p.y <= 74.0 and absf(p.x - center.x) <= 18.0:
+					img.set_pixel(x, y, HorrorTheme.OUTLINE_VARIANT)
+			else:
+				var ring: bool = absf(dist - 24.0) < 2.2
+				var inner_dot: bool = (dist < 10.0) or (absf(p.x - center.x) < 2.0 and absf(p.y - center.y) < 16.0) or (absf(p.y - center.y) < 2.0 and absf(p.x - center.x) < 16.0)
+				if ring:
+					img.set_pixel(x, y, accent)
+				elif inner_dot:
+					var tint: float = 0.85 if not uname.is_empty() else 0.65
+					img.set_pixel(x, y, Color(HorrorTheme.PRIMARY.r, HorrorTheme.PRIMARY.g, HorrorTheme.PRIMARY.b, tint))
+	return ImageTexture.create_from_image(img)
 
 func _on_account_logout_pressed() -> void:
 	if _account_busy:
@@ -2769,8 +3269,11 @@ func _open_mp_server_modal(mode: String) -> void:
 	if join_password_input:
 		join_password_input.clear()
 	_set_mp_server_feedback("", HorrorTheme.ON_SURFACE_VARIANT)
+	_mp_auto_refresh_accum = 0.0
+	_mp_health_refresh_counter = 0
+	_mp_last_rooms_sig = ""
 	_open_modal(mp_server_overlay, mp_server_panel)
-	_refresh_mp_server_and_rooms()
+	_refresh_mp_server_and_rooms(false)
 
 func _set_mp_server_feedback(msg: String, col: Color = HorrorTheme.ERROR) -> void:
 	if not mp_server_feedback_label:
@@ -2779,37 +3282,52 @@ func _set_mp_server_feedback(msg: String, col: Color = HorrorTheme.ERROR) -> voi
 	mp_server_feedback_label.visible = not msg.strip_edges().is_empty()
 	mp_server_feedback_label.add_theme_color_override("font_color", col)
 
-func _refresh_mp_server_and_rooms() -> void:
+func _refresh_mp_server_and_rooms(silent: bool = false) -> void:
 	if not is_instance_valid(self) or not is_inside_tree():
 		return
-	_mp_rooms_loading = true
-	_render_mp_room_list([])
-	if mp_refresh_btn:
-		mp_refresh_btn.disabled = true
-	if mp_server_status_label:
-		mp_server_status_label.text = LocScript.pick("Server: Memeriksa...", "Server: Checking...")
-		mp_server_status_label.add_theme_color_override("font_color", HorrorTheme.ON_SURFACE_VARIANT)
+	if _mp_refresh_in_flight:
+		return
+	_mp_refresh_in_flight = true
+	if not silent:
+		_mp_rooms_loading = true
+		_mp_last_rooms_sig = ""
+		_render_mp_room_list([])
+		if mp_refresh_btn:
+			mp_refresh_btn.disabled = true
+		if mp_server_status_label:
+			mp_server_status_label.text = LocScript.pick("Server: Memeriksa...", "Server: Checking...")
+			mp_server_status_label.add_theme_color_override("font_color", HorrorTheme.ON_SURFACE_VARIANT)
 
 	var mp: Variant = _mp()
-	var t0: int = Time.get_ticks_msec()
-	var health_res: Dictionary = await mp.check_server_health() if mp != null else {"ok": false}
-	if not is_instance_valid(self) or not is_inside_tree():
-		return
-	var rtt: int = maxi(1, Time.get_ticks_msec() - t0)
-	if mp_server_status_label:
-		if bool(health_res.get("ok", false)):
-			var hdata: Dictionary = _unwrap_payload(health_res)
-			if bool(hdata.get("maintenanceMode", false)):
-				mp_server_status_label.text = LocScript.pick("Server: MAINTENANCE (%s)" % str(hdata.get("maintenanceMessage", "")), "Server: MAINTENANCE (%s)" % str(hdata.get("maintenanceMessage", "")))
-				mp_server_status_label.add_theme_color_override("font_color", HorrorTheme.RELIC_BRASS)
-			else:
-				mp_server_status_label.text = LocScript.pick("Server: Online (%d ms)" % rtt, "Server: Online (%d ms)" % rtt)
-				mp_server_status_label.add_theme_color_override("font_color", HorrorTheme.SUCCESS_SAGE)
-		else:
-			mp_server_status_label.text = LocScript.pick("Server: Tidak Terjangkau", "Server: Unreachable")
-			mp_server_status_label.add_theme_color_override("font_color", HorrorTheme.ERROR)
+	var should_check_health: bool = not silent
+	if silent:
+		_mp_health_refresh_counter += 1
+		if _mp_health_refresh_counter >= 5:
+			_mp_health_refresh_counter = 0
+			should_check_health = true
+
+	if should_check_health:
+		var t0: int = Time.get_ticks_msec()
+		var health_res: Dictionary = await mp.check_server_health() if mp != null else {"ok": false}
+		if not is_instance_valid(self) or not is_inside_tree():
+			_mp_refresh_in_flight = false
+			return
+		var rtt: int = maxi(1, Time.get_ticks_msec() - t0)
+		if mp_server_status_label:
+			if bool(health_res.get("ok", false)):
+				var hdata: Dictionary = _unwrap_payload(health_res)
+				if bool(hdata.get("maintenanceMode", false)):
+					mp_server_status_label.text = LocScript.pick("Server: MAINTENANCE (%s)" % str(hdata.get("maintenanceMessage", "")), "Server: MAINTENANCE (%s)" % str(hdata.get("maintenanceMessage", "")))
+					mp_server_status_label.add_theme_color_override("font_color", HorrorTheme.RELIC_BRASS)
+				else:
+					mp_server_status_label.text = LocScript.pick("Server: Online (%d ms)" % rtt, "Server: Online (%d ms)" % rtt)
+					mp_server_status_label.add_theme_color_override("font_color", HorrorTheme.SUCCESS_SAGE)
+			elif not silent:
+				mp_server_status_label.text = LocScript.pick("Server: Tidak Terjangkau", "Server: Unreachable")
+				mp_server_status_label.add_theme_color_override("font_color", HorrorTheme.ERROR)
 
 	var rooms_res: Dictionary = await mp.list_rooms(mp_mode_filter) if mp != null else {"ok": false}
+	_mp_refresh_in_flight = false
 	if not is_instance_valid(self) or not is_inside_tree():
 		return
 	var was_loading: bool = _mp_rooms_loading
@@ -2817,21 +3335,47 @@ func _refresh_mp_server_and_rooms() -> void:
 	if mp_refresh_btn:
 		mp_refresh_btn.disabled = false
 	if bool(rooms_res.get("ok", false)):
-		if was_loading:
+		if was_loading or silent:
 			var rdata: Dictionary = _unwrap_payload(rooms_res)
 			var list_var: Variant = rdata.get("rooms", _mp_last_rooms)
 			var rooms_arr: Array = list_var if list_var is Array else _mp_last_rooms
 			_mp_last_rooms = rooms_arr
-			_render_mp_room_list(rooms_arr)
-	else:
+			var next_sig: String = _compute_rooms_signature(rooms_arr)
+			if not silent or next_sig != _mp_last_rooms_sig:
+				_mp_last_rooms_sig = next_sig
+				_render_mp_room_list(rooms_arr)
+	elif not silent:
 		_render_mp_room_list([])
 		_set_mp_server_feedback(_extract_error(rooms_res, "Gagal memuat daftar room.", "Failed to load room list."), HorrorTheme.ERROR)
+
+func _compute_rooms_signature(rooms: Array) -> String:
+	var parts := PackedStringArray()
+	for item: Variant in rooms:
+		if item is Dictionary:
+			var r: Dictionary = item as Dictionary
+			var r_mode: String = str(r.get("mode", mp_mode_filter))
+			if r_mode != mp_mode_filter:
+				continue
+			parts.append("%s|%s|%s|%d|%d|%s|%s|%s" % [
+				str(r.get("id", r.get("roomId", ""))),
+				str(r.get("name", "")),
+				str(r.get("hostUsername", r.get("host", ""))),
+				int(r.get("playerCount", 1)),
+				int(r.get("maxPlayers", 4)),
+				str(r.get("status", "lobby")),
+				str(r.get("difficulty", "normal")),
+				"1" if bool(r.get("hasPassword", false)) else "0"
+			])
+	return ";".join(parts)
 
 func _on_multiplayer_rooms_updated(rooms: Array) -> void:
 	_mp_last_rooms = rooms
 	_mp_rooms_loading = false
 	if mp_server_overlay and mp_server_overlay.visible:
-		_render_mp_room_list(rooms)
+		var next_sig: String = _compute_rooms_signature(rooms)
+		if next_sig != _mp_last_rooms_sig:
+			_mp_last_rooms_sig = next_sig
+			_render_mp_room_list(rooms)
 
 func _render_mp_room_list(rooms: Array) -> void:
 	if not is_instance_valid(mp_rooms_list):
@@ -2866,8 +3410,8 @@ func _render_mp_room_list(rooms: Array) -> void:
 		var r: Dictionary = room_var as Dictionary
 		var room_id: String = str(r.get("id", r.get("roomId", "")))
 		var room_code: String = str(r.get("roomCode", r.get("code", "")))
-		var room_name: String = str(r.get("name", "Room"))
-		var host_name: String = str(r.get("hostUsername", r.get("host", "Host")))
+		var room_name: String = ProfanityFilterScript.censor(str(r.get("name", "Room")))
+		var host_name: String = ProfanityFilterScript.censor(str(r.get("hostUsername", r.get("host", "Host"))))
 		var p_count: int = int(r.get("playerCount", 1))
 		var p_max: int = int(r.get("maxPlayers", 4))
 		var has_pwd: bool = bool(r.get("hasPassword", false))
@@ -3522,7 +4066,7 @@ func _refresh_lobby_ui(room: Dictionary, players: Array) -> void:
 				continue
 			var p: Dictionary = p_var as Dictionary
 			var uid: String = str(p.get("userId", p.get("id", "")))
-			var uname: String = str(p.get("username", "Player"))
+			var uname: String = ProfanityFilterScript.censor(str(p.get("username", "Player")))
 			var is_host: bool = bool(p.get("isHost", uid == host_uid))
 			var is_ready: bool = bool(p.get("isReady", false))
 
@@ -3589,8 +4133,8 @@ func _refresh_lobby_chat() -> void:
 		if not entry_var is Dictionary:
 			continue
 		var entry: Dictionary = entry_var as Dictionary
-		var sender: String = str(entry.get("sender", entry.get("sender_name", entry.get("username", "Pemain")))).replace("[", "[lb]").replace("]", "[rb]")
-		var msg_text: String = str(entry.get("text", entry.get("message", ""))).replace("[", "[lb]").replace("]", "[rb]")
+		var sender: String = ProfanityFilterScript.censor(str(entry.get("sender", entry.get("sender_name", entry.get("username", "Pemain"))))).replace("[", "[lb]").replace("]", "[rb]")
+		var msg_text: String = ProfanityFilterScript.censor(str(entry.get("text", entry.get("message", "")))).replace("[", "[lb]").replace("]", "[rb]")
 		lines.append("[color=#c99a5b][b]%s[/b][/color]: %s" % [sender, msg_text])
 	lobby_chat_view.text = "\n".join(lines)
 	if hist.size() != _last_chat_count:
@@ -3632,7 +4176,7 @@ func _on_lobby_kick_pressed(target_uid: String) -> void:
 func _on_lobby_chat_send_pressed() -> void:
 	if not lobby_chat_input:
 		return
-	var msg: String = lobby_chat_input.text.strip_edges()
+	var msg: String = ProfanityFilterScript.censor(lobby_chat_input.text.strip_edges())
 	if msg.is_empty():
 		return
 	lobby_chat_input.clear()

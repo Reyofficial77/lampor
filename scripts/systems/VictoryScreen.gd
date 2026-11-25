@@ -57,6 +57,7 @@ func _ready() -> void:
 
 	if title_label:
 		title_label.text = LocScript.pick("KUTUKAN TELAH BERAKHIR", "THE CURSE IS BROKEN")
+		title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		title_label.add_theme_font_override("font", HORROR_TITLE_FONT)
 		title_label.add_theme_color_override("font_color", Color("f5d67a"))
 		title_label.add_theme_color_override("font_outline_color", Color("241806"))
@@ -73,6 +74,7 @@ func _ready() -> void:
 
 	if subtitle_label:
 		subtitle_label.text = LocScript.pick("Fajar menyingsing. Benda keramat musnah dan Lampor pun lenyap.", "Dawn breaks at last. The cursed relics are burned and Lampor is banished.")
+		subtitle_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		HorrorTheme.style_label(subtitle_label, "body-lg", Color("efe6d5"), 16)
 		subtitle_label.add_theme_color_override("font_outline_color", Color("120c05"))
 		subtitle_label.add_theme_constant_override("outline_size", 2)

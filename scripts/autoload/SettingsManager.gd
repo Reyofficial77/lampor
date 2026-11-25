@@ -566,13 +566,14 @@ func _apply_graphics_quality() -> void:
 	var viewport: Viewport = get_viewport()
 	var effective: String = get_effective_graphics_quality()
 	var is_compat: bool = RenderingServer.get_current_rendering_method() == "gl_compatibility"
+	var is_mobile: bool = OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios") or DisplayServer.is_touchscreen_available()
 	match effective:
 		"low":
-			viewport.scaling_3d_scale = 0.75
+			viewport.scaling_3d_scale = 0.62 if is_mobile else 0.72
 			viewport.msaa_3d = Viewport.MSAA_DISABLED
 			viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
 			viewport.positional_shadow_atlas_size = 0
-			RenderingServer.directional_shadow_atlas_set_size(512, false)
+			RenderingServer.directional_shadow_atlas_set_size(0 if is_mobile else 512, false)
 		"medium":
 			viewport.scaling_3d_scale = 0.85
 			viewport.msaa_3d = Viewport.MSAA_DISABLED
@@ -585,24 +586,27 @@ func _apply_graphics_quality() -> void:
 			viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED if is_compat else Viewport.SCREEN_SPACE_AA_FXAA
 			viewport.positional_shadow_atlas_size = 2048
 			RenderingServer.directional_shadow_atlas_set_size(2048, true)
-	_apply_scene_graphics_optimizations(effective)
+	_apply_scene_graphics_optimizations(effective, is_mobile)
 
-func _apply_scene_graphics_optimizations(quality: String) -> void:
+func _apply_scene_graphics_optimizations(quality: String, is_mobile: bool = false) -> void:
 	var root_node: Node = get_tree().root
 	if not root_node:
 		return
 
+	var is_low: bool = (quality == "low")
+	var is_mobile_low: bool = is_low and is_mobile
+
 	var horror_overlay: CanvasItem = root_node.find_child("HorrorOverlay", true, false) as CanvasItem
 	if horror_overlay:
-		var is_low: bool = (quality == "low")
 		horror_overlay.set_meta("low_quality_mode", is_low)
+		horror_overlay.set_meta("mobile_low_mode", is_mobile_low)
 		if horror_overlay.material is ShaderMaterial:
 			var mat := horror_overlay.material as ShaderMaterial
 			mat.set_shader_parameter("grain_multiplier", 0.0 if is_low else 1.0)
 			mat.set_shader_parameter("fast_mode", 1.0 if is_low else 0.0)
-		horror_overlay.visible = true
+		horror_overlay.visible = not is_mobile_low
 
-	var cam_far: float = 90.0 if quality == "low" else (105.0 if quality == "medium" else 150.0)
+	var cam_far: float = (78.0 if is_mobile_low else 90.0) if quality == "low" else (105.0 if quality == "medium" else 150.0)
 	for cam_node: Node in root_node.find_children("*", "Camera3D", true, false):
 		var cam: Camera3D = cam_node as Camera3D
 		if cam:
@@ -611,7 +615,7 @@ func _apply_scene_graphics_optimizations(quality: String) -> void:
 	for dir_node: Node in root_node.find_children("*", "DirectionalLight3D", true, false):
 		var dlight: DirectionalLight3D = dir_node as DirectionalLight3D
 		if dlight:
-			dlight.shadow_enabled = true
+			dlight.shadow_enabled = not is_mobile_low
 			dlight.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL if quality == "low" else DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 			dlight.directional_shadow_max_distance = 55.0 if quality == "low" else 95.0
 			dlight.shadow_bias = 0.08 if quality == "low" else 0.04
@@ -624,6 +628,8 @@ func _apply_scene_graphics_optimizations(quality: String) -> void:
 			if not slight.has_meta("_base_shadow"):
 				slight.set_meta("_base_shadow", slight.shadow_enabled)
 			slight.shadow_enabled = (quality == "high") and bool(slight.get_meta("_base_shadow", true))
+			if slight.name == "RemoteFlashlight":
+				slight.spot_range = 14.0 if is_low else 30.0
 
 	for omni_node: Node in root_node.find_children("*", "OmniLight3D", true, false):
 		var olight: OmniLight3D = omni_node as OmniLight3D

@@ -1,6 +1,7 @@
 extends Node
 
 const LocScript = preload("res://scripts/systems/Loc.gd")
+const ProfanityFilterScript = preload("res://scripts/systems/ProfanityFilter.gd")
 
 const ACCOUNT_CFG_PATH: String = "user://lampor_account.cfg"
 const WEB_ACCOUNT_KEY: String = "lampor_account_v1"
@@ -13,6 +14,9 @@ var is_guest_mode: bool = false
 var account_gate_resolved: bool = false
 var user_id: String = ""
 var username: String = ""
+var display_name: String = ""
+var bio: String = ""
+var avatar_url: String = ""
 var role: String = "player"
 var session_token: String = ""
 var is_busy: bool = false
@@ -22,6 +26,7 @@ var server_base_url: String = ""
 var _is_syncing_profile: bool = false
 var _pending_profile_sync: bool = false
 var _applying_cloud_profile: bool = false
+var _me_refresh_in_flight: bool = false
 var _web_sync_pending: bool = false
 var _rx_username: RegEx = null
 var _rx_letter: RegEx = null
@@ -49,6 +54,25 @@ func _ensure_regexes() -> void:
 func can_access_online_modes() -> bool:
 	return is_logged_in and not is_guest_mode and not session_token.is_empty()
 
+func is_admin() -> bool:
+	return can_access_online_modes() and role.strip_edges().to_lower() == "admin"
+
+func get_effective_display_name() -> String:
+	var clean_disp: String = display_name.strip_edges()
+	if not clean_disp.is_empty():
+		return ProfanityFilterScript.censor(clean_disp)
+	return ProfanityFilterScript.censor(username)
+
+func generate_safe_avatar_filename(ext: String = "jpg") -> String:
+	var safe_ext: String = ext.strip_edges().to_lower()
+	if safe_ext not in ["jpg", "png", "webp"]:
+		safe_ext = "jpg"
+	var crypto := Crypto.new()
+	var hex: String = crypto.generate_random_bytes(8).hex_encode()
+	if hex.length() < 8:
+		hex = "%08x%08x" % [randi(), int(Time.get_ticks_usec())]
+	return "avatar_%s.%s" % [hex.left(16), safe_ext]
+
 func validate_credentials_format(uname: String, pwd: String, is_register: bool) -> String:
 	_ensure_regexes()
 	var clean_uname: String = uname.strip_edges()
@@ -62,6 +86,11 @@ func validate_credentials_format(uname: String, pwd: String, is_register: bool) 
 	if pwd.is_empty():
 		return LocScript.pick("Password wajib diisi.", "Password is required.")
 	if is_register:
+		if ProfanityFilterScript.contains_profanity(clean_uname):
+			return LocScript.pick(
+				"Username mengandung kata kasar yang tidak diizinkan.",
+				"Username contains disallowed profanity."
+			)
 		if pwd.length() < 8 or pwd.length() > 72:
 			return LocScript.pick(
 				"Password minimal 8 karakter dan maksimal 72 karakter.",
@@ -228,6 +257,9 @@ func _handle_session_expired(reason_msg: String) -> void:
 	session_token = ""
 	user_id = ""
 	username = ""
+	display_name = ""
+	bio = ""
+	avatar_url = ""
 	role = "player"
 	last_error = reason_msg if not reason_msg.is_empty() else LocScript.network_error_label(401)
 	_clear_account_storage()
@@ -396,6 +428,9 @@ func enter_guest_mode() -> void:
 	session_token = ""
 	user_id = ""
 	username = "Guest"
+	display_name = ""
+	bio = ""
+	avatar_url = ""
 	role = "player"
 	last_error = ""
 	_save_account_storage()
@@ -416,6 +451,9 @@ func logout_account() -> void:
 	session_token = ""
 	user_id = ""
 	username = ""
+	display_name = ""
+	bio = ""
+	avatar_url = ""
 	role = "player"
 	is_logged_in = false
 	is_guest_mode = false
@@ -423,6 +461,56 @@ func logout_account() -> void:
 	last_error = ""
 	_clear_account_storage()
 	SignalBus.account_state_changed.emit()
+
+func update_profile(new_display_name: String, new_bio: String, new_avatar_url: String, _raw_avatar_filename: String = "") -> Dictionary:
+	if not can_access_online_modes():
+		var auth_msg: String = LocScript.pick("Masuk ke akun LAMPOR untuk mengedit profil.", "Sign in to a LAMPOR account to edit your profile.")
+		last_error = auth_msg
+		return {"ok": false, "status": 401, "message": auth_msg}
+	if is_busy:
+		var busy_msg: String = LocScript.pick("Permintaan akun sedang diproses, tunggu sebentar...", "An account request is already in progress...")
+		return {"ok": false, "status": 0, "message": busy_msg}
+
+	is_busy = true
+	last_error = ""
+	var clean_disp: String = ProfanityFilterScript.censor(new_display_name.strip_edges().left(32))
+	var clean_bio: String = ProfanityFilterScript.censor(new_bio.strip_edges().left(200))
+	var clean_avatar: String = new_avatar_url.strip_edges()
+	var body: Dictionary = {
+		"displayName": clean_disp,
+		"bio": clean_bio,
+		"avatarUrl": clean_avatar
+	}
+	if clean_avatar.begins_with("data:image/"):
+		var ext: String = "png" if clean_avatar.begins_with("data:image/png") else ("webp" if clean_avatar.begins_with("data:image/webp") else "jpg")
+		body["avatarFilename"] = generate_safe_avatar_filename(ext)
+	var res: Dictionary = await api_request("POST", "/api/auth/profile", body, true)
+	is_busy = false
+
+	if not bool(res.get("ok", false)):
+		last_error = str(res.get("message", LocScript.pick("Gagal menyimpan perubahan profil.", "Failed to save profile changes.")))
+		return {
+			"ok": false,
+			"status": int(res.get("status", 0)),
+			"message": last_error,
+			"data": res.get("data", {})
+		}
+
+	var data: Dictionary = res.get("data", {})
+	var user_dict: Dictionary = data.get("user", {}) if data.get("user") is Dictionary else {}
+	if not user_dict.is_empty():
+		_extract_identity_from_user(user_dict)
+	else:
+		display_name = str(body["displayName"])
+		bio = str(body["bio"])
+		avatar_url = str(body["avatarUrl"])
+	_save_account_storage()
+	SignalBus.account_state_changed.emit()
+	return {
+		"ok": true,
+		"status": int(res.get("status", 200)),
+		"user": user_dict
+	}
 
 func sync_profile_to_cloud() -> void:
 	if not can_access_online_modes() or _applying_cloud_profile:
@@ -470,6 +558,38 @@ func sync_profile_to_cloud() -> void:
 		if not _pending_profile_sync:
 			break
 	_is_syncing_profile = false
+
+func refresh_profile_from_server() -> Dictionary:
+	if not can_access_online_modes() or _me_refresh_in_flight or _is_syncing_profile:
+		return {}
+	_me_refresh_in_flight = true
+	var res: Dictionary = await api_request("GET", "/api/auth/me", null, true)
+	_me_refresh_in_flight = false
+	if not bool(res.get("ok", false)):
+		return res
+	var data: Dictionary = res.get("data", {})
+	var user_dict: Dictionary = data.get("user", {}) if data.get("user") is Dictionary else {}
+	if user_dict.is_empty():
+		return res
+	var prev_role: String = role
+	var prev_disp: String = display_name
+	var prev_bio: String = bio
+	var prev_avatar: String = avatar_url
+	_extract_identity_from_user(user_dict)
+	var server_seq: int = maxi(0, int(user_data_seq(user_dict)))
+	var server_coins: int = clampi(int(user_dict.get("coins", GameManager.coins)), 0, GameManager.MAX_COINS)
+	var server_wins: int = maxi(0, int(user_dict.get("totalWins", user_dict.get("total_wins", GameManager.total_wins))))
+	var server_lives: int = clampi(int(user_dict.get("extraLives", user_dict.get("extra_lives", GameManager.extra_lives))), 0, GameManager.MAX_EXTRA_LIVES)
+	var should_apply: bool = (server_seq > GameManager.save_seq) or (server_seq >= GameManager.save_seq and (server_coins != GameManager.coins or server_wins != GameManager.total_wins or server_lives != GameManager.extra_lives))
+	if should_apply:
+		_apply_server_user_to_game_manager(user_dict)
+	if should_apply or prev_role != role or prev_disp != display_name or prev_bio != bio or prev_avatar != avatar_url:
+		_save_account_storage()
+		SignalBus.account_state_changed.emit()
+	return res
+
+func user_data_seq(user_data: Dictionary) -> int:
+	return maxi(0, int(user_data.get("saveSeq", user_data.get("save_seq", 0))))
 
 func redeem_cloud_code(code: String) -> Dictionary:
 	if not can_access_online_modes():
@@ -530,6 +650,12 @@ func _extract_identity_from_user(user_data: Dictionary) -> void:
 	var uname_val: String = str(user_data.get("username", username)).strip_edges()
 	if not uname_val.is_empty():
 		username = uname_val
+	if user_data.has("displayName") or user_data.has("display_name"):
+		display_name = str(user_data.get("displayName", user_data.get("display_name", ""))).strip_edges()
+	if user_data.has("bio"):
+		bio = str(user_data.get("bio", "")).strip_edges()
+	if user_data.has("avatarUrl") or user_data.has("avatar_url"):
+		avatar_url = str(user_data.get("avatarUrl", user_data.get("avatar_url", ""))).strip_edges()
 	role = str(user_data.get("role", "player")).strip_edges().to_lower()
 	if role.is_empty():
 		role = "player"
@@ -568,6 +694,9 @@ func _save_account_storage() -> void:
 	cfg.set_value("account", "token", session_token)
 	cfg.set_value("account", "user_id", user_id)
 	cfg.set_value("account", "username", username)
+	cfg.set_value("account", "display_name", display_name)
+	cfg.set_value("account", "bio", bio)
+	cfg.set_value("account", "avatar_url", avatar_url)
 	cfg.set_value("account", "role", role)
 	cfg.set_value("account", "is_guest", is_guest_mode)
 	cfg.save(ACCOUNT_CFG_PATH)
@@ -586,6 +715,9 @@ func _load_account_storage() -> void:
 	var saved_token: String = str(cfg.get_value("account", "token", "")).strip_edges()
 	var saved_uid: String = str(cfg.get_value("account", "user_id", "")).strip_edges()
 	var saved_uname: String = str(cfg.get_value("account", "username", "")).strip_edges()
+	var saved_disp: String = str(cfg.get_value("account", "display_name", "")).strip_edges()
+	var saved_bio: String = str(cfg.get_value("account", "bio", "")).strip_edges()
+	var saved_avatar: String = str(cfg.get_value("account", "avatar_url", "")).strip_edges()
 	var saved_role: String = str(cfg.get_value("account", "role", "player")).strip_edges().to_lower()
 	var saved_guest: bool = bool(cfg.get_value("account", "is_guest", false))
 
@@ -593,6 +725,9 @@ func _load_account_storage() -> void:
 		session_token = saved_token
 		user_id = saved_uid
 		username = saved_uname
+		display_name = saved_disp
+		bio = saved_bio
+		avatar_url = saved_avatar
 		role = saved_role if not saved_role.is_empty() else "player"
 		is_logged_in = false
 		is_guest_mode = false
@@ -601,6 +736,9 @@ func _load_account_storage() -> void:
 		session_token = ""
 		user_id = ""
 		username = "Guest"
+		display_name = ""
+		bio = ""
+		avatar_url = ""
 		role = "player"
 		is_logged_in = false
 		is_guest_mode = true

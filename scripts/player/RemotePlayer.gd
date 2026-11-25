@@ -1,8 +1,12 @@
 class_name RemotePlayer
 extends Node3D
 
+const ProfanityFilterScript = preload("res://scripts/systems/ProfanityFilter.gd")
 const PLAYER_MODEL_PATH: String = "res://assets/models/player/ordinaryMan.fbx"
 const PLAYER_TEXTURE_PATH: String = "res://assets/models/player/OrdinaryManTexture_1024x1024.png"
+
+static var _model_cache: Dictionary = {}
+static var _tex_cache: Texture2D = null
 
 const BONE_ALIASES: Dictionary = {
 	"Hips": ["hip", "Hips"],
@@ -47,6 +51,7 @@ var _has_network_pose: bool = false
 var _last_played_anim: String = ""
 var _loaded_character_model: String = ""
 var _using_legacy_fbx: bool = false
+var _lod_check_elapsed: float = 0.0
 const LOOPING_ANIMATIONS: Array[String] = ["idle", "walk", "sprint", "fall", "crouch", "abducted"]
 
 func _ready() -> void:
@@ -109,11 +114,19 @@ func _setup_character_visuals() -> void:
 	var loaded_model: Node3D = null
 	_using_legacy_fbx = false
 	if not model_path.is_empty() and ResourceLoader.exists(model_path):
-		var packed: PackedScene = ResourceLoader.load(model_path) as PackedScene
+		var packed: PackedScene = _model_cache.get(model_path, null) as PackedScene
+		if packed == null:
+			packed = ResourceLoader.load(model_path) as PackedScene
+			if packed != null:
+				_model_cache[model_path] = packed
 		if packed != null:
 			loaded_model = packed.instantiate() as Node3D
 	if loaded_model == null and ResourceLoader.exists(PLAYER_MODEL_PATH):
-		var fallback_packed: PackedScene = ResourceLoader.load(PLAYER_MODEL_PATH) as PackedScene
+		var fallback_packed: PackedScene = _model_cache.get(PLAYER_MODEL_PATH, null) as PackedScene
+		if fallback_packed == null:
+			fallback_packed = ResourceLoader.load(PLAYER_MODEL_PATH) as PackedScene
+			if fallback_packed != null:
+				_model_cache[PLAYER_MODEL_PATH] = fallback_packed
 		if fallback_packed != null:
 			loaded_model = fallback_packed.instantiate() as Node3D
 			_using_legacy_fbx = true
@@ -340,7 +353,7 @@ func apply_network_state(data: Dictionary) -> void:
 	if data.has("userId"):
 		user_id = str(data.get("userId", user_id))
 	if data.has("username"):
-		var uname: String = str(data.get("username", "")).strip_edges()
+		var uname: String = ProfanityFilterScript.censor(str(data.get("username", "")).strip_edges())
 		if not uname.is_empty():
 			username = uname
 	if data.has("isHost"):
@@ -390,7 +403,12 @@ func apply_network_state(data: Dictionary) -> void:
 			name_label.modulate = Color(0.97, 0.87, 0.85, 1.0)
 
 	if flashlight:
-		flashlight.visible = flashlight_on and is_alive and not is_hiding
+		var is_mobile_low: bool = _is_mobile_low()
+		flashlight.visible = (not is_mobile_low) and flashlight_on and is_alive and not is_hiding
+		if SettingsManager.get_effective_graphics_quality() == "low":
+			flashlight.spot_range = 14.0
+		else:
+			flashlight.spot_range = 30.0
 
 	var resolved_anim: String = current_anim
 	if not is_alive:
@@ -398,6 +416,10 @@ func apply_network_state(data: Dictionary) -> void:
 	elif is_hiding:
 		resolved_anim = "crouch"
 	_play_anim(resolved_anim)
+
+func _is_mobile_low() -> bool:
+	var is_mobile: bool = OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios") or DisplayServer.is_touchscreen_available()
+	return is_mobile and SettingsManager.get_effective_graphics_quality() == "low"
 
 func _process(delta: float) -> void:
 	if not _has_network_pose or not is_inside_tree():
@@ -410,3 +432,15 @@ func _process(delta: float) -> void:
 	if head_pivot:
 		var clamped_pitch: float = clampf(target_pitch, deg_to_rad(-80.0), deg_to_rad(80.0))
 		head_pivot.rotation.x = lerpf(head_pivot.rotation.x, clamped_pitch, minf(1.0, delta * 14.0))
+	_lod_check_elapsed += delta
+	if _lod_check_elapsed >= 0.45:
+		_lod_check_elapsed = 0.0
+		if name_label and is_instance_valid(GameManager.player_character) and GameManager.player_character is Node3D:
+			var d_sq: float = global_position.distance_squared_to((GameManager.player_character as Node3D).global_position)
+			name_label.visible = d_sq <= 784.0
+		if flashlight:
+			var is_m_low: bool = _is_mobile_low()
+			if is_m_low and flashlight.visible:
+				flashlight.visible = false
+			elif not is_m_low:
+				flashlight.visible = flashlight_on and is_alive and not is_hiding

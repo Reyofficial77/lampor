@@ -1302,9 +1302,22 @@ func reset_sandbox_flags() -> void:
 	sandbox_speed_multiplier = 1.0
 	admin_god_mode = false
 
+func is_logged_in_admin() -> bool:
+	var am: Variant = get_account_manager(false)
+	if am == null:
+		return false
+	if am.has_method("is_admin"):
+		return bool(am.call("is_admin"))
+	return bool(am.can_access_online_modes()) and str(am.role).strip_edges().to_lower() == "admin"
+
 func is_sandbox_owner_active() -> bool:
 	var mp: Variant = get_multiplayer_manager(false)
-	return is_sandbox_mode and mp != null and mp.is_room_owner and is_in_active_gameplay()
+	if mp == null or not mp.is_online_session:
+		return false
+	var sandbox_active: bool = is_sandbox_mode or mp.session_mode == "sandbox" or str(mp.current_room.get("mode", "")).to_lower() == "sandbox"
+	if sandbox_active and not is_sandbox_mode:
+		is_sandbox_mode = true
+	return sandbox_active and mp.is_room_owner and (is_in_active_gameplay() or current_state == GameState.PLAYING)
 
 func toggle_sandbox_panel() -> void:
 	if not is_sandbox_owner_active():
@@ -2028,6 +2041,7 @@ func admin_instant_lose() -> bool:
 func admin_set_coins(new_coins: int) -> void:
 	coins = clampi(new_coins, 0, MAX_COINS)
 	save_game_data(true)
+	SignalBus.coins_changed.emit(coins)
 
 func admin_set_extra_lives(new_lives: int) -> void:
 	extra_lives = clampi(new_lives, 0, MAX_EXTRA_LIVES)

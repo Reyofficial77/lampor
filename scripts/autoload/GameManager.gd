@@ -99,6 +99,7 @@ var sandbox_fog_enabled: bool = true
 var sandbox_speed_multiplier: float = 1.0
 var sandbox_time_scale: float = 1.0
 var _handling_network_victory: bool = false
+var _suppress_stale_online_end_until_ms: int = 0
 var _disconnect_notice_layer: CanvasLayer = null
 var save_seq: int = 0
 var _save_load_failed: bool = false
@@ -1333,6 +1334,35 @@ func start_online_room_game(room: Dictionary) -> void:
 		sandbox_time_scale = 1.0
 	start_new_game(diff, false, true)
 
+func restart_current_game() -> void:
+	AudioManager.stop_ending_audio()
+	var mp: Variant = get_multiplayer_manager(false)
+	if mp != null and mp.is_online_session and not mp.current_room.is_empty():
+		var room_copy: Dictionary = (mp.current_room as Dictionary).duplicate(true)
+		mp.world_state.clear()
+		_suppress_stale_online_end_until_ms = Time.get_ticks_msec() + 5000
+		mp.push_event("restart_match", {
+			"difficulty": str(room_copy.get("difficulty", "normal")),
+			"mode": str(room_copy.get("mode", mp.session_mode)),
+			"epoch": Time.get_ticks_msec()
+		})
+		mp._poll_elapsed = mp.GAME_POLL_INTERVAL
+		start_online_room_game(room_copy)
+		return
+	start_new_game(selected_difficulty)
+
+func return_to_main_menu_from_ending() -> void:
+	AudioManager.stop_ending_audio()
+	var mp: Variant = get_multiplayer_manager(false)
+	if mp != null and mp.is_online_session:
+		mp.leave_room()
+	is_sandbox_mode = false
+	sandbox_time_scale = 1.0
+	reset_sandbox_flags()
+	current_state = GameState.MENU
+	get_tree().paused = false
+	get_tree().change_scene_to_file("res://scenes/ui/MainMenu.tscn")
+
 func start_tutorial_game() -> void:
 	start_new_game(Difficulty.EASY, true)
 
@@ -2194,13 +2224,14 @@ func _apply_client_world_state() -> void:
 		if host_h >= 5:
 			host_h = 5
 			host_m = 0
-		if host_h != current_hour or host_m != current_minute:
-			current_hour = host_h
-			current_minute = host_m
-			dawn_reached = (current_hour >= 5)
-			SignalBus.time_tick.emit("%02d:%02d" % [current_hour, current_minute], current_hour, current_minute)
-			if dawn_reached:
-				trigger_dawn_lampor_devour()
+		if not (host_h >= 5 and Time.get_ticks_msec() < _suppress_stale_online_end_until_ms):
+			if host_h != current_hour or host_m != current_minute:
+				current_hour = host_h
+				current_minute = host_m
+				dawn_reached = (current_hour >= 5)
+				SignalBus.time_tick.emit("%02d:%02d" % [current_hour, current_minute], current_hour, current_minute)
+				if dawn_reached:
+					trigger_dawn_lampor_devour()
 
 	if ws.has("act"):
 		var host_act_num: int = clampi(int(ws.get("act", 1)), 1, 3)
@@ -2371,6 +2402,14 @@ func _on_multiplayer_event_received(event_type: String, payload: Dictionary, sen
 			var params: Dictionary = params_val if params_val is Dictionary else {}
 			if not cmd.is_empty():
 				apply_sandbox_command(cmd, params, false)
+		"restart_match":
+			var mp_rs: Variant = get_multiplayer_manager(false)
+			if mp_rs != null and mp_rs.is_online_session and not mp_rs.current_room.is_empty():
+				if current_state == GameState.VICTORY or current_state == GameState.GAMEOVER or not is_in_active_gameplay():
+					AudioManager.stop_ending_audio()
+					mp_rs.world_state.clear()
+					_suppress_stale_online_end_until_ms = Time.get_ticks_msec() + 5000
+					start_online_room_game((mp_rs.current_room as Dictionary).duplicate(true))
 		"victory":
 			_handling_network_victory = true
 			trigger_victory()

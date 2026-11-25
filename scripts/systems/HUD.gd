@@ -128,7 +128,7 @@ var _inv_storage_lbl: Label = null
 var _inv_hotbar_lbl: Label = null
 var _inv_hint_lbl: Label = null
 var fate_card_overlay: FATE_CARD_OVERLAY_SCRIPT = null
-var fate_cards_strip: HFlowContainer = null
+var fate_cards_strip: VBoxContainer = null
 var _pending_fate_offers: Dictionary = {}
 
 func _ready() -> void:
@@ -3142,11 +3142,10 @@ func _build_fate_cards_strip() -> void:
 	var tl_vbox: VBoxContainer = top_left.get_node_or_null("VBox") as VBoxContainer if top_left else null
 	if not tl_vbox:
 		return
-	fate_cards_strip = HFlowContainer.new()
+	fate_cards_strip = VBoxContainer.new()
 	fate_cards_strip.name = "FateCardsStrip"
 	fate_cards_strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	fate_cards_strip.add_theme_constant_override("h_separation", 5)
-	fate_cards_strip.add_theme_constant_override("v_separation", 4)
+	fate_cards_strip.add_theme_constant_override("separation", 4)
 	var touch: bool = _is_touch_device()
 	var view_w: float = get_viewport().get_visible_rect().size.x
 	var strip_w: float = (clampf(view_w * 0.34, 260.0, 350.0) - 16.0) if touch else 380.0
@@ -3171,20 +3170,38 @@ func _refresh_fate_cards_strip() -> void:
 		var is_blessing: bool = str(card.get("type", "curse")) == "blessing"
 		var pill := PanelContainer.new()
 		pill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		pill.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var bg_col: Color = Color(0.08, 0.16, 0.10, 0.88) if is_blessing else Color(0.24, 0.05, 0.06, 0.90)
 		var border_col: Color = HorrorTheme.RELIC_BRASS if is_blessing else HorrorTheme.ACCENT
-		pill.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(bg_col, border_col, 3, 7, 2))
-		pill.tooltip_text = FATE_CARD_SYSTEM_SCRIPT.get_card_description(card)
+		pill.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(bg_col, border_col, 3, 8, 5))
+		var card_desc: String = FATE_CARD_SYSTEM_SCRIPT.get_card_description(card)
+		pill.tooltip_text = card_desc
+
+		var card_box := VBoxContainer.new()
+		card_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		card_box.add_theme_constant_override("separation", 2)
+		pill.add_child(card_box)
 
 		var lbl := Label.new()
 		lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		var icon_prefix: String = "✦ " if is_blessing else "☠ "
 		lbl.text = icon_prefix + FATE_CARD_SYSTEM_SCRIPT.get_card_title(card)
 		var text_col: Color = Color("f2cb72") if is_blessing else HorrorTheme.PRIMARY
-		HorrorTheme.style_label(lbl, "label-sm", text_col, 9 if touch else 11)
+		HorrorTheme.style_label(lbl, "label-sm", text_col, 10 if touch else 11)
 		lbl.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.95))
 		lbl.add_theme_constant_override("outline_size", 2)
-		pill.add_child(lbl)
+		card_box.add_child(lbl)
+
+		if not card_desc.strip_edges().is_empty():
+			var desc_lbl := Label.new()
+			desc_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			desc_lbl.text = card_desc
+			desc_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			HorrorTheme.style_label(desc_lbl, "body-sm", Color("e8dad6"), 9 if touch else 10)
+			desc_lbl.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.90))
+			desc_lbl.add_theme_constant_override("outline_size", 1)
+			card_box.add_child(desc_lbl)
+
 		fate_cards_strip.add_child(pill)
 
 func _mount_fate_card_overlay() -> void:

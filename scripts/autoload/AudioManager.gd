@@ -121,7 +121,8 @@ func _setup_audio_players() -> void:
 	voice_player = AudioStreamPlayer.new()
 	voice_player.name = "VoicePlayer"
 	voice_player.process_mode = Node.PROCESS_MODE_ALWAYS
-	voice_player.volume_db = 0.0
+	voice_player.volume_db = 3.5
+	voice_player.finished.connect(_on_voice_finished)
 	add_child(voice_player)
 
 	for i in range(POOL_SIZE):
@@ -265,12 +266,16 @@ func _load_voice_manifest() -> void:
 	_voice_clips_by_id.clear()
 	_voice_exact_text_to_id.clear()
 	_voice_prefix_rules.clear()
-	if not FileAccess.file_exists(VOICE_MANIFEST_PATH):
-		return
-	var fa: FileAccess = FileAccess.open(VOICE_MANIFEST_PATH, FileAccess.READ)
-	if fa == null:
-		return
-	var parsed: Variant = JSON.parse_string(fa.get_as_text())
+	var parsed: Variant = null
+	if FileAccess.file_exists(VOICE_MANIFEST_PATH):
+		var fa: FileAccess = FileAccess.open(VOICE_MANIFEST_PATH, FileAccess.READ)
+		if fa != null:
+			parsed = JSON.parse_string(fa.get_as_text())
+			fa.close()
+	if not (parsed is Dictionary) and ResourceLoader.exists(VOICE_MANIFEST_PATH):
+		var json_res: Resource = ResourceLoader.load(VOICE_MANIFEST_PATH)
+		if json_res is JSON:
+			parsed = (json_res as JSON).data
 	if not (parsed is Dictionary):
 		return
 	var clips_raw: Variant = (parsed as Dictionary).get("clips", [])
@@ -294,9 +299,15 @@ func _load_voice_manifest() -> void:
 					_voice_prefix_rules.append(rule)
 			else:
 				_voice_exact_text_to_id[raw_text] = clip_id
+				var norm_raw: String = _normalize_voice_text(raw_text)
+				if not _voice_exact_text_to_id.has(norm_raw):
+					_voice_exact_text_to_id[norm_raw] = clip_id
 	_voice_prefix_rules.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return int(a.get("score", 0)) > int(b.get("score", 0))
 	)
+
+func _normalize_voice_text(text_value: String) -> String:
+	return text_value.strip_edges().replace("—", "-").replace("–", "-")
 
 func _build_voice_template_rule(tpl_text: String, clip_id: String) -> Dictionary:
 	var pct_pos: int = tpl_text.find("%")
@@ -317,6 +328,8 @@ func _build_voice_template_rule(tpl_text: String, clip_id: String) -> Dictionary
 	return {
 		"prefix": prefix,
 		"tail": tail,
+		"prefix_norm": _normalize_voice_text(prefix),
+		"tail_norm": _normalize_voice_text(tail),
 		"clip_id": clip_id,
 		"score": prefix.length() + tail.length()
 	}
@@ -327,16 +340,18 @@ func resolve_voice_clip_id_for_text(text_value: String) -> String:
 		return ""
 	if _voice_exact_text_to_id.has(clean_text):
 		return str(_voice_exact_text_to_id[clean_text])
+	var norm_text: String = _normalize_voice_text(clean_text)
+	if _voice_exact_text_to_id.has(norm_text):
+		return str(_voice_exact_text_to_id[norm_text])
 	for rule: Dictionary in _voice_prefix_rules:
 		var prefix: String = str(rule.get("prefix", ""))
 		var tail: String = str(rule.get("tail", ""))
-		if not prefix.is_empty() and not clean_text.begins_with(prefix):
-			continue
-		if not tail.is_empty() and not clean_text.contains(tail):
-			continue
-		if prefix.is_empty() and tail.is_empty():
-			continue
-		return str(rule.get("clip_id", ""))
+		if (prefix.is_empty() or clean_text.begins_with(prefix)) and (tail.is_empty() or clean_text.contains(tail)) and (not prefix.is_empty() or not tail.is_empty()):
+			return str(rule.get("clip_id", ""))
+		var prefix_norm: String = str(rule.get("prefix_norm", ""))
+		var tail_norm: String = str(rule.get("tail_norm", ""))
+		if (prefix_norm.is_empty() or norm_text.begins_with(prefix_norm)) and (tail_norm.is_empty() or norm_text.contains(tail_norm)) and (not prefix_norm.is_empty() or not tail_norm.is_empty()):
+			return str(rule.get("clip_id", ""))
 	return ""
 
 func resolve_voice_path(clip_id: String, gender_override: String = "", lang_override: String = "") -> String:
@@ -358,33 +373,73 @@ func resolve_voice_path(clip_id: String, gender_override: String = "", lang_over
 		role = SettingsManager.normalize_character_model(raw_gender)
 	return "res://assets/audio/voice/%s/%s/%s" % [lang, role, filename]
 
-func play_voice_by_id(clip_id: String, volume_db: float = 0.0) -> bool:
+func _voice_candidate_paths(clip_id: String) -> Array[String]:
+	if not _voice_clips_by_id.has(clip_id):
+		return []
+	var entry: Dictionary = _voice_clips_by_id[clip_id] as Dictionary
+	var filename: String = str(entry.get("filename", "")).strip_edges()
+	if filename.is_empty():
+		return []
+	var stem: String = filename.get_basename()
+	var pref_lang: String = "en" if SettingsManager.is_en() else "id"
+	var speaker: String = str(entry.get("speaker", "Narrator"))
+	var is_player: bool = speaker.begins_with("Player")
+	var cur_role: String = SettingsManager.normalize_character_model(SettingsManager.character_model) if is_player else "narrator"
+	var alt_role: String = ("female" if cur_role == "male" else "male") if is_player else ""
+
+	var pairs: Array[Array] = [[pref_lang, cur_role]]
+	if pref_lang != "id":
+		pairs.append(["id", cur_role])
+	if is_player and not alt_role.is_empty():
+		pairs.append(["id", alt_role])
+	if cur_role != "narrator":
+		pairs.append(["id", "narrator"])
+
+	var candidates: Array[String] = []
+	for pair: Array in pairs:
+		var l_code: String = str(pair[0])
+		var r_code: String = str(pair[1])
+		for ext: String in ["wav", "mp3"]:
+			var cand: String = "res://assets/audio/voice/%s/%s/%s.%s" % [l_code, r_code, stem, ext]
+			if not candidates.has(cand):
+				candidates.append(cand)
+	return candidates
+
+func _set_ambient_ducked(ducked: bool) -> void:
+	if ambient_player:
+		ambient_player.volume_db = -12.0 if ducked else -6.0
+
+func _on_voice_finished() -> void:
+	_set_ambient_ducked(false)
+
+func play_voice_by_id(clip_id: String, volume_db: float = 3.5) -> bool:
 	if voice_player == null:
 		return false
-	var path: String = resolve_voice_path(clip_id)
-	if path.is_empty():
+	var chosen_path: String = ""
+	for cand: String in _voice_candidate_paths(clip_id):
+		if ResourceLoader.exists(cand):
+			chosen_path = cand
+			break
+	if chosen_path.is_empty():
 		return false
-	if not ResourceLoader.exists(path):
-		var id_fallback: String = resolve_voice_path(clip_id, "", "id")
-		if not id_fallback.is_empty() and ResourceLoader.exists(id_fallback):
-			path = id_fallback
-		else:
-			return false
-	var stream: AudioStream = _voice_stream_cache.get(path, null) as AudioStream
+	var stream: AudioStream = _voice_stream_cache.get(chosen_path, null) as AudioStream
 	if stream == null:
-		stream = load(path) as AudioStream
+		stream = load(chosen_path) as AudioStream
 		if stream == null:
 			return false
-		_voice_stream_cache[path] = stream
+		_voice_stream_cache[chosen_path] = stream
 	if stream is AudioStreamWAV:
 		(stream as AudioStreamWAV).loop_mode = AudioStreamWAV.LOOP_DISABLED
+	elif stream is AudioStreamMP3:
+		(stream as AudioStreamMP3).loop = false
 	voice_player.stop()
 	voice_player.stream = stream
 	voice_player.volume_db = volume_db
+	_set_ambient_ducked(true)
 	voice_player.play()
 	return true
 
-func play_voice_for_dialog_text(text_value: String, volume_db: float = 0.0) -> bool:
+func play_voice_for_dialog_text(text_value: String, volume_db: float = 3.5) -> bool:
 	var clip_id: String = resolve_voice_clip_id_for_text(text_value)
 	if clip_id.is_empty():
 		return false
@@ -393,3 +448,4 @@ func play_voice_for_dialog_text(text_value: String, volume_db: float = 0.0) -> b
 func stop_voice() -> void:
 	if voice_player and voice_player.playing:
 		voice_player.stop()
+	_set_ambient_ducked(false)

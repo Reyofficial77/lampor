@@ -168,7 +168,6 @@ var create_room_password_input: LineEdit
 var create_room_max_players_opt: OptionButton
 var create_room_diff_opt: OptionButton
 var create_room_shop_chk: CheckButton
-var create_room_lampor_chk: CheckButton
 var create_room_timescale_opt: OptionButton
 var create_room_late_join_chk: CheckButton
 var create_room_revive_chk: CheckButton
@@ -3131,13 +3130,6 @@ func _build_create_room_modal() -> void:
 	extra_title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	form.add_child(extra_title)
 
-	create_room_lampor_chk = CheckButton.new()
-	create_room_lampor_chk.text = LocScript.pick("Aktifkan Lampor AI", "Enable Lampor AI")
-	create_room_lampor_chk.custom_minimum_size.y = 40.0
-	create_room_lampor_chk.button_pressed = true
-	HorrorTheme.style_check_button(create_room_lampor_chk)
-	form.add_child(create_room_lampor_chk)
-
 	var ts_row := HBoxContainer.new()
 	ts_row.add_theme_constant_override("separation", 8)
 	form.add_child(ts_row)
@@ -3230,8 +3222,6 @@ func _open_create_room_modal() -> void:
 		create_room_diff_opt.select(1)
 	if create_room_shop_chk:
 		create_room_shop_chk.button_pressed = true
-	if create_room_lampor_chk:
-		create_room_lampor_chk.button_pressed = true
 	if create_room_timescale_opt:
 		create_room_timescale_opt.select(1)
 	if create_room_late_join_chk:
@@ -3266,7 +3256,7 @@ func _on_create_room_submit_pressed() -> void:
 		"difficulty": diff_str,
 		"canUseShopItems": create_room_shop_chk.button_pressed if create_room_shop_chk else true,
 		"settings": {
-			"lamporEnabled": create_room_lampor_chk.button_pressed if create_room_lampor_chk else true,
+			"lamporEnabled": true,
 			"timeScale": ts_val,
 			"allowLateJoin": create_room_late_join_chk.button_pressed if create_room_late_join_chk else false,
 			"friendlyRevive": create_room_revive_chk.button_pressed if create_room_revive_chk else true
@@ -3471,7 +3461,6 @@ func _refresh_lobby_ui(room: Dictionary, players: Array) -> void:
 	var can_shop: bool = bool(room.get("canUseShopItems", true))
 	var host_uid: String = str(room.get("hostUserId", ""))
 	var settings_dict: Dictionary = room.get("settings", {}) if room.get("settings") is Dictionary else {}
-	var lampor_on: bool = bool(settings_dict.get("lamporEnabled", true))
 	var time_scale: float = float(settings_dict.get("timeScale", 1.0))
 	var late_join: bool = bool(room.get("allowLateJoin", settings_dict.get("allowLateJoin", false)))
 	var friendly_revive: bool = bool(settings_dict.get("friendlyRevive", true))
@@ -3489,18 +3478,16 @@ func _refresh_lobby_ui(room: Dictionary, players: Array) -> void:
 			lobby_mode_badge_label.add_theme_color_override("font_color", HorrorTheme.PRIMARY)
 	if lobby_settings_summary_label:
 		lobby_settings_summary_label.text = LocScript.pick(
-			"Kesulitan: %s · Pemain: %d/%d · Shop Item: %s · Lampor AI: %s · Jam: %.1fx · Gabung Telat: %s · Bangkit Rekan: %s" % [
+			"Kesulitan: %s · Pemain: %d/%d · Shop Item: %s · Jam: %.1fx · Gabung Telat: %s · Bangkit Rekan: %s" % [
 				r_diff, players.size(), r_max,
 				"ON" if can_shop else "OFF",
-				"ON" if lampor_on else "OFF",
 				time_scale,
 				"ON" if late_join else "OFF",
 				"ON" if friendly_revive else "OFF"
 			],
-			"Difficulty: %s · Players: %d/%d · Shop Item: %s · Lampor AI: %s · Clock: %.1fx · Late Join: %s · Auto-Revive: %s" % [
+			"Difficulty: %s · Players: %d/%d · Shop Item: %s · Clock: %.1fx · Late Join: %s · Auto-Revive: %s" % [
 				r_diff, players.size(), r_max,
 				"ON" if can_shop else "OFF",
-				"ON" if lampor_on else "OFF",
 				time_scale,
 				"ON" if late_join else "OFF",
 				"ON" if friendly_revive else "OFF"

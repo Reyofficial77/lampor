@@ -96,12 +96,10 @@ func _ready() -> void:
 	_style_dawn_button(replay_btn, true)
 	_style_dawn_button(menu_btn, false)
 	replay_btn.pressed.connect(func() -> void:
-		AudioManager.stop_ending_audio()
-		GameManager.start_new_game(GameManager.selected_difficulty)
+		GameManager.restart_current_game()
 	)
 	menu_btn.pressed.connect(func() -> void:
-		AudioManager.stop_ending_audio()
-		get_tree().change_scene_to_file("res://scenes/ui/MainMenu.tscn")
+		GameManager.return_to_main_menu_from_ending()
 	)
 
 	get_viewport().size_changed.connect(_apply_layout)

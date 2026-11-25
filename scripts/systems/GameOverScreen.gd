@@ -33,8 +33,8 @@ func _ready() -> void:
 	reward_label.text = LocScript.pick("+%d Koin Emas  ·  Total: %d" % [GameManager.last_run_coin_reward, GameManager.coins], "+%d Gold Coins  ·  Total: %d" % [GameManager.last_run_coin_reward, GameManager.coins])
 	AudioManager.play_voice_for_dialog_text(reason_label.text)
 
-	retry_btn.pressed.connect(func() -> void: GameManager.start_new_game(GameManager.selected_difficulty))
-	menu_btn.pressed.connect(func() -> void: get_tree().change_scene_to_file("res://scenes/ui/MainMenu.tscn"))
+	retry_btn.pressed.connect(func() -> void: GameManager.restart_current_game())
+	menu_btn.pressed.connect(func() -> void: GameManager.return_to_main_menu_from_ending())
 
 	get_viewport().size_changed.connect(_apply_layout)
 	_apply_layout()

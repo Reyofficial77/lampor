@@ -68,6 +68,33 @@ func _run_checks() -> void:
 		var top_badge: Control = mm.get("top_account_badge") as Control
 		if badge_ctrl == null or not badge_ctrl.visible or top_badge == null or not top_badge.visible:
 			errors.append("MainMenu verified badges not visible for verified user")
+	var photo_filters: PackedStringArray = mm.call("_get_profile_photo_filters")
+	if photo_filters.is_empty() or not photo_filters[0].ends_with(";image/*"):
+		errors.append("Profile photo filters must end with ';image/*' for mobile gallery picker")
+	var test_img := Image.create(320, 200, false, Image.FORMAT_RGB8)
+	test_img.fill(Color(0.35, 0.55, 0.75, 1.0))
+	var tmp_paths := [
+		["user://_verify_avatar_png_noext", test_img.save_png_to_buffer()],
+		["user://_verify_avatar_jpg_noext", test_img.save_jpg_to_buffer(0.85)],
+		["user://_verify_avatar_webp_noext", test_img.save_webp_to_buffer()]
+	]
+	for item: Array in tmp_paths:
+		var tmp_path: String = str(item[0])
+		var tmp_bytes: PackedByteArray = item[1]
+		var fa := FileAccess.open(tmp_path, FileAccess.WRITE)
+		if fa == null:
+			errors.append("Failed to write temporary avatar test file: " + tmp_path)
+			continue
+		fa.store_buffer(tmp_bytes)
+		fa.close()
+		var loaded_img: Variant = mm.call("_load_profile_image_from_source", tmp_path)
+		if not (loaded_img is Image) or (loaded_img as Image).is_empty() or (loaded_img as Image).get_width() != 320 or (loaded_img as Image).get_height() != 200:
+			errors.append("_load_profile_image_from_source failed on extensionless file: " + tmp_path)
+		else:
+			var data_url: String = str(mm.call("_encode_profile_avatar_data_url", loaded_img))
+			if not data_url.begins_with("data:image/jpeg;base64,") or data_url.length() > 19000:
+				errors.append("_encode_profile_avatar_data_url invalid output for " + tmp_path)
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(tmp_path))
 	mm.queue_free()
 
 	print("[3/7] Memeriksa ProfanityFilter & rewrite nama file avatar...")

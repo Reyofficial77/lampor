@@ -2552,7 +2552,8 @@ func _build_account_modal() -> void:
 	avatar_ctrl_col.add_child(avatar_btn_row)
 
 	if not OS.has_feature("web"):
-		profile_avatar_pick_btn = _make_button(LocScript.pick("PILIH FOTO...", "CHOOSE PHOTO..."), false, "secondary")
+		var pick_btn_label: String = LocScript.pick("PILIH DARI GALERI", "CHOOSE FROM GALLERY") if _is_mobile_platform() else LocScript.pick("PILIH FOTO...", "CHOOSE PHOTO...")
+		profile_avatar_pick_btn = _make_button(pick_btn_label, false, "secondary")
 		profile_avatar_pick_btn.custom_minimum_size.y = 36.0
 		profile_avatar_pick_btn.pressed.connect(_on_profile_pick_photo_pressed)
 		avatar_btn_row.add_child(profile_avatar_pick_btn)
@@ -2563,8 +2564,9 @@ func _build_account_modal() -> void:
 	profile_avatar_reset_btn.pressed.connect(_on_profile_reset_photo_pressed)
 	avatar_btn_row.add_child(profile_avatar_reset_btn)
 
+	var preset_hint_text: String = LocScript.pick("Pilih foto dari galeri HP atau pakai ikon cepat:", "Choose a photo from your phone gallery or use a quick icon:") if _is_mobile_platform() else LocScript.pick("Atau pilih ikon cepat (JPG/PNG/WEBP atau ikon):", "Or choose a quick preset icon:")
 	var preset_hint := _make_label(
-		LocScript.pick("Atau pilih ikon cepat (JPG/PNG/WEBP atau ikon):", "Or choose a quick preset icon:"),
+		preset_hint_text,
 		11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm"
 	)
 	preset_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -2596,8 +2598,9 @@ func _build_account_modal() -> void:
 		profile_avatar_dialog = FileDialog.new()
 		profile_avatar_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
 		profile_avatar_dialog.access = FileDialog.ACCESS_FILESYSTEM
+		profile_avatar_dialog.use_native_dialog = DisplayServer.has_feature(DisplayServer.FEATURE_NATIVE_DIALOG_FILE)
 		profile_avatar_dialog.title = LocScript.pick("Pilih Foto Profil", "Choose Profile Photo")
-		profile_avatar_dialog.filters = PackedStringArray(["*.png, *.jpg, *.jpeg, *.webp ; Gambar / Image"])
+		profile_avatar_dialog.filters = _get_profile_photo_filters()
 		profile_avatar_dialog.file_selected.connect(_on_profile_photo_file_selected)
 		add_child(profile_avatar_dialog)
 
@@ -3027,10 +3030,68 @@ func _update_profile_save_button_label() -> void:
 	else:
 		account_profile_save_btn.text = LocScript.pick("SIMPAN PROFIL", "SAVE PROFILE")
 
+func _is_mobile_platform() -> bool:
+	return OS.has_feature("android") or OS.has_feature("ios") or OS.has_feature("mobile")
+
+func _get_profile_photo_filters() -> PackedStringArray:
+	return PackedStringArray(["*.png,*.jpg,*.jpeg,*.webp;%s;image/*" % LocScript.pick("Foto Galeri", "Gallery Photos")])
+
 func _on_profile_pick_photo_pressed() -> void:
-	if _account_busy or not is_instance_valid(profile_avatar_dialog):
+	if _account_busy:
 		return
-	profile_avatar_dialog.popup_centered_ratio(0.75)
+	if DisplayServer.has_feature(DisplayServer.FEATURE_NATIVE_DIALOG_FILE) or _is_mobile_platform():
+		var initial_dir: String = "" if _is_mobile_platform() else OS.get_system_dir(OS.SYSTEM_DIR_PICTURES)
+		var dialog_title: String = LocScript.pick("Pilih Foto dari Galeri", "Choose Photo from Gallery") if _is_mobile_platform() else LocScript.pick("Pilih Foto Profil", "Choose Profile Photo")
+		var err: Error = DisplayServer.file_dialog_show(
+			dialog_title,
+			initial_dir,
+			"",
+			false,
+			DisplayServer.FILE_DIALOG_MODE_OPEN_FILE,
+			_get_profile_photo_filters(),
+			_on_native_profile_photo_dialog_closed
+		)
+		if err == OK:
+			return
+		if _is_mobile_platform():
+			_set_account_status(LocScript.pick("Gagal membuka galeri perangkat.", "Failed to open device gallery."), HorrorTheme.ERROR)
+			return
+	if not _is_mobile_platform() and is_instance_valid(profile_avatar_dialog):
+		profile_avatar_dialog.popup_centered_ratio(0.75)
+
+func _on_native_profile_photo_dialog_closed(status: bool, selected_paths: PackedStringArray, _selected_filter_index: int) -> void:
+	if not status or selected_paths.is_empty():
+		return
+	call_deferred("_on_profile_photo_file_selected", str(selected_paths[0]))
+
+func _load_profile_image_from_source(source_path: String) -> Image:
+	var img := Image.new()
+	var raw: PackedByteArray = FileAccess.get_file_as_bytes(source_path)
+	if raw.size() >= 12:
+		var load_err: Error = ERR_INVALID_DATA
+		if raw[0] == 0x89 and raw[1] == 0x50 and raw[2] == 0x4E and raw[3] == 0x47:
+			load_err = img.load_png_from_buffer(raw)
+		elif raw[0] == 0xFF and raw[1] == 0xD8 and raw[2] == 0xFF:
+			load_err = img.load_jpg_from_buffer(raw)
+		elif raw[0] == 0x52 and raw[1] == 0x49 and raw[2] == 0x46 and raw[3] == 0x46 and raw[8] == 0x57 and raw[9] == 0x45 and raw[10] == 0x42 and raw[11] == 0x50:
+			load_err = img.load_webp_from_buffer(raw)
+		elif raw[0] == 0x42 and raw[1] == 0x4D:
+			load_err = img.load_bmp_from_buffer(raw)
+		if load_err != OK or img.is_empty():
+			if img.load_jpg_from_buffer(raw) == OK and not img.is_empty():
+				load_err = OK
+			elif img.load_png_from_buffer(raw) == OK and not img.is_empty():
+				load_err = OK
+			elif img.load_webp_from_buffer(raw) == OK and not img.is_empty():
+				load_err = OK
+			elif img.load_bmp_from_buffer(raw) == OK and not img.is_empty():
+				load_err = OK
+		if load_err == OK and not img.is_empty():
+			return img
+	if not source_path.begins_with("content://"):
+		if img.load(source_path) == OK and not img.is_empty():
+			return img
+	return null
 
 func _on_profile_reset_photo_pressed() -> void:
 	if _account_busy:
@@ -3049,9 +3110,9 @@ func _on_profile_preset_selected(preset_id: String) -> void:
 	_on_profile_field_edited()
 
 func _on_profile_photo_file_selected(file_path: String) -> void:
-	var img := Image.new()
-	if img.load(file_path) != OK or img.is_empty():
-		_set_account_status(LocScript.pick("File gambar tidak dapat dibaca. Gunakan PNG, JPG, atau WEBP.", "Could not read image file. Use PNG, JPG, or WEBP."), HorrorTheme.ERROR)
+	var img: Image = _load_profile_image_from_source(file_path)
+	if img == null or img.is_empty():
+		_set_account_status(LocScript.pick("Foto tidak dapat dibaca. Pilih foto JPG, PNG, atau WEBP dari galeri.", "Could not read photo. Choose a JPG, PNG, or WEBP image from gallery."), HorrorTheme.ERROR)
 		return
 	var encoded: String = _encode_profile_avatar_data_url(img)
 	if encoded.is_empty():
@@ -3068,18 +3129,23 @@ func _on_profile_photo_file_selected(file_path: String) -> void:
 	)
 
 func _encode_profile_avatar_data_url(src_img: Image) -> String:
-	var work := src_img.duplicate() as Image
-	if work == null or work.is_empty():
+	if src_img == null or src_img.is_empty():
 		return ""
-	if work.get_format() != Image.FORMAT_RGBA8:
-		work.convert(Image.FORMAT_RGBA8)
-	var w: int = work.get_width()
-	var h: int = work.get_height()
+	if src_img.is_compressed():
+		src_img.decompress()
+	var w: int = src_img.get_width()
+	var h: int = src_img.get_height()
 	var side: int = mini(w, h)
 	if side <= 0:
 		return ""
 	var crop_rect := Rect2i((w - side) / 2, (h - side) / 2, side, side)
-	var square := work.get_region(crop_rect)
+	var square := src_img.get_region(crop_rect)
+	if square == null or square.is_empty():
+		return ""
+	if square.get_width() > 256:
+		square.resize(256, 256, Image.INTERPOLATE_BILINEAR)
+	if square.get_format() != Image.FORMAT_RGBA8:
+		square.convert(Image.FORMAT_RGBA8)
 	for attempt: Array in [[96, 0.78], [84, 0.68], [72, 0.56], [64, 0.48]]:
 		var target_px: int = int(attempt[0])
 		var jpg_q: float = float(attempt[1])

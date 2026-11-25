@@ -86,6 +86,12 @@ func _ready() -> void:
 		visible = false
 	
 	call_deferred("_setup_waypoints")
+	call_deferred("_sync_initial_network_snapshot")
+
+func _sync_initial_network_snapshot() -> void:
+	var mp: Variant = _mp()
+	if mp != null and mp.is_online_session and not mp.is_room_owner and not _is_lampor_disabled_by_room():
+		_sync_from_network_state(1.0)
 
 func _mp() -> Variant:
 	return GameManager.get_multiplayer_manager()
@@ -403,6 +409,15 @@ func _physics_process(delta: float) -> void:
 		SignalBus.lampor_stare_detected.emit(0.0)
 		return
 	visible = true
+	if visual_mesh:
+		visual_mesh.visible = true
+
+	var mp: Variant = _mp()
+	if mp != null and mp.is_online_session and not mp.is_room_owner:
+		if not player:
+			player = GameManager.player_character as PlayerController
+		_sync_from_network_state(delta)
+		return
 
 	if not player:
 		player = GameManager.player_character as PlayerController
@@ -412,11 +427,6 @@ func _physics_process(delta: float) -> void:
 	if GameManager.sandbox_freeze_lampor:
 		velocity = Vector3.ZERO
 		SignalBus.lampor_stare_detected.emit(0.0)
-		return
-
-	var mp: Variant = _mp()
-	if mp != null and mp.is_online_session and not mp.is_room_owner:
-		_sync_from_network_state(delta)
 		return
 
 	hover_time += delta * 2.0
@@ -794,35 +804,62 @@ func _sync_from_network_state(delta: float) -> void:
 	var mp: Variant = _mp()
 	if mp == null:
 		return
+	visible = true
+	if visual_mesh:
+		visual_mesh.visible = true
+	var ws_act: int = int(mp.world_state.get("act", 1))
 	var raw_lampor: Variant = mp.world_state.get("lampor", {})
 	if raw_lampor is Dictionary and not (raw_lampor as Dictionary).is_empty():
 		var ld: Dictionary = raw_lampor as Dictionary
+		var target_pos: Vector3 = global_position
+		var has_target_pos: bool = false
 		if ld.has("pos"):
 			var raw_pos: Variant = ld["pos"]
-			var target_pos: Vector3 = global_position
 			if raw_pos is Array and (raw_pos as Array).size() >= 3:
 				var arr := raw_pos as Array
 				target_pos = Vector3(float(arr[0]), float(arr[1]), float(arr[2]))
+				has_target_pos = true
 			elif raw_pos is Dictionary:
 				var pd := raw_pos as Dictionary
 				target_pos = Vector3(float(pd.get("x", target_pos.x)), float(pd.get("y", target_pos.y)), float(pd.get("z", target_pos.z)))
+				has_target_pos = true
 			elif raw_pos is Vector3:
 				target_pos = raw_pos as Vector3
-			if global_position.distance_to(target_pos) > 22.0:
+				has_target_pos = true
+		var next_state: State = current_state
+		if ld.has("state"):
+			next_state = _parse_network_state(ld["state"])
+		if ws_act >= 2 and next_state == State.DORMANT_SKY:
+			if has_target_pos and target_pos.y < 30.0:
+				next_state = State.PATROL
+			elif not ld.has("state"):
+				next_state = State.PATROL
+		if has_target_pos:
+			if (current_state == State.DORMANT_SKY and next_state != State.DORMANT_SKY) or global_position.distance_to(target_pos) > 22.0:
 				global_position = target_pos
 			else:
 				global_position = global_position.lerp(target_pos, minf(1.0, delta * 10.0))
 		if ld.has("rotY"):
 			rotation.y = lerp_angle(rotation.y, float(ld["rotY"]), minf(1.0, delta * 10.0))
-		if ld.has("state"):
-			var next_state: State = _parse_network_state(ld["state"])
-			if next_state != current_state:
-				current_state = next_state
-				_apply_state_visuals(current_state)
-				if collision_shape:
-					collision_shape.disabled = (current_state == State.DORMANT_SKY or current_state == State.BANISHED)
+		if next_state != current_state:
+			current_state = next_state
+			_apply_state_visuals(current_state)
+			if collision_shape:
+				collision_shape.disabled = (current_state == State.DORMANT_SKY or current_state == State.BANISHED)
+	elif ws_act >= 2 and current_state == State.DORMANT_SKY:
+		current_state = State.PATROL
+		_apply_state_visuals(current_state)
+		if collision_shape:
+			collision_shape.disabled = false
+		if global_position.y > 30.0:
+			global_position = waypoints[0] if not waypoints.is_empty() else Vector3(0.0, 2.2, -20.0)
 
 	if current_state == State.DORMANT_SKY or current_state == State.BANISHED:
+		SignalBus.lampor_nearby.emit(999.0)
+		SignalBus.lampor_stare_detected.emit(0.0)
+		return
+
+	if not player or not is_instance_valid(player):
 		SignalBus.lampor_nearby.emit(999.0)
 		SignalBus.lampor_stare_detected.emit(0.0)
 		return

@@ -12,6 +12,7 @@ var drag_header: PanelContainer
 var auth_vbox: VBoxContainer
 var password_input: LineEdit
 var auth_error_label: Label
+var body_scroll: ScrollContainer
 var body_vbox: VBoxContainer
 var ingame_section_box: VBoxContainer
 var menu_only_notice: Label
@@ -25,16 +26,35 @@ var is_dragging: bool = false
 var is_minimized: bool = false
 var last_in_gameplay: bool = false
 var drag_offset: Vector2 = Vector2.ZERO
+var _shortcut_latched: bool = false
+var _last_toggle_msec: int = -1000
 
 func _is_current_user_admin() -> bool:
 	return GameManager.is_logged_in_admin()
 
+func _ensure_input_action() -> void:
+	if not InputMap.has_action("toggle_admin_panel"):
+		InputMap.add_action("toggle_admin_panel")
+		var alt_ev := InputEventKey.new()
+		alt_ev.keycode = KEY_F2
+		alt_ev.physical_keycode = KEY_F2
+		alt_ev.alt_pressed = true
+		InputMap.action_add_event("toggle_admin_panel", alt_ev)
+		var ctrl_ev := InputEventKey.new()
+		ctrl_ev.keycode = KEY_F2
+		ctrl_ev.physical_keycode = KEY_F2
+		ctrl_ev.ctrl_pressed = true
+		InputMap.action_add_event("toggle_admin_panel", ctrl_ev)
+
 func _ready() -> void:
 	layer = 120
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	_ensure_input_action()
 	_build_ui()
 	root_control.visible = false
 	SignalBus.account_state_changed.connect(_on_account_state_changed)
+	if get_viewport():
+		get_viewport().size_changed.connect(_fit_and_clamp_panel)
 
 func _on_account_state_changed() -> void:
 	if not _is_current_user_admin():
@@ -53,7 +73,52 @@ func close_panel() -> void:
 			wins_input.release_focus()
 		_restore_mouse_mode_if_playing()
 
+func _is_toggle_shortcut_event(event: InputEvent) -> bool:
+	if event is InputEventKey:
+		var ke := event as InputEventKey
+		if not ke.pressed or ke.echo:
+			return false
+		if event.is_action_pressed("toggle_admin_panel", false, true):
+			return true
+		var is_f2: bool = (ke.keycode == KEY_F2 or ke.physical_keycode == KEY_F2 or ke.key_label == KEY_F2)
+		if is_f2:
+			var has_mod: bool = (
+				ke.alt_pressed or ke.ctrl_pressed
+				or Input.is_key_pressed(KEY_ALT) or Input.is_physical_key_pressed(KEY_ALT)
+				or Input.is_key_pressed(KEY_CTRL) or Input.is_physical_key_pressed(KEY_CTRL)
+			)
+			if has_mod:
+				return true
+	elif event.is_action_pressed("toggle_admin_panel", false, true):
+		return true
+	return false
+
+func _request_shortcut_toggle() -> void:
+	if not _is_current_user_admin():
+		if root_control and root_control.visible:
+			is_authenticated = false
+			close_panel()
+		return
+	var now_msec: int = Time.get_ticks_msec()
+	if now_msec - _last_toggle_msec < 250:
+		return
+	_last_toggle_msec = now_msec
+	_shortcut_latched = true
+	toggle_panel()
+
 func _process(_delta: float) -> void:
+	var f2_down: bool = Input.is_key_pressed(KEY_F2) or Input.is_physical_key_pressed(KEY_F2)
+	var mod_down: bool = (
+		Input.is_key_pressed(KEY_ALT) or Input.is_physical_key_pressed(KEY_ALT)
+		or Input.is_key_pressed(KEY_CTRL) or Input.is_physical_key_pressed(KEY_CTRL)
+	)
+	if f2_down and mod_down:
+		if not _shortcut_latched:
+			_shortcut_latched = true
+			_request_shortcut_toggle()
+	else:
+		_shortcut_latched = false
+
 	if not root_control or not root_control.visible:
 		return
 	if not _is_current_user_admin():
@@ -66,18 +131,23 @@ func _process(_delta: float) -> void:
 		_refresh_panel_state()
 		_fit_and_clamp_panel()
 
+func _unhandled_key_input(event: InputEvent) -> void:
+	if _is_toggle_shortcut_event(event):
+		_request_shortcut_toggle()
+		if _is_current_user_admin() and get_viewport():
+			get_viewport().set_input_as_handled()
+
 func _input(event: InputEvent) -> void:
+	if _is_toggle_shortcut_event(event):
+		_request_shortcut_toggle()
+		if _is_current_user_admin() and get_viewport():
+			get_viewport().set_input_as_handled()
+		return
 	if not _is_current_user_admin():
 		if root_control and root_control.visible:
 			is_authenticated = false
 			close_panel()
 		return
-	if event is InputEventKey:
-		var ke := event as InputEventKey
-		if ke.pressed and not ke.echo and (ke.keycode == KEY_F2 or ke.physical_keycode == KEY_F2) and ke.alt_pressed:
-			toggle_panel()
-			get_viewport().set_input_as_handled()
-			return
 
 	if not root_control or not root_control.visible:
 		return
@@ -126,6 +196,8 @@ func _sync_auth_view() -> void:
 		auth_vbox.visible = not is_authenticated
 	if min_btn:
 		min_btn.visible = is_authenticated
+	if body_scroll:
+		body_scroll.visible = is_authenticated and not is_minimized
 	if body_vbox:
 		body_vbox.visible = is_authenticated and not is_minimized
 
@@ -159,6 +231,8 @@ func _toggle_minimize() -> void:
 	if not is_authenticated:
 		return
 	is_minimized = not is_minimized
+	if body_scroll:
+		body_scroll.visible = not is_minimized
 	if body_vbox:
 		body_vbox.visible = not is_minimized
 	if min_btn:
@@ -168,17 +242,37 @@ func _toggle_minimize() -> void:
 func _fit_and_clamp_panel() -> void:
 	if not panel:
 		return
-	panel.custom_minimum_size = Vector2(300.0, 0.0)
+	var view_size: Vector2 = get_viewport().get_visible_rect().size if get_viewport() else Vector2(1280.0, 720.0)
+	if view_size.x <= 0.0 or view_size.y <= 0.0:
+		view_size = Vector2(1280.0, 720.0)
+	var panel_w: float = minf(312.0, maxf(260.0, view_size.x - 16.0))
+	var max_panel_h: float = maxf(180.0, view_size.y - 16.0)
+	if body_scroll and body_scroll.visible and body_vbox:
+		var header_h: float = drag_header.get_combined_minimum_size().y if drag_header else 34.0
+		var max_scroll_h: float = maxf(100.0, max_panel_h - header_h - 32.0)
+		var content_h: float = body_vbox.get_combined_minimum_size().y
+		body_scroll.custom_minimum_size = Vector2(panel_w - 24.0, minf(content_h, max_scroll_h))
+	panel.custom_minimum_size = Vector2(panel_w, 0.0)
 	panel.reset_size()
-	panel.size = Vector2(300.0, panel.get_combined_minimum_size().y)
+	panel.size = Vector2(panel_w, minf(panel.get_combined_minimum_size().y, max_panel_h))
 	_move_panel_to(panel.position)
 	call_deferred("_deferred_fit_panel")
 
 func _deferred_fit_panel() -> void:
 	if not is_instance_valid(panel):
 		return
+	var view_size: Vector2 = get_viewport().get_visible_rect().size if get_viewport() else Vector2(1280.0, 720.0)
+	if view_size.x <= 0.0 or view_size.y <= 0.0:
+		view_size = Vector2(1280.0, 720.0)
+	var panel_w: float = minf(312.0, maxf(260.0, view_size.x - 16.0))
+	var max_panel_h: float = maxf(180.0, view_size.y - 16.0)
+	if body_scroll and body_scroll.visible and body_vbox:
+		var header_h: float = drag_header.get_combined_minimum_size().y if drag_header else 34.0
+		var max_scroll_h: float = maxf(100.0, max_panel_h - header_h - 32.0)
+		var content_h: float = body_vbox.get_combined_minimum_size().y
+		body_scroll.custom_minimum_size = Vector2(panel_w - 24.0, minf(content_h, max_scroll_h))
 	panel.reset_size()
-	panel.size = Vector2(300.0, panel.get_combined_minimum_size().y)
+	panel.size = Vector2(panel_w, minf(panel.get_combined_minimum_size().y, max_panel_h))
 	_move_panel_to(panel.position)
 
 func _restore_mouse_mode_if_playing() -> void:
@@ -320,9 +414,16 @@ func _build_ui() -> void:
 	cancel_btn.pressed.connect(toggle_panel)
 	auth_btn_row.add_child(cancel_btn)
 
+	body_scroll = ScrollContainer.new()
+	body_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	body_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	HorrorTheme.style_scroll_container(body_scroll)
+	main_vbox.add_child(body_scroll)
+
 	body_vbox = VBoxContainer.new()
+	body_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	body_vbox.add_theme_constant_override("separation", 4)
-	main_vbox.add_child(body_vbox)
+	body_scroll.add_child(body_vbox)
 
 	# Bagian Khusus In-Game (Hanya tampil saat permainan dimulai di VillageMap)
 	ingame_section_box = VBoxContainer.new()

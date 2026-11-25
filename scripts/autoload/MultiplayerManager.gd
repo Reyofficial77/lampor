@@ -265,6 +265,8 @@ func _apply_room_response(data: Dictionary, is_new_session: bool) -> void:
 		room_players = (data["players"] as Array).duplicate(true)
 	if data.get("worldState") is Dictionary:
 		world_state = (data["worldState"] as Dictionary).duplicate(true)
+	elif is_new_session and current_room.get("worldState") is Dictionary:
+		world_state = (current_room["worldState"] as Dictionary).duplicate(true)
 	if data.has("announcement"):
 		server_announcement = str(data.get("announcement", ""))
 

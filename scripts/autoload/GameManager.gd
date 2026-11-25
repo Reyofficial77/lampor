@@ -1312,6 +1312,14 @@ func is_logged_in_admin() -> bool:
 		return bool(am.call("is_admin"))
 	return bool(am.can_access_online_modes()) and str(am.role).strip_edges().to_lower() == "admin"
 
+func toggle_admin_panel() -> void:
+	if not is_logged_in_admin():
+		return
+	if admin_panel == null:
+		_setup_admin_panel()
+	if admin_panel and admin_panel.has_method("toggle_panel"):
+		admin_panel.call("toggle_panel")
+
 func is_sandbox_owner_active() -> bool:
 	var mp: Variant = get_multiplayer_manager(false)
 	if mp == null or not mp.is_online_session:

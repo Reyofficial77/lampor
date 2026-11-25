@@ -221,6 +221,30 @@ var _launching_online_game: bool = false
 var _last_chat_count: int = -1
 var _last_lobby_roster_sig: String = ""
 
+var admin_panel_btn: Button
+
+# Daftar Teman & Pemain (Friends Modal)
+var friends_overlay: ColorRect
+var friends_panel: PanelContainer
+var friends_scroll: ScrollContainer
+var friends_search_row: BoxContainer
+var friends_search_input: LineEdit
+var friends_search_btn: Button
+var friends_reset_btn: Button
+var friends_refresh_btn: Button
+var friends_guest_box: VBoxContainer
+var friends_content_box: VBoxContainer
+var friends_status_label: Label
+var friends_my_list: VBoxContainer
+var friends_directory_header: Label
+var friends_directory_list: VBoxContainer
+var profile_status_badge_label: Label
+var _friends_refresh_in_flight: bool = false
+var _friends_auto_refresh_accum: float = 0.0
+var _friends_search_query: String = ""
+var _friends_last_sig: String = ""
+var _friends_loading: bool = false
+
 func _am() -> Variant:
 	return GameManager.get_account_manager()
 
@@ -244,6 +268,7 @@ func _ready() -> void:
 		SettingsManager.character_model_changed.connect(_on_settings_character_model_changed)
 	SignalBus.account_state_changed.connect(_on_account_state_changed)
 	SignalBus.coins_changed.connect(_on_coins_changed)
+	SignalBus.friends_updated.connect(_on_friends_updated)
 	SignalBus.multiplayer_rooms_updated.connect(_on_multiplayer_rooms_updated)
 	SignalBus.multiplayer_room_updated.connect(_on_multiplayer_room_updated)
 	SignalBus.multiplayer_game_started.connect(_on_multiplayer_game_started)
@@ -278,6 +303,13 @@ func _process(delta: float) -> void:
 		if _mp_auto_refresh_accum >= 1.0:
 			_mp_auto_refresh_accum = 0.0
 			_refresh_mp_server_and_rooms(true)
+	if friends_overlay and friends_overlay.visible:
+		var am_f: Variant = _am()
+		if am_f != null and am_f.can_access_online_modes():
+			_friends_auto_refresh_accum += delta
+			if _friends_auto_refresh_accum >= 3.5:
+				_friends_auto_refresh_accum = 0.0
+				_refresh_friends_data(true)
 
 func _build_menu() -> void:
 	var background := ColorRect.new()
@@ -366,6 +398,10 @@ func _build_menu() -> void:
 	start_button.pressed.connect(func() -> void: _open_modal(warning_overlay, warning_panel))
 	menu_buttons.add_child(start_button)
 
+	var friends_button := _make_nav_button(LocScript.pick("TEMAN", "FRIENDS"))
+	friends_button.pressed.connect(_open_friends_modal)
+	menu_buttons.add_child(friends_button)
+
 	var shop_button := _make_nav_button(LocScript.pick("TOKO BEKAL", "SUPPLY SHOP"))
 	shop_button.pressed.connect(func() -> void:
 		var am_s: Variant = _am()
@@ -426,6 +462,14 @@ func _build_menu() -> void:
 	account_btn.pressed.connect(func() -> void: _open_account_modal(0))
 	top_right_bar.add_child(account_btn)
 
+	admin_panel_btn = Button.new()
+	admin_panel_btn.text = "ADMIN [ALT+F2]"
+	admin_panel_btn.visible = GameManager.is_logged_in_admin()
+	admin_panel_btn.custom_minimum_size = Vector2(0.0, 36.0)
+	HorrorTheme.style_button(admin_panel_btn, "primary", 11, true)
+	admin_panel_btn.pressed.connect(func() -> void: GameManager.toggle_admin_panel())
+	top_right_bar.add_child(admin_panel_btn)
+
 	update_button = Button.new()
 	update_button.text = LocScript.pick("UPDATE TERSEDIA", "UPDATE AVAILABLE")
 	update_button.visible = false
@@ -464,6 +508,7 @@ func _build_menu() -> void:
 	_build_room_password_modal()
 	_build_create_room_modal()
 	_build_room_lobby_modal()
+	_build_friends_modal()
 	_refresh_account_ui()
 
 func _open_modal(overlay: ColorRect, panel: PanelContainer) -> void:
@@ -1738,6 +1783,8 @@ func _get_active_scroll_container() -> ScrollContainer:
 		return mode_select_scroll
 	if top_ov == mp_server_overlay and mp_rooms_scroll:
 		return mp_rooms_scroll
+	if top_ov == friends_overlay and friends_scroll:
+		return friends_scroll
 	if top_ov == create_room_overlay and create_room_scroll:
 		return create_room_scroll
 	if top_ov == room_lobby_overlay:
@@ -2187,7 +2234,7 @@ func _apply_layout() -> void:
 
 	var menu_buttons: VBoxContainer = main_content.get_node("MenuButtons") as VBoxContainer
 	menu_buttons.add_theme_constant_override("separation", 2 if short_screen else 4)
-	var btn_h: float = 34.0 if (short_screen and view_size.y < 430.0 and continue_button and continue_button.visible) else (36.0 if (short_screen and view_size.y < 430.0) else 44.0)
+	var btn_h: float = 31.0 if (short_screen and view_size.y < 430.0 and continue_button and continue_button.visible) else (33.0 if (short_screen and view_size.y < 430.0) else (38.0 if short_screen else 44.0))
 	for button: Node in menu_buttons.get_children():
 		if button is Button:
 			var b: Button = button as Button
@@ -2206,15 +2253,20 @@ func _apply_layout() -> void:
 		var tr_margin: float = 14.0 if narrow or short_screen else 24.0
 		top_right_bar.offset_right = -tr_margin
 		top_right_bar.offset_top = tr_margin
-		top_right_bar.offset_left = -minf(view_size.x - tr_margin * 2.0, 680.0)
+		top_right_bar.offset_left = -minf(view_size.x - tr_margin * 2.0, 840.0)
 		top_right_bar.offset_bottom = tr_margin + 40.0
 	if top_account_chip:
 		top_account_chip.visible = not narrow
 	if account_btn:
 		account_btn.custom_minimum_size.y = 34.0 if narrow or short_screen else 36.0
 		account_btn.add_theme_font_size_override("font_size", 10 if narrow else 11)
+	if admin_panel_btn:
+		admin_panel_btn.custom_minimum_size.y = 34.0 if narrow or short_screen else 36.0
+		admin_panel_btn.add_theme_font_size_override("font_size", 10 if narrow else 11)
 	if mp_quick_join_row:
 		mp_quick_join_row.vertical = narrow
+	if friends_search_row:
+		friends_search_row.vertical = narrow
 	if lobby_actions_row:
 		lobby_actions_row.vertical = narrow
 
@@ -2237,7 +2289,7 @@ func _apply_layout() -> void:
 	for panel: PanelContainer in modal_panels:
 		if panel == fix_notes_panel:
 			panel.custom_minimum_size = Vector2(maxf(290.0, minf(680.0, view_size.x - 32.0)), panel.custom_minimum_size.y)
-		elif panel == mp_server_panel or panel == room_lobby_panel:
+		elif panel == mp_server_panel or panel == room_lobby_panel or panel == friends_panel:
 			panel.custom_minimum_size = Vector2(maxf(290.0, minf(640.0, view_size.x - 28.0)), panel.custom_minimum_size.y)
 		elif panel == create_room_panel:
 			panel.custom_minimum_size = Vector2(maxf(290.0, minf(560.0, view_size.x - 28.0)), panel.custom_minimum_size.y)
@@ -2259,6 +2311,8 @@ func _apply_layout() -> void:
 		mode_select_scroll.custom_minimum_size.y = maxf(140.0, minf(360.0, view_size.y - 200.0))
 	if mp_rooms_scroll:
 		mp_rooms_scroll.custom_minimum_size.y = maxf(120.0, minf(270.0, view_size.y - (350.0 if narrow else 300.0)))
+	if friends_scroll:
+		friends_scroll.custom_minimum_size.y = maxf(160.0, minf(410.0, view_size.y - (295.0 if narrow else 245.0)))
 	if create_room_scroll:
 		create_room_scroll.custom_minimum_size.y = maxf(150.0, minf(360.0, view_size.y - 220.0))
 	if lobby_scroll:
@@ -2617,6 +2671,10 @@ func _build_account_modal() -> void:
 	uname_ro_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	uname_hdr_row.add_child(uname_ro_lbl)
 
+	profile_status_badge_label = _make_label("[OFFLINE]", 11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_RIGHT, "mono-sm")
+	profile_status_badge_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	uname_hdr_row.add_child(profile_status_badge_label)
+
 	profile_verified_badge = VerifiedBadgeScript.create_control(15.0)
 	profile_verified_badge.visible = false
 	uname_hdr_row.add_child(profile_verified_badge)
@@ -2796,13 +2854,13 @@ func _refresh_account_ui() -> void:
 	var chip_text: String = ""
 	var chip_color: Color = HorrorTheme.TEXT_MUTED
 	if logged_in:
-		chip_text = LocScript.pick("AKUN: %s" % shown_name, "ACCOUNT: %s" % shown_name)
+		chip_text = LocScript.pick("AKUN: %s [ONLINE]" % shown_name, "ACCOUNT: %s [ONLINE]" % shown_name)
 		chip_color = HorrorTheme.SUCCESS_SAGE
 	elif is_guest:
-		chip_text = "GUEST (OFFLINE)"
+		chip_text = LocScript.pick("TAMU [OFFLINE]", "GUEST [OFFLINE]")
 		chip_color = HorrorTheme.RELIC_BRASS
 	else:
-		chip_text = LocScript.pick("BELUM MASUK", "NOT SIGNED IN")
+		chip_text = LocScript.pick("BELUM MASUK [OFFLINE]", "NOT SIGNED IN [OFFLINE]")
 		chip_color = HorrorTheme.PRIMARY
 	if account_chip_label:
 		account_chip_label.text = chip_text
@@ -2810,6 +2868,11 @@ func _refresh_account_ui() -> void:
 	if top_account_label:
 		top_account_label.text = chip_text
 		top_account_label.add_theme_color_override("font_color", chip_color)
+	if profile_status_badge_label:
+		profile_status_badge_label.text = "[ONLINE]" if logged_in else (LocScript.pick("[TAMU]", "[GUEST]") if is_guest else "[OFFLINE]")
+		profile_status_badge_label.add_theme_color_override("font_color", HorrorTheme.SUCCESS_SAGE if logged_in else Color("9e8886"))
+	if is_instance_valid(admin_panel_btn):
+		admin_panel_btn.visible = GameManager.is_logged_in_admin()
 	var is_v: bool = logged_in and am != null and bool(am.get("is_verified"))
 	if account_chip_badge:
 		account_chip_badge.visible = is_v
@@ -2850,6 +2913,10 @@ func _on_account_state_changed() -> void:
 	var am: Variant = _am()
 	if am != null and am.can_access_online_modes() and mode_lock_box:
 		mode_lock_box.visible = false
+	if friends_overlay and friends_overlay.visible:
+		_sync_friends_modal_auth_state()
+		if am != null and am.can_access_online_modes():
+			_refresh_friends_data(false)
 
 func _on_account_submit_pressed() -> void:
 	if _account_busy:
@@ -3464,7 +3531,7 @@ func _compute_rooms_signature(rooms: Array) -> String:
 			var r_mode: String = str(r.get("mode", mp_mode_filter))
 			if r_mode != mp_mode_filter:
 				continue
-			parts.append("%s|%s|%s|%s|%d|%d|%s|%s|%s" % [
+			parts.append("%s|%s|%s|%s|%d|%d|%s|%s|%s|%d|%s" % [
 				str(r.get("id", r.get("roomId", ""))),
 				str(r.get("name", "")),
 				str(r.get("hostUsername", r.get("host", ""))),
@@ -3473,7 +3540,9 @@ func _compute_rooms_signature(rooms: Array) -> String:
 				int(r.get("maxPlayers", 4)),
 				str(r.get("status", "lobby")),
 				str(r.get("difficulty", "normal")),
-				"1" if bool(r.get("hasPassword", false)) else "0"
+				"1" if bool(r.get("hasPassword", false)) else "0",
+				int(r.get("currentAct", 1)),
+				"1" if bool(r.get("furnaceBurning", false)) else "0"
 			])
 	return ";".join(parts)
 
@@ -3526,9 +3595,11 @@ func _render_mp_room_list(rooms: Array) -> void:
 		var has_pwd: bool = bool(r.get("hasPassword", false))
 		var diff_str: String = str(r.get("difficulty", "normal")).to_upper()
 		var can_shop: bool = bool(r.get("canUseShopItems", true))
-		var status_str: String = str(r.get("status", "lobby"))
+		var status_str: String = str(r.get("status", "lobby")).to_lower()
 		var settings_dict: Dictionary = r.get("settings", {}) if r.get("settings") is Dictionary else {}
 		var allow_late: bool = bool(r.get("allowLateJoin", settings_dict.get("allowLateJoin", false)))
+		var current_act: int = int(r.get("currentAct", 1))
+		var furnace_burning: bool = bool(r.get("furnaceBurning", false))
 
 		var card := PanelContainer.new()
 		card.mouse_filter = Control.MOUSE_FILTER_PASS
@@ -3550,7 +3621,8 @@ func _render_mp_room_list(rooms: Array) -> void:
 		if has_pwd:
 			tags += "  [BERPASSWORD]" if not LocScript.is_en() else "  [PASSWORD]"
 		if status_str == "playing":
-			tags += "  [SEDANG MAIN]" if not LocScript.is_en() else "  [PLAYING]"
+			var act_tag: String = "BABAK III" if (current_act >= 3 or furnace_burning) else ("BABAK II" if current_act == 2 else "BABAK I")
+			tags += "  [%s]" % act_tag
 
 		var title_lbl := _make_label("%s%s" % [room_name, tags], 14, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "title-lg")
 		title_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -3584,13 +3656,15 @@ func _render_mp_room_list(rooms: Array) -> void:
 		info.add_child(meta_lbl)
 
 		var is_full: bool = p_count >= p_max
+		var act3_locked: bool = (status_str == "playing" and (current_act >= 3 or furnace_burning))
 		var locked_playing: bool = (status_str == "playing" and not allow_late)
-		var join_btn_label: String = LocScript.pick("PENUH", "FULL") if is_full else (LocScript.pick("MAIN", "PLAYING") if locked_playing else LocScript.pick("GABUNG", "JOIN"))
-		var join_btn := _make_button(join_btn_label, not is_full and not locked_playing)
+		var join_btn_label: String = "BABAK III" if act3_locked else (LocScript.pick("PENUH", "FULL") if is_full else (LocScript.pick("MAIN", "PLAYING") if locked_playing else LocScript.pick("GABUNG", "JOIN")))
+		var can_join_room: bool = not act3_locked and not is_full and not locked_playing
+		var join_btn := _make_button(join_btn_label, can_join_room)
 		join_btn.custom_minimum_size = Vector2(92.0, 40.0)
 		join_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
 		join_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		join_btn.disabled = is_full or locked_playing
+		join_btn.disabled = not can_join_room
 		join_btn.pressed.connect(_on_room_join_pressed.bind(room_id, room_name, has_pwd))
 		row.add_child(join_btn)
 
@@ -3682,10 +3756,13 @@ func _join_mp_room(room_id_or_code: String, password: String, from_pwd_modal: bo
 	if bool(res.get("ok", false)):
 		_pending_join_room_id = ""
 		_set_mp_server_feedback("", HorrorTheme.ON_SURFACE_VARIANT)
+		_set_friends_status("", HorrorTheme.ON_SURFACE_VARIANT)
 		if room_password_overlay:
 			room_password_overlay.visible = false
 		if mp_server_overlay:
 			mp_server_overlay.visible = false
+		if friends_overlay:
+			friends_overlay.visible = false
 		if _launching_online_game or (mp != null and str(mp.current_room.get("status", "")).to_lower() == "playing"):
 			return
 		_open_room_lobby_modal()
@@ -3694,6 +3771,8 @@ func _join_mp_room(room_id_or_code: String, password: String, from_pwd_modal: bo
 		if from_pwd_modal and room_password_error_label:
 			room_password_error_label.text = err_msg
 			room_password_error_label.visible = true
+		elif friends_overlay and friends_overlay.visible:
+			_set_friends_status(err_msg, HorrorTheme.ERROR)
 		else:
 			_set_mp_server_feedback(err_msg, HorrorTheme.ERROR)
 
@@ -3821,7 +3900,7 @@ func _build_create_room_modal() -> void:
 	create_room_late_join_chk = CheckButton.new()
 	create_room_late_join_chk.text = LocScript.pick("Izinkan Gabung Saat Main", "Allow Join In-Progress")
 	create_room_late_join_chk.custom_minimum_size.y = 40.0
-	create_room_late_join_chk.button_pressed = false
+	create_room_late_join_chk.button_pressed = true
 	HorrorTheme.style_check_button(create_room_late_join_chk)
 	form.add_child(create_room_late_join_chk)
 
@@ -3892,7 +3971,7 @@ func _open_create_room_modal() -> void:
 	if create_room_timescale_opt:
 		create_room_timescale_opt.select(1)
 	if create_room_late_join_chk:
-		create_room_late_join_chk.button_pressed = false
+		create_room_late_join_chk.button_pressed = true
 	if create_room_revive_chk:
 		create_room_revive_chk.button_pressed = true
 	if create_room_status_label:
@@ -4435,3 +4514,491 @@ func _extract_error(res: Dictionary, fallback_id: String, fallback_en: String) -
 	if msg.is_empty():
 		return LocScript.pick(fallback_id, fallback_en)
 	return msg
+
+# ---------- Daftar Teman & Direktori Pemain (Friends Modal) ----------
+
+func _build_friends_modal() -> void:
+	var modal: Dictionary = _create_modal(LocScript.pick("TEMAN & PEMAIN", "FRIENDS & PLAYERS"))
+	friends_overlay = modal["overlay"] as ColorRect
+	friends_panel = modal["panel"] as PanelContainer
+	var body: VBoxContainer = modal["body"] as VBoxContainer
+
+	friends_guest_box = VBoxContainer.new()
+	friends_guest_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	friends_guest_box.add_theme_constant_override("separation", 12)
+	friends_guest_box.visible = false
+	body.add_child(friends_guest_box)
+
+	var guest_msg := _make_label(
+		LocScript.pick(
+			"Daftar Teman dan Gabung Permainan membutuhkan akun LAMPOR yang sudah masuk (bukan mode Tamu).",
+			"Friends List and Join Game require a signed-in LAMPOR account (not Guest mode)."
+		),
+		13, HorrorTheme.RELIC_BRASS, HORIZONTAL_ALIGNMENT_LEFT, "body-md"
+	)
+	guest_msg.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	friends_guest_box.add_child(guest_msg)
+
+	var sign_in_btn := _make_button(LocScript.pick("MASUK / BUAT AKUN", "SIGN IN / CREATE ACCOUNT"), true)
+	sign_in_btn.pressed.connect(func() -> void:
+		if friends_overlay:
+			friends_overlay.visible = false
+		_open_account_modal(0)
+	)
+	friends_guest_box.add_child(sign_in_btn)
+
+	friends_content_box = VBoxContainer.new()
+	friends_content_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	friends_content_box.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	friends_content_box.add_theme_constant_override("separation", 10)
+	body.add_child(friends_content_box)
+
+	friends_search_row = BoxContainer.new()
+	friends_search_row.add_theme_constant_override("separation", 6)
+	friends_content_box.add_child(friends_search_row)
+
+	friends_search_input = LineEdit.new()
+	friends_search_input.placeholder_text = LocScript.pick("Cari username pemain...", "Search player username...")
+	friends_search_input.max_length = 24
+	friends_search_input.custom_minimum_size = Vector2(150.0, 38.0)
+	friends_search_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	HorrorTheme.style_line_edit(friends_search_input)
+	friends_search_input.text_submitted.connect(func(_t: String) -> void: _on_friends_search_pressed())
+	friends_search_row.add_child(friends_search_input)
+
+	var search_btns := HBoxContainer.new()
+	search_btns.add_theme_constant_override("separation", 6)
+	friends_search_row.add_child(search_btns)
+
+	friends_search_btn = _make_button(LocScript.pick("CARI", "SEARCH"), true)
+	friends_search_btn.custom_minimum_size = Vector2(74.0, 38.0)
+	friends_search_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
+	friends_search_btn.pressed.connect(_on_friends_search_pressed)
+	search_btns.add_child(friends_search_btn)
+
+	friends_reset_btn = _make_button("RESET", false, "ghost")
+	friends_reset_btn.custom_minimum_size = Vector2(72.0, 38.0)
+	friends_reset_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
+	friends_reset_btn.pressed.connect(_on_friends_reset_pressed)
+	search_btns.add_child(friends_reset_btn)
+
+	friends_refresh_btn = _make_button(LocScript.pick("SEGARKAN", "REFRESH"), false, "secondary")
+	friends_refresh_btn.custom_minimum_size = Vector2(92.0, 38.0)
+	friends_refresh_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
+	friends_refresh_btn.pressed.connect(func() -> void: _refresh_friends_data(false))
+	search_btns.add_child(friends_refresh_btn)
+
+	friends_status_label = _make_label("", 12, HorrorTheme.ON_SURFACE_VARIANT, HORIZONTAL_ALIGNMENT_LEFT, "label-sm")
+	friends_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	friends_status_label.visible = false
+	friends_content_box.add_child(friends_status_label)
+
+	friends_scroll = ScrollContainer.new()
+	friends_scroll.custom_minimum_size = Vector2(0.0, 320.0)
+	friends_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	friends_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	HorrorTheme.style_scroll_container(friends_scroll)
+	friends_content_box.add_child(friends_scroll)
+
+	var margin := MarginContainer.new()
+	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.mouse_filter = Control.MOUSE_FILTER_PASS
+	margin.add_theme_constant_override("margin_right", 8)
+	friends_scroll.add_child(margin)
+
+	var stack := VBoxContainer.new()
+	stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stack.mouse_filter = Control.MOUSE_FILTER_PASS
+	stack.add_theme_constant_override("separation", 12)
+	margin.add_child(stack)
+
+	var my_header := _make_label(LocScript.pick("TEMAN SAYA", "MY FRIENDS"), 13, HorrorTheme.PRIMARY, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
+	my_header.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stack.add_child(my_header)
+
+	friends_my_list = VBoxContainer.new()
+	friends_my_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	friends_my_list.mouse_filter = Control.MOUSE_FILTER_PASS
+	friends_my_list.add_theme_constant_override("separation", 8)
+	stack.add_child(friends_my_list)
+
+	stack.add_child(HorrorTheme.make_hairline_divider())
+
+	friends_directory_header = _make_label(LocScript.pick("AKUN PEMAIN (MAKS 10 TERATAS)", "PLAYERS DIRECTORY (TOP 10)"), 13, HorrorTheme.PRIMARY, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
+	friends_directory_header.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stack.add_child(friends_directory_header)
+
+	friends_directory_list = VBoxContainer.new()
+	friends_directory_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	friends_directory_list.mouse_filter = Control.MOUSE_FILTER_PASS
+	friends_directory_list.add_theme_constant_override("separation", 8)
+	stack.add_child(friends_directory_list)
+
+	var close_btn := _make_button(LocScript.pick("TUTUP", "CLOSE"), false, "ghost")
+	close_btn.pressed.connect(func() -> void: friends_overlay.visible = false)
+	body.add_child(close_btn)
+
+func _open_friends_modal() -> void:
+	_friends_search_query = ""
+	if friends_search_input:
+		friends_search_input.clear()
+	_friends_last_sig = ""
+	_friends_auto_refresh_accum = 0.0
+	_set_friends_status("", HorrorTheme.ON_SURFACE_VARIANT)
+	_sync_friends_modal_auth_state()
+	_open_modal(friends_overlay, friends_panel)
+	var am: Variant = _am()
+	if am != null and am.can_access_online_modes():
+		_refresh_friends_data(false)
+
+func _sync_friends_modal_auth_state() -> void:
+	var am: Variant = _am()
+	var logged_in: bool = am != null and bool(am.get("is_logged_in")) and not bool(am.get("is_guest_mode")) and am.can_access_online_modes()
+	if friends_guest_box:
+		friends_guest_box.visible = not logged_in
+	if friends_content_box:
+		friends_content_box.visible = logged_in
+
+func _set_friends_status(msg: String, col: Color = HorrorTheme.ON_SURFACE_VARIANT) -> void:
+	if not friends_status_label:
+		return
+	friends_status_label.text = msg
+	friends_status_label.visible = not msg.strip_edges().is_empty()
+	friends_status_label.add_theme_color_override("font_color", col)
+
+func _on_friends_search_pressed() -> void:
+	_friends_search_query = friends_search_input.text.strip_edges() if friends_search_input else ""
+	_refresh_friends_data(false)
+
+func _on_friends_reset_pressed() -> void:
+	_friends_search_query = ""
+	if friends_search_input:
+		friends_search_input.clear()
+	_refresh_friends_data(false)
+
+func _refresh_friends_data(silent: bool = false) -> void:
+	if not is_instance_valid(self) or not is_inside_tree():
+		return
+	var am: Variant = _am()
+	if am == null or not am.can_access_online_modes():
+		_sync_friends_modal_auth_state()
+		return
+	if _friends_refresh_in_flight:
+		return
+	_friends_refresh_in_flight = true
+	_friends_search_query = friends_search_input.text.strip_edges() if friends_search_input else _friends_search_query
+	if not silent:
+		_friends_loading = true
+		if friends_refresh_btn:
+			friends_refresh_btn.disabled = true
+		_render_friends_modal(am.friends_list if "friends_list" in am else [], am.players_directory if "players_directory" in am else [])
+
+	var res: Dictionary = await am.fetch_friends_and_directory(_friends_search_query)
+	_friends_refresh_in_flight = false
+	_friends_loading = false
+	if not is_instance_valid(self) or not is_inside_tree():
+		return
+	if friends_refresh_btn:
+		friends_refresh_btn.disabled = false
+	if not bool(res.get("ok", false)):
+		if not silent:
+			_set_friends_status(_extract_error(res, "Gagal memuat daftar teman.", "Failed to load friends list."), HorrorTheme.ERROR)
+		return
+	var friends_arr: Array = res.get("friends", [])
+	var dir_arr: Array = res.get("directory", [])
+	var next_sig: String = _compute_friends_signature(friends_arr, dir_arr, _friends_search_query)
+	if not silent or next_sig != _friends_last_sig:
+		_friends_last_sig = next_sig
+		_render_friends_modal(friends_arr, dir_arr)
+
+func _on_friends_updated(friends_arr: Array, dir_arr: Array) -> void:
+	if friends_overlay and friends_overlay.visible:
+		var next_sig: String = _compute_friends_signature(friends_arr, dir_arr, _friends_search_query)
+		if next_sig != _friends_last_sig or _friends_loading:
+			_friends_last_sig = next_sig
+			_render_friends_modal(friends_arr, dir_arr)
+
+func _compute_friends_signature(friends_arr: Array, dir_arr: Array, q: String) -> String:
+	var parts := PackedStringArray([q])
+	for f_var: Variant in friends_arr:
+		if f_var is Dictionary:
+			var f: Dictionary = f_var as Dictionary
+			var ar: Variant = f.get("activeRoom", null)
+			var ar_sig: String = ""
+			if ar is Dictionary:
+				var ard := ar as Dictionary
+				ar_sig = "%s:%s:%d:%s:%d/%d" % [
+					str(ard.get("roomCode", "")),
+					str(ard.get("status", "")),
+					int(ard.get("currentAct", 1)),
+					"1" if bool(ard.get("furnaceBurning", false)) else "0",
+					int(ard.get("playerCount", 0)),
+					int(ard.get("maxPlayers", 4))
+				]
+			parts.append("F|%s|%s|%s|%s" % [str(f.get("id", "")), "1" if bool(f.get("isOnline", false)) else "0", "1" if bool(f.get("isVerified", false)) else "0", ar_sig])
+	for d_var: Variant in dir_arr:
+		if d_var is Dictionary:
+			var d: Dictionary = d_var as Dictionary
+			var dar: Variant = d.get("activeRoom", null)
+			var dar_sig: String = str((dar as Dictionary).get("roomCode", "")) + ":" + str((dar as Dictionary).get("currentAct", 1)) if dar is Dictionary else ""
+			parts.append("D|%s|%s|%s|%s|%d|%s" % [
+				str(d.get("id", "")),
+				"1" if bool(d.get("isOnline", false)) else "0",
+				"1" if bool(d.get("isFriend", false)) else "0",
+				"1" if bool(d.get("isVerified", false)) else "0",
+				int(d.get("totalWins", 0)),
+				dar_sig
+			])
+	return ";".join(parts)
+
+func _build_player_identity_row(card_data: Dictionary, rank_prefix: String = "") -> HBoxContainer:
+	var name_row := HBoxContainer.new()
+	name_row.add_theme_constant_override("separation", 6)
+	name_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var uname: String = ProfanityFilterScript.censor(str(card_data.get("username", "Pemain")))
+	var disp: String = ProfanityFilterScript.censor(str(card_data.get("displayName", "")).strip_edges())
+	var name_txt: String = "%s%s" % [rank_prefix, uname]
+	if not disp.is_empty() and disp.to_lower() != uname.to_lower():
+		name_txt += " (%s)" % disp
+
+	var name_lbl := _make_label(name_txt, 13, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "title-lg")
+	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	name_row.add_child(name_lbl)
+
+	if bool(card_data.get("isVerified", false)):
+		name_row.add_child(VerifiedBadgeScript.create_control(14.0))
+
+	var is_online: bool = bool(card_data.get("isOnline", false))
+	var status_lbl := _make_label(
+		"[ONLINE]" if is_online else "[OFFLINE]",
+		11,
+		Color("86ba8c") if is_online else Color("9e8886"),
+		HORIZONTAL_ALIGNMENT_LEFT,
+		"mono-sm"
+	)
+	status_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	name_row.add_child(status_lbl)
+	return name_row
+
+func _format_friend_room_status(active_room: Dictionary) -> String:
+	var r_status: String = str(active_room.get("status", "lobby")).to_lower()
+	var r_act: int = int(active_room.get("currentAct", 1))
+	var r_burning: bool = bool(active_room.get("furnaceBurning", false))
+	var r_code: String = str(active_room.get("roomCode", ""))
+	var r_pcount: int = int(active_room.get("playerCount", 0))
+	var r_pmax: int = int(active_room.get("maxPlayers", 4))
+	var pwd_tag: String = LocScript.pick(" · [Password]", " · [Password]") if bool(active_room.get("hasPassword", false)) else ""
+	if r_status == "lobby":
+		return LocScript.pick(
+			"Di Lobi · Kode %s (%d/%d)%s" % [r_code, r_pcount, r_pmax, pwd_tag],
+			"In Lobby · Code %s (%d/%d)%s" % [r_code, r_pcount, r_pmax, pwd_tag]
+		)
+	var act_roman: String = "III" if (r_act >= 3 or r_burning) else ("II" if r_act == 2 else "I")
+	return LocScript.pick(
+		"Sedang Bermain · Babak %s (%d/%d)%s" % [act_roman, r_pcount, r_pmax, pwd_tag],
+		"In Match · Act %s (%d/%d)%s" % [act_roman, r_pcount, r_pmax, pwd_tag]
+	)
+
+func _make_friend_room_join_btn(active_room: Dictionary) -> Button:
+	var r_id: String = str(active_room.get("id", active_room.get("roomId", "")))
+	var r_name: String = ProfanityFilterScript.censor(str(active_room.get("name", "Room")))
+	var r_act: int = int(active_room.get("currentAct", 1))
+	var r_burning: bool = bool(active_room.get("furnaceBurning", false))
+	var r_pcount: int = int(active_room.get("playerCount", 0))
+	var r_pmax: int = int(active_room.get("maxPlayers", 4))
+	var has_pwd: bool = bool(active_room.get("hasPassword", false))
+	var r_status: String = str(active_room.get("status", "lobby")).to_lower()
+	var act3_locked: bool = (r_status == "playing" and (r_act >= 3 or r_burning)) or (r_act >= 3 or r_burning)
+	var is_full: bool = r_pcount >= r_pmax
+	var label: String = LocScript.pick("BABAK III (TERKUNCI)", "ACT III (LOCKED)") if act3_locked else (LocScript.pick("PENUH", "FULL") if is_full else LocScript.pick("GABUNG", "JOIN"))
+	var enabled: bool = not act3_locked and not is_full
+	var btn := _make_button(label, enabled)
+	btn.custom_minimum_size = Vector2(126.0 if act3_locked else 90.0, 34.0)
+	btn.size_flags_horizontal = Control.SIZE_SHRINK_END
+	btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	btn.disabled = not enabled
+	btn.pressed.connect(_on_room_join_pressed.bind(r_id, r_name, has_pwd))
+	return btn
+
+func _render_friends_modal(friends_arr: Array, dir_arr: Array) -> void:
+	if not is_instance_valid(friends_my_list) or not is_instance_valid(friends_directory_list):
+		return
+	for ch: Node in friends_my_list.get_children():
+		ch.queue_free()
+	for ch: Node in friends_directory_list.get_children():
+		ch.queue_free()
+
+	if friends_directory_header:
+		if _friends_search_query.is_empty():
+			friends_directory_header.text = LocScript.pick("AKUN PEMAIN (MAKS 10 TERATAS)", "PLAYERS DIRECTORY (TOP 10)")
+		else:
+			friends_directory_header.text = LocScript.pick("HASIL PENCARIAN: \"%s\"" % _friends_search_query, "SEARCH RESULTS: \"%s\"" % _friends_search_query)
+
+	if _friends_loading and friends_arr.is_empty() and dir_arr.is_empty():
+		var load_lbl := _make_label(LocScript.pick("Memuat daftar teman dan pemain...", "Loading friends and players..."), 12, HorrorTheme.ON_SURFACE_VARIANT, HORIZONTAL_ALIGNMENT_CENTER, "body-md")
+		load_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		friends_my_list.add_child(load_lbl)
+		return
+
+	if friends_arr.is_empty():
+		var empty_f := _make_label(
+			LocScript.pick(
+				"Belum ada teman. Cari username pemain di atas atau tekan TAMBAH TEMAN dari daftar 10 pemain teratas di bawah.",
+				"No friends yet. Search by username above or press ADD FRIEND on the top 10 players below."
+			),
+			12, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "body-md"
+		)
+		empty_f.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		empty_f.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		friends_my_list.add_child(empty_f)
+	else:
+		for f_var: Variant in friends_arr:
+			if not (f_var is Dictionary):
+				continue
+			var f: Dictionary = f_var as Dictionary
+			var fid: String = str(f.get("id", ""))
+			var card := PanelContainer.new()
+			card.mouse_filter = Control.MOUSE_FILTER_PASS
+			card.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOW, HorrorTheme.BORDER_SUBTLE, 2, 10, 8))
+			friends_my_list.add_child(card)
+
+			var row := HBoxContainer.new()
+			row.mouse_filter = Control.MOUSE_FILTER_PASS
+			row.add_theme_constant_override("separation", 8)
+			card.add_child(row)
+
+			var info := VBoxContainer.new()
+			info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			info.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			info.add_theme_constant_override("separation", 3)
+			row.add_child(info)
+
+			info.add_child(_build_player_identity_row(f))
+
+			var ar_var: Variant = f.get("activeRoom", null)
+			if ar_var is Dictionary and not (ar_var as Dictionary).is_empty():
+				var room_lbl := _make_label(_format_friend_room_status(ar_var as Dictionary), 11, HorrorTheme.RELIC_BRASS, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm")
+				room_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+				room_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				info.add_child(room_lbl)
+			else:
+				var wins_lbl := _make_label(
+					LocScript.pick("Menang: %d" % int(f.get("totalWins", 0)), "Wins: %d" % int(f.get("totalWins", 0))),
+					11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm"
+				)
+				wins_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				info.add_child(wins_lbl)
+
+			var btns := HBoxContainer.new()
+			btns.add_theme_constant_override("separation", 6)
+			btns.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			row.add_child(btns)
+
+			if ar_var is Dictionary and not (ar_var as Dictionary).is_empty():
+				btns.add_child(_make_friend_room_join_btn(ar_var as Dictionary))
+
+			var remove_btn := _make_button(LocScript.pick("HAPUS", "REMOVE"), false, "danger")
+			remove_btn.custom_minimum_size = Vector2(76.0, 34.0)
+			remove_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
+			remove_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			remove_btn.pressed.connect(_on_remove_friend_pressed.bind(fid))
+			btns.add_child(remove_btn)
+
+	if dir_arr.is_empty():
+		var empty_d := _make_label(
+			LocScript.pick("Tidak ada akun pemain yang cocok dengan pencarian.", "No player accounts match your search."),
+			12, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "body-md"
+		)
+		empty_d.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		empty_d.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		friends_directory_list.add_child(empty_d)
+		return
+
+	var limit: int = mini(dir_arr.size(), 10)
+	for idx: int in range(limit):
+		var d_var: Variant = dir_arr[idx]
+		if not (d_var is Dictionary):
+			continue
+		var d: Dictionary = d_var as Dictionary
+		var uname: String = str(d.get("username", ""))
+		var is_self: bool = bool(d.get("isSelf", false))
+		var is_friend: bool = bool(d.get("isFriend", false))
+
+		var card := PanelContainer.new()
+		card.mouse_filter = Control.MOUSE_FILTER_PASS
+		card.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOW, HorrorTheme.BORDER_SUBTLE, 2, 10, 8))
+		friends_directory_list.add_child(card)
+
+		var row := HBoxContainer.new()
+		row.mouse_filter = Control.MOUSE_FILTER_PASS
+		row.add_theme_constant_override("separation", 8)
+		card.add_child(row)
+
+		var info := VBoxContainer.new()
+		info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		info.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		info.add_theme_constant_override("separation", 3)
+		row.add_child(info)
+
+		var rank_prefix: String = ("#%d " % [idx + 1]) if _friends_search_query.is_empty() else ""
+		info.add_child(_build_player_identity_row(d, rank_prefix))
+
+		var meta_lbl := _make_label(
+			LocScript.pick("Menang: %d" % int(d.get("totalWins", 0)), "Wins: %d" % int(d.get("totalWins", 0))),
+			11, HorrorTheme.ON_SURFACE_VARIANT, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm"
+		)
+		meta_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		info.add_child(meta_lbl)
+
+		var action_row := HBoxContainer.new()
+		action_row.add_theme_constant_override("separation", 6)
+		action_row.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(action_row)
+
+		if is_self:
+			var self_lbl := _make_label(LocScript.pick("[AKUN ANDA]", "[YOUR ACCOUNT]"), 11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_RIGHT, "mono-sm")
+			self_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			action_row.add_child(self_lbl)
+		elif is_friend:
+			var fr_lbl := _make_label(LocScript.pick("[BERTEMAN]", "[FRIENDED]"), 11, HorrorTheme.SUCCESS_SAGE, HORIZONTAL_ALIGNMENT_RIGHT, "mono-sm")
+			fr_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			action_row.add_child(fr_lbl)
+			var dar_var: Variant = d.get("activeRoom", null)
+			if dar_var is Dictionary and not (dar_var as Dictionary).is_empty():
+				action_row.add_child(_make_friend_room_join_btn(dar_var as Dictionary))
+		else:
+			var add_btn := _make_button(LocScript.pick("TAMBAH TEMAN", "ADD FRIEND"), true)
+			add_btn.custom_minimum_size = Vector2(124.0, 34.0)
+			add_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
+			add_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			add_btn.pressed.connect(_on_add_friend_pressed.bind(uname))
+			action_row.add_child(add_btn)
+
+func _on_add_friend_pressed(target_username: String) -> void:
+	var am: Variant = _am()
+	if am == null:
+		return
+	_set_friends_status(LocScript.pick("Menambahkan teman...", "Adding friend..."), HorrorTheme.ON_SURFACE_VARIANT)
+	var res: Dictionary = await am.add_friend_by_username(target_username)
+	if not is_instance_valid(self) or not is_inside_tree():
+		return
+	if bool(res.get("ok", false)):
+		_set_friends_status(LocScript.pick("Berhasil berteman dengan %s." % target_username, "Added %s as friend." % target_username), HorrorTheme.SUCCESS_SAGE)
+		await _refresh_friends_data(false)
+	else:
+		_set_friends_status(_extract_error(res, "Gagal menambahkan teman.", "Failed to add friend."), HorrorTheme.ERROR)
+
+func _on_remove_friend_pressed(friend_user_id: String) -> void:
+	var am: Variant = _am()
+	if am == null:
+		return
+	_set_friends_status(LocScript.pick("Menghapus teman...", "Removing friend..."), HorrorTheme.ON_SURFACE_VARIANT)
+	var res: Dictionary = await am.remove_friend(friend_user_id)
+	if not is_instance_valid(self) or not is_inside_tree():
+		return
+	if bool(res.get("ok", false)):
+		_set_friends_status(LocScript.pick("Teman dihapus.", "Friend removed."), HorrorTheme.ON_SURFACE_VARIANT)
+		await _refresh_friends_data(false)
+	else:
+		_set_friends_status(_extract_error(res, "Gagal menghapus teman.", "Failed to remove friend."), HorrorTheme.ERROR)

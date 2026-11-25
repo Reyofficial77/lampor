@@ -30,6 +30,12 @@ func _run_checks() -> void:
 	var uname_in: LineEdit = mm.get("profile_username_input") as LineEdit
 	if uname_in == null or uname_in.editable:
 		errors.append("profile_username_input missing or editable")
+	var fr_ov: Control = mm.get("friends_overlay") as Control
+	var fr_panel: Control = mm.get("friends_panel") as Control
+	var fr_list: Control = mm.get("friends_my_list") as Control
+	var dir_list: Control = mm.get("friends_directory_list") as Control
+	if fr_ov == null or fr_panel == null or fr_list == null or dir_list == null:
+		errors.append("MainMenu friends_modal controls missing")
 
 	var am: Variant = root.get_node_or_null("AccountManager")
 	var gm: Variant = root.get_node_or_null("GameManager")
@@ -132,6 +138,22 @@ func _run_checks() -> void:
 		ap_node.call("toggle_panel")
 		if ap_root == null or not ap_root.visible:
 			errors.append("AdminPanel did not open for admin!")
+		ap_node.call("close_panel")
+		am.set("role", "player")
+
+		var alt_f2 := InputEventKey.new()
+		alt_f2.pressed = true
+		alt_f2.echo = false
+		alt_f2.keycode = KEY_F2
+		alt_f2.physical_keycode = KEY_F2
+		alt_f2.alt_pressed = true
+		ap_node.call("_input", alt_f2)
+		if ap_root != null and ap_root.visible:
+			errors.append("AdminPanel Alt+F2 opened for non-admin player!")
+		am.set("role", "admin")
+		ap_node.call("_input", alt_f2)
+		if ap_root == null or not ap_root.visible:
+			errors.append("AdminPanel Alt+F2 did not open for admin!")
 		ap_node.call("close_panel")
 		am.set("role", "player")
 

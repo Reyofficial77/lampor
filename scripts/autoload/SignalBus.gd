@@ -48,6 +48,7 @@ signal multiplayer_game_started(room: Dictionary)
 signal multiplayer_event_received(event_type: String, payload: Dictionary, sender_name: String)
 signal multiplayer_disconnected(reason: String)
 signal sandbox_panel_toggled(is_open: bool)
+signal friends_updated(friends: Array, directory: Array)
 
 # Fate Card signals
 signal fate_card_applied(card_data: Dictionary)

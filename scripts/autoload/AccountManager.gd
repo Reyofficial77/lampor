@@ -23,6 +23,8 @@ var session_token: String = ""
 var is_busy: bool = false
 var last_error: String = ""
 var server_base_url: String = ""
+var friends_list: Array = []
+var players_directory: Array = []
 
 var _is_syncing_profile: bool = false
 var _pending_profile_sync: bool = false
@@ -267,7 +269,7 @@ func api_request(method: String, path: String, body: Variant = null, use_auth: b
 		"message": msg
 	}
 
-func _handle_session_expired(reason_msg: String) -> void:
+func _clear_session_local() -> void:
 	is_logged_in = false
 	is_guest_mode = false
 	account_gate_resolved = false
@@ -279,6 +281,11 @@ func _handle_session_expired(reason_msg: String) -> void:
 	avatar_url = ""
 	role = "player"
 	is_verified = false
+	friends_list.clear()
+	players_directory.clear()
+
+func _handle_session_expired(reason_msg: String) -> void:
+	_clear_session_local()
 	last_error = reason_msg if not reason_msg.is_empty() else LocScript.network_error_label(401)
 	_clear_account_storage()
 	SignalBus.account_state_changed.emit()
@@ -440,17 +447,10 @@ func verify_saved_session() -> bool:
 	return false
 
 func enter_guest_mode() -> void:
-	is_logged_in = false
+	_clear_session_local()
 	is_guest_mode = true
 	account_gate_resolved = true
-	session_token = ""
-	user_id = ""
 	username = "Guest"
-	display_name = ""
-	bio = ""
-	avatar_url = ""
-	role = "player"
-	is_verified = false
 	last_error = ""
 	_save_account_storage()
 	SignalBus.account_state_changed.emit()
@@ -467,20 +467,90 @@ func logout_account() -> void:
 		await api_request("POST", "/api/auth/logout", {}, true)
 		is_busy = false
 
-	session_token = ""
-	user_id = ""
-	username = ""
-	display_name = ""
-	bio = ""
-	avatar_url = ""
-	role = "player"
-	is_verified = false
-	is_logged_in = false
-	is_guest_mode = false
-	account_gate_resolved = false
+	_clear_session_local()
 	last_error = ""
 	_clear_account_storage()
 	SignalBus.account_state_changed.emit()
+
+func fetch_friends_and_directory(search_query: String = "") -> Dictionary:
+	if not can_access_online_modes():
+		return {
+			"ok": false,
+			"status": 401,
+			"friends": [],
+			"directory": [],
+			"message": LocScript.pick("Masuk ke akun LAMPOR terlebih dahulu.", "Sign in to a LAMPOR account first.")
+		}
+	var cleaned_query: String = search_query.strip_edges()
+	var path: String = "/api/friends/list"
+	if not cleaned_query.is_empty():
+		path += "?search=" + cleaned_query.uri_encode()
+	var res: Dictionary = await api_request("GET", path, null, true)
+	if not bool(res.get("ok", false)):
+		return {
+			"ok": false,
+			"status": int(res.get("status", 0)),
+			"friends": friends_list,
+			"directory": players_directory,
+			"message": str(res.get("message", LocScript.pick("Gagal memuat daftar teman.", "Failed to load friends list.")))
+		}
+	var data: Dictionary = res.get("data", {})
+	var f_raw: Variant = data.get("friends", [])
+	var d_raw: Variant = data.get("directory", [])
+	friends_list = (f_raw as Array).duplicate(true) if f_raw is Array else []
+	players_directory = (d_raw as Array).duplicate(true) if d_raw is Array else []
+	SignalBus.friends_updated.emit(friends_list, players_directory)
+	return {
+		"ok": true,
+		"status": int(res.get("status", 200)),
+		"friends": friends_list,
+		"directory": players_directory,
+		"message": str(res.get("message", ""))
+	}
+
+func add_friend_by_username(target_username: String) -> Dictionary:
+	if not can_access_online_modes():
+		return {
+			"ok": false,
+			"status": 401,
+			"message": LocScript.pick("Masuk ke akun LAMPOR terlebih dahulu.", "Sign in to a LAMPOR account first.")
+		}
+	var cleaned: String = target_username.strip_edges()
+	if cleaned.is_empty():
+		return {
+			"ok": false,
+			"status": 400,
+			"message": LocScript.pick("Masukkan username pemain.", "Enter a player username.")
+		}
+	var res: Dictionary = await api_request("POST", "/api/friends/add", {"username": cleaned}, true)
+	return {
+		"ok": bool(res.get("ok", false)),
+		"status": int(res.get("status", 0)),
+		"data": res.get("data", {}),
+		"message": str(res.get("message", ""))
+	}
+
+func remove_friend(friend_user_id: String) -> Dictionary:
+	if not can_access_online_modes():
+		return {
+			"ok": false,
+			"status": 401,
+			"message": LocScript.pick("Masuk ke akun LAMPOR terlebih dahulu.", "Sign in to a LAMPOR account first.")
+		}
+	var cleaned: String = friend_user_id.strip_edges()
+	if cleaned.is_empty():
+		return {
+			"ok": false,
+			"status": 400,
+			"message": LocScript.pick("ID teman tidak valid.", "Invalid friend ID.")
+		}
+	var res: Dictionary = await api_request("POST", "/api/friends/remove", {"friendUserId": cleaned}, true)
+	return {
+		"ok": bool(res.get("ok", false)),
+		"status": int(res.get("status", 0)),
+		"data": res.get("data", {}),
+		"message": str(res.get("message", ""))
+	}
 
 func update_profile(new_display_name: String, new_bio: String, new_avatar_url: String, _raw_avatar_filename: String = "") -> Dictionary:
 	if not can_access_online_modes():

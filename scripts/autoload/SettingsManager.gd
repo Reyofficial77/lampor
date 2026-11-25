@@ -569,19 +569,23 @@ func _apply_graphics_quality() -> void:
 	var is_mobile: bool = OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios") or DisplayServer.is_touchscreen_available()
 	match effective:
 		"low":
-			viewport.scaling_3d_scale = 0.62 if is_mobile else 0.72
+			viewport.scaling_3d_scale = 0.55 if is_mobile else 0.68
+			viewport.scaling_3d_mode = Viewport.SCALING_3D_MODE_BILINEAR
+			viewport.mesh_lod_threshold = 4.0
 			viewport.msaa_3d = Viewport.MSAA_DISABLED
 			viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
 			viewport.positional_shadow_atlas_size = 0
-			RenderingServer.directional_shadow_atlas_set_size(0 if is_mobile else 512, false)
+			RenderingServer.directional_shadow_atlas_set_size(0, false)
 		"medium":
 			viewport.scaling_3d_scale = 0.85
+			viewport.mesh_lod_threshold = 1.0
 			viewport.msaa_3d = Viewport.MSAA_DISABLED
 			viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED if is_compat else Viewport.SCREEN_SPACE_AA_FXAA
 			viewport.positional_shadow_atlas_size = 1024
 			RenderingServer.directional_shadow_atlas_set_size(1024, true)
 		"high":
 			viewport.scaling_3d_scale = 1.0
+			viewport.mesh_lod_threshold = 1.0
 			viewport.msaa_3d = Viewport.MSAA_2X
 			viewport.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED if is_compat else Viewport.SCREEN_SPACE_AA_FXAA
 			viewport.positional_shadow_atlas_size = 2048
@@ -604,9 +608,9 @@ func _apply_scene_graphics_optimizations(quality: String, is_mobile: bool = fals
 			var mat := horror_overlay.material as ShaderMaterial
 			mat.set_shader_parameter("grain_multiplier", 0.0 if is_low else 1.0)
 			mat.set_shader_parameter("fast_mode", 1.0 if is_low else 0.0)
-		horror_overlay.visible = not is_mobile_low
+		horror_overlay.visible = not is_low
 
-	var cam_far: float = (78.0 if is_mobile_low else 90.0) if quality == "low" else (105.0 if quality == "medium" else 150.0)
+	var cam_far: float = (58.0 if is_mobile_low else 68.0) if is_low else (105.0 if quality == "medium" else 150.0)
 	for cam_node: Node in root_node.find_children("*", "Camera3D", true, false):
 		var cam: Camera3D = cam_node as Camera3D
 		if cam:
@@ -615,11 +619,11 @@ func _apply_scene_graphics_optimizations(quality: String, is_mobile: bool = fals
 	for dir_node: Node in root_node.find_children("*", "DirectionalLight3D", true, false):
 		var dlight: DirectionalLight3D = dir_node as DirectionalLight3D
 		if dlight:
-			dlight.shadow_enabled = not is_mobile_low
-			dlight.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL if quality == "low" else DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
-			dlight.directional_shadow_max_distance = 55.0 if quality == "low" else 95.0
-			dlight.shadow_bias = 0.08 if quality == "low" else 0.04
-			dlight.shadow_normal_bias = 1.5 if quality == "low" else 1.0
+			dlight.shadow_enabled = not is_low
+			dlight.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL if is_low else DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+			dlight.directional_shadow_max_distance = 55.0 if is_low else 95.0
+			dlight.shadow_bias = 0.08 if is_low else 0.04
+			dlight.shadow_normal_bias = 1.5 if is_low else 1.0
 			dlight.light_energy = 0.55
 
 	for spot_node: Node in root_node.find_children("*", "SpotLight3D", true, false):
@@ -637,25 +641,46 @@ func _apply_scene_graphics_optimizations(quality: String, is_mobile: bool = fals
 			continue
 		if not olight.has_meta("_base_shadow"):
 			olight.set_meta("_base_shadow", olight.shadow_enabled)
-		olight.shadow_enabled = false if quality == "low" else bool(olight.get_meta("_base_shadow", false))
+		if not olight.has_meta("_base_range"):
+			olight.set_meta("_base_range", olight.omni_range)
+		olight.shadow_enabled = false if is_low else bool(olight.get_meta("_base_shadow", false))
+		var base_range: float = float(olight.get_meta("_base_range", olight.omni_range))
+		olight.omni_range = minf(base_range, 9.0) if is_low else base_range
 		if olight.name == "ItemLight":
 			var visuals_node: Node = olight.get_parent()
 			var item_node: Node = visuals_node.get_parent() if visuals_node else null
 			var is_ritual: bool = item_node != null and "is_ritual_item" in item_node and bool(item_node.get("is_ritual_item"))
 			var is_unlocked_ritual: bool = is_ritual and item_node is Node3D and (item_node as Node3D).visible
-			olight.visible = (not is_ritual) or is_unlocked_ritual
+			olight.visible = is_unlocked_ritual if is_low else ((not is_ritual) or is_unlocked_ritual)
 			olight.distance_fade_enabled = true
-			olight.distance_fade_begin = 14.0 if quality == "low" else 22.0
+			olight.distance_fade_begin = 14.0 if is_low else 22.0
 			olight.distance_fade_length = 5.0
 			if is_unlocked_ritual:
-				olight.light_energy = 1.1 if quality == "low" else 1.5
+				olight.light_energy = 1.1 if is_low else 1.5
+
+	for mesh_node: Node in root_node.find_children("*", "MeshInstance3D", true, false):
+		var mi: MeshInstance3D = mesh_node as MeshInstance3D
+		if mi:
+			if not mi.has_meta("_base_cast_shadow"):
+				mi.set_meta("_base_cast_shadow", int(mi.cast_shadow))
+			if is_low:
+				mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			else:
+				mi.cast_shadow = int(mi.get_meta("_base_cast_shadow", GeometryInstance3D.SHADOW_CASTING_SETTING_ON)) as GeometryInstance3D.ShadowCastingSetting
 
 	for env_node: Node in root_node.find_children("*", "WorldEnvironment", true, false):
 		var we: WorldEnvironment = env_node as WorldEnvironment
 		if we and we.environment:
+			if not we.has_meta("_base_bg_mode"):
+				we.set_meta("_base_bg_mode", int(we.environment.background_mode))
+			if is_low:
+				we.environment.background_mode = Environment.BG_COLOR
+				we.environment.background_color = Color(0.015, 0.02, 0.035, 1.0)
+			else:
+				we.environment.background_mode = int(we.get_meta("_base_bg_mode", Environment.BG_SKY)) as Environment.BGMode
 			we.environment.fog_enabled = true
 			we.environment.ambient_light_color = Color(0.11, 0.13, 0.19, 1.0)
-			we.environment.ambient_light_energy = 0.80
+			we.environment.ambient_light_energy = 0.85 if is_low else 0.80
 			we.environment.glow_enabled = false
 			we.environment.ssao_enabled = false
 			we.environment.ssil_enabled = false

@@ -8,6 +8,7 @@ const FATE_CARD_OVERLAY_SCRIPT = preload("res://scripts/ui/FateCardOverlay.gd")
 const HORROR_TITLE_FONT: Font = preload("res://assets/fonts/HorrorTitle.ttf")
 const LocScript = preload("res://scripts/systems/Loc.gd")
 const ProfanityFilterScript = preload("res://scripts/systems/ProfanityFilter.gd")
+const VerifiedBadgeScript = preload("res://scripts/ui/VerifiedBadge.gd")
 
 @onready var interaction_label: Label = $CenterContainer/InteractionLabel
 @onready var act_banner: Label = $CenterContainer/ActBanner
@@ -117,6 +118,7 @@ var _mp_refresh_elapsed: float = 0.0
 var _mp_last_sig: String = ""
 var _last_sandbox_hint_active: bool = false
 var _last_admin_hint_active: bool = false
+var low_fear_tint: ColorRect = null
 var _pause_settings_box: VBoxContainer = null
 var _pause_language_option: OptionButton = null
 var _pause_listening_keybind_action: String = ""
@@ -139,6 +141,15 @@ func _ready() -> void:
 
 	if post_process_rect and post_process_rect.material is ShaderMaterial:
 		post_process_material = post_process_rect.material as ShaderMaterial
+
+	low_fear_tint = ColorRect.new()
+	low_fear_tint.name = "LowFearTint"
+	low_fear_tint.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	low_fear_tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	low_fear_tint.color = Color(0.28, 0.02, 0.03, 0.0)
+	low_fear_tint.visible = false
+	add_child(low_fear_tint)
+	move_child(low_fear_tint, 0)
 
 	# Connect signals
 	SignalBus.player_sanity_changed.connect(_on_sanity_changed)
@@ -1616,9 +1627,10 @@ func _refresh_online_room_overlay(force: bool = false) -> void:
 			var uid: String = str(p.get("userId", p.get("id", "")))
 			var uname: String = ProfanityFilterScript.censor(str(p.get("username", "Pemain")))
 			var is_h: bool = bool(p.get("isHost", false)) or (not host_id.is_empty() and uid.to_lower() == host_id)
+			var is_v: bool = bool(p.get("isVerified", false))
 			var ps: Variant = p.get("playerState", {})
 			var san: int = clampi(int(round(float(ps.get("sanity", 100)) if ps is Dictionary else float(p.get("sanity", 100)))), 0, 100)
-			sig_parts.append("%s:%s:%s:%d" % [uid, uname, "H" if is_h else "P", san])
+			sig_parts.append("%s:%s:%s:%s:%d" % [uid, uname, "H" if is_h else "P", "V" if is_v else "N", san])
 	var sig: String = "|".join(sig_parts)
 	if not force and sig == _mp_last_sig:
 		return
@@ -1643,6 +1655,7 @@ func _refresh_online_room_overlay(force: bool = false) -> void:
 			var uid: String = str(p.get("userId", p.get("id", "")))
 			var uname: String = ProfanityFilterScript.censor(str(p.get("username", "Pemain")))
 			var is_host: bool = bool(p.get("isHost", false)) or (not host_id.is_empty() and uid.to_lower() == host_id)
+			var is_v_p: bool = bool(p.get("isVerified", false))
 			var ps: Variant = p.get("playerState", {})
 			var san: int = clampi(int(round(float(ps.get("sanity", 100)) if ps is Dictionary else float(p.get("sanity", 100)))), 0, 100)
 
@@ -1651,13 +1664,21 @@ func _refresh_online_room_overlay(force: bool = false) -> void:
 			row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			mp_roster_vbox.add_child(row)
 
+			var name_wrap := HBoxContainer.new()
+			name_wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			name_wrap.add_theme_constant_override("separation", 4)
+			name_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			row.add_child(name_wrap)
+
 			var name_lbl := Label.new()
 			name_lbl.text = "%s%s" % [uname, " [HOST]" if is_host else ""]
-			name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			name_lbl.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 			name_lbl.clip_text = true
 			name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			HorrorTheme.style_label(name_lbl, "label-sm", HorrorTheme.RELIC_BRASS if is_host else HorrorTheme.ON_SURFACE, 10)
-			row.add_child(name_lbl)
+			name_wrap.add_child(name_lbl)
+			if is_v_p:
+				name_wrap.add_child(VerifiedBadgeScript.create_control(12.0))
 
 			var san_lbl := Label.new()
 			san_lbl.text = "WARAS %d%%" % san
@@ -2113,10 +2134,14 @@ func _on_sanity_changed(current: float, max_val: float) -> void:
 	
 	var fear: float = 1.0 - clampf(current / maxf(1.0, max_val), 0.0, 1.0)
 	var dizzy: float = clampf((fear - 0.30) / 0.70, 0.0, 1.0)
+	var is_low_q: bool = (post_process_rect != null and bool(post_process_rect.get_meta("low_quality_mode", false))) or SettingsManager.get_effective_graphics_quality() == "low"
 	if post_process_rect:
-		var m_low: bool = bool(post_process_rect.get_meta("mobile_low_mode", false))
-		post_process_rect.visible = (not m_low) or (fear >= 0.25)
-	if post_process_material:
+		post_process_rect.visible = not is_low_q
+	if low_fear_tint:
+		var tint_a: float = clampf((fear - 0.35) * 0.38, 0.0, 0.25) if is_low_q else 0.0
+		low_fear_tint.visible = tint_a > 0.01
+		low_fear_tint.color = Color(0.28, 0.02, 0.03, tint_a)
+	if not is_low_q and post_process_material:
 		post_process_material.set_shader_parameter("vignette_intensity", lerp(0.35, 1.25, fear))
 		post_process_material.set_shader_parameter("aberration_amount", lerp(0.001, 0.016, fear))
 		post_process_material.set_shader_parameter("pulse_intensity", fear)

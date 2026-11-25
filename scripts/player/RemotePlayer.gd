@@ -2,6 +2,7 @@ class_name RemotePlayer
 extends Node3D
 
 const ProfanityFilterScript = preload("res://scripts/systems/ProfanityFilter.gd")
+const VerifiedBadgeScript = preload("res://scripts/ui/VerifiedBadge.gd")
 const PLAYER_MODEL_PATH: String = "res://assets/models/player/ordinaryMan.fbx"
 const PLAYER_TEXTURE_PATH: String = "res://assets/models/player/OrdinaryManTexture_1024x1024.png"
 
@@ -29,6 +30,7 @@ const BONE_ALIASES: Dictionary = {
 var user_id: String = ""
 var username: String = "Player"
 var is_host: bool = false
+var is_verified: bool = false
 var target_position: Vector3 = Vector3.ZERO
 var target_rot_y: float = 0.0
 var target_pitch: float = 0.0
@@ -44,6 +46,7 @@ var visual_root: Node3D = null
 var head_pivot: Node3D = null
 var flashlight: SpotLight3D = null
 var name_label: Label3D = null
+var verified_sprite: Sprite3D = null
 var _skeleton: Skeleton3D = null
 var _anim_player: AnimationPlayer = null
 var _initialized: bool = false
@@ -96,6 +99,16 @@ func _ensure_initialized() -> void:
 	name_label.modulate = Color(0.97, 0.87, 0.85, 1.0)
 	name_label.text = username
 	add_child(name_label)
+
+	verified_sprite = Sprite3D.new()
+	verified_sprite.name = "VerifiedSprite"
+	verified_sprite.position = Vector3(0.0, 2.34, 0.0)
+	verified_sprite.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	verified_sprite.no_depth_test = true
+	verified_sprite.pixel_size = 0.0042
+	verified_sprite.texture = VerifiedBadgeScript.get_texture(48)
+	verified_sprite.visible = is_verified
+	add_child(verified_sprite)
 
 	_setup_character_visuals()
 
@@ -358,6 +371,8 @@ func apply_network_state(data: Dictionary) -> void:
 			username = uname
 	if data.has("isHost"):
 		is_host = bool(data.get("isHost", false))
+	if data.has("isVerified"):
+		is_verified = bool(data.get("isVerified", false))
 
 	var has_pos_in_packet: bool = false
 	var pos_raw: Variant = data.get("pos", null)
@@ -401,14 +416,13 @@ func apply_network_state(data: Dictionary) -> void:
 			name_label.modulate = Color(0.92, 0.76, 0.45, 1.0)
 		else:
 			name_label.modulate = Color(0.97, 0.87, 0.85, 1.0)
+	if verified_sprite:
+		verified_sprite.visible = is_verified and (name_label == null or name_label.visible)
 
 	if flashlight:
-		var is_mobile_low: bool = _is_mobile_low()
-		flashlight.visible = (not is_mobile_low) and flashlight_on and is_alive and not is_hiding
-		if SettingsManager.get_effective_graphics_quality() == "low":
-			flashlight.spot_range = 14.0
-		else:
-			flashlight.spot_range = 30.0
+		var disable_fl: bool = _is_low_graphics()
+		flashlight.visible = (not disable_fl) and flashlight_on and is_alive and not is_hiding
+		flashlight.spot_range = 14.0 if SettingsManager.get_effective_graphics_quality() == "low" else 30.0
 
 	var resolved_anim: String = current_anim
 	if not is_alive:
@@ -417,9 +431,8 @@ func apply_network_state(data: Dictionary) -> void:
 		resolved_anim = "crouch"
 	_play_anim(resolved_anim)
 
-func _is_mobile_low() -> bool:
-	var is_mobile: bool = OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios") or DisplayServer.is_touchscreen_available()
-	return is_mobile and SettingsManager.get_effective_graphics_quality() == "low"
+func _is_low_graphics() -> bool:
+	return SettingsManager.get_effective_graphics_quality() == "low"
 
 func _process(delta: float) -> void:
 	if not _has_network_pose or not is_inside_tree():
@@ -435,12 +448,16 @@ func _process(delta: float) -> void:
 	_lod_check_elapsed += delta
 	if _lod_check_elapsed >= 0.45:
 		_lod_check_elapsed = 0.0
+		var show_tag: bool = true
 		if name_label and is_instance_valid(GameManager.player_character) and GameManager.player_character is Node3D:
 			var d_sq: float = global_position.distance_squared_to((GameManager.player_character as Node3D).global_position)
-			name_label.visible = d_sq <= 784.0
+			show_tag = d_sq <= 784.0
+			name_label.visible = show_tag
+		if verified_sprite:
+			verified_sprite.visible = is_verified and show_tag
 		if flashlight:
-			var is_m_low: bool = _is_mobile_low()
-			if is_m_low and flashlight.visible:
+			var disable_fl: bool = _is_low_graphics()
+			if disable_fl and flashlight.visible:
 				flashlight.visible = false
-			elif not is_m_low:
+			elif not disable_fl:
 				flashlight.visible = flashlight_on and is_alive and not is_hiding

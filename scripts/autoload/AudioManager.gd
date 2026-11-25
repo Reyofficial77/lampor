@@ -24,7 +24,8 @@ func _ready() -> void:
 	_load_sounds()
 	_load_voice_manifest()
 	_setup_audio_players()
-	play_ambient()
+	if DisplayServer.get_name() != "headless":
+		play_ambient()
 	
 	SignalBus.lampor_screamer_triggered.connect(_on_screamer)
 	SignalBus.player_death_requested.connect(_on_player_death_requested)
@@ -41,6 +42,8 @@ func _on_player_death_requested(reason: String) -> void:
 		play_sound("game_over_sting", -2.0)
 
 func _load_sounds() -> void:
+	if DisplayServer.get_name() == "headless":
+		return
 	var sound_files: Dictionary = {
 		"ambient_night": "res://assets/audio/ambient_night.wav",
 		"lampor_bell": "res://assets/audio/lampor_bell.wav",

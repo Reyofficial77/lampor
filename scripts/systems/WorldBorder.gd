@@ -31,7 +31,7 @@ func _build_forest_perimeter() -> void:
 	skirt.material_override = skirt_mat
 	add_child(skirt)
 
-	var is_mobile_low: bool = (OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios") or DisplayServer.is_touchscreen_available()) and SettingsManager.get_effective_graphics_quality() == "low"
+	var is_low: bool = SettingsManager.get_effective_graphics_quality() == "low"
 	var tree_transforms_trunk: Array[Transform3D] = []
 	var tree_transforms_low_canopy: Array[Transform3D] = []
 	var tree_transforms_high_canopy: Array[Transform3D] = []
@@ -41,10 +41,11 @@ func _build_forest_perimeter() -> void:
 	rng.seed = 133742
 
 	var ring_defs: Array[Dictionary] = [
-		{"min_d": 48.0, "max_d": 52.5, "step": 3.8, "h_min": 9.5, "h_max": 14.5, "offset": 0.0},
-		{"min_d": 54.0, "max_d": 61.5, "step": 4.4, "h_min": 12.0, "h_max": 17.5, "offset": 2.1},
-		{"min_d": 63.0, "max_d": 76.0, "step": 7.6 if is_mobile_low else 5.4, "h_min": 15.0, "h_max": 22.0, "offset": 1.3}
+		{"min_d": 48.0, "max_d": 53.0, "step": 4.2 if is_low else 3.8, "h_min": 9.5, "h_max": 14.5, "offset": 0.0},
+		{"min_d": 54.5, "max_d": 62.5, "step": 5.2 if is_low else 4.4, "h_min": 12.5, "h_max": 18.0, "offset": 2.1}
 	]
+	if not is_low:
+		ring_defs.append({"min_d": 63.0, "max_d": 76.0, "step": 5.4, "h_min": 15.0, "h_max": 22.0, "offset": 1.3})
 
 	var seen_cells: Dictionary = {}
 	for ring: Dictionary in ring_defs:
@@ -126,8 +127,8 @@ func _build_forest_perimeter() -> void:
 	add_child(trunk_mmi)
 
 	var canopy_low_mesh := CylinderMesh.new()
-	canopy_low_mesh.top_radius = 0.18
-	canopy_low_mesh.bottom_radius = 2.65
+	canopy_low_mesh.top_radius = 0.22
+	canopy_low_mesh.bottom_radius = 2.9 if is_low else 2.65
 	canopy_low_mesh.height = 1.0
 	canopy_low_mesh.radial_segments = 7
 	canopy_low_mesh.rings = 1

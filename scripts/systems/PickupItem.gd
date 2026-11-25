@@ -17,6 +17,11 @@ func _ready() -> void:
 	_update_model_appearance()
 	SignalBus.act_started.connect(_on_act_started)
 	_update_ritual_visibility(GameManager.get_current_act_number())
+	var is_low: bool = SettingsManager.get_effective_graphics_quality() == "low"
+	if not is_ritual_item and is_low:
+		if item_light:
+			item_light.visible = false
+		set_process(false)
 
 func _on_act_started(act_number: int, _title: String) -> void:
 	_update_ritual_visibility(act_number)
@@ -31,9 +36,9 @@ func _update_ritual_visibility(act_number: int) -> void:
 	monitorable = unlocked
 	set_process(unlocked)
 	if item_light:
-		item_light.visible = unlocked
-		item_light.distance_fade_enabled = true
 		var quality: String = SettingsManager.get_effective_graphics_quality()
+		item_light.visible = unlocked and (quality != "low" or is_ritual_item)
+		item_light.distance_fade_enabled = true
 		item_light.distance_fade_begin = 14.0 if quality == "low" else 22.0
 		item_light.distance_fade_length = 5.0
 		if unlocked:

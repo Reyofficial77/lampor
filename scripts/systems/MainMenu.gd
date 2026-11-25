@@ -3,6 +3,7 @@ extends Control
 
 const LocScript = preload("res://scripts/systems/Loc.gd")
 const ProfanityFilterScript = preload("res://scripts/systems/ProfanityFilter.gd")
+const VerifiedBadgeScript = preload("res://scripts/ui/VerifiedBadge.gd")
 const GAME_VERSION: String = "v1.3.0"
 const FALLBACK_REDEEM_CODES: Dictionary = {
 	"LAMPORGIFT": {"type": "coins", "quantity": 2500, "description": "hadiah untuk kalian!"},
@@ -20,9 +21,11 @@ var title_rule: ColorRect
 var stats_label: Label
 var account_chip_panel: PanelContainer
 var account_chip_label: Label
+var account_chip_badge: Control
 var top_right_bar: HBoxContainer
 var top_account_chip: PanelContainer
 var top_account_label: Label
+var top_account_badge: Control
 var account_btn: Button
 var version_label: Label
 var copyright_label: Label
@@ -131,6 +134,8 @@ var profile_avatar_reset_btn: Button
 var profile_avatar_preset_btns: Dictionary = {}
 var profile_avatar_dialog: FileDialog
 var profile_username_input: LineEdit
+var profile_verified_badge: Control
+var profile_verified_label: Label
 var profile_display_name_input: LineEdit
 var profile_bio_input: TextEdit
 var profile_bio_count_label: Label
@@ -273,14 +278,6 @@ func _process(delta: float) -> void:
 		if _mp_auto_refresh_accum >= 1.0:
 			_mp_auto_refresh_accum = 0.0
 			_refresh_mp_server_and_rooms(true)
-	var am: Variant = _am()
-	if am != null and am.can_access_online_modes() and am.has_method("refresh_profile_from_server"):
-		var editing_profile_now: bool = account_overlay != null and account_overlay.visible and _profile_dirty
-		if not editing_profile_now:
-			_account_me_refresh_accum += delta
-			if _account_me_refresh_accum >= 2.0:
-				_account_me_refresh_accum = 0.0
-				am.refresh_profile_from_server()
 
 func _build_menu() -> void:
 	var background := ColorRect.new()
@@ -341,9 +338,18 @@ func _build_menu() -> void:
 	account_chip_panel.gui_input.connect(_on_account_chip_gui_input)
 	main_content.add_child(account_chip_panel)
 
+	var chip_hbox := HBoxContainer.new()
+	chip_hbox.add_theme_constant_override("separation", 5)
+	chip_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	account_chip_panel.add_child(chip_hbox)
+
 	account_chip_label = _make_label("", 11, HorrorTheme.ON_SURFACE_VARIANT, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm")
 	account_chip_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	account_chip_panel.add_child(account_chip_label)
+	chip_hbox.add_child(account_chip_label)
+
+	account_chip_badge = VerifiedBadgeScript.create_control(14.0)
+	account_chip_badge.visible = false
+	chip_hbox.add_child(account_chip_badge)
 
 	var menu_buttons := VBoxContainer.new()
 	menu_buttons.name = "MenuButtons"
@@ -400,9 +406,18 @@ func _build_menu() -> void:
 	top_account_chip.gui_input.connect(_on_account_chip_gui_input)
 	top_right_bar.add_child(top_account_chip)
 
+	var top_chip_hbox := HBoxContainer.new()
+	top_chip_hbox.add_theme_constant_override("separation", 5)
+	top_chip_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	top_account_chip.add_child(top_chip_hbox)
+
 	top_account_label = _make_label("", 11, HorrorTheme.ON_SURFACE_VARIANT, HORIZONTAL_ALIGNMENT_CENTER, "mono-sm")
 	top_account_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	top_account_chip.add_child(top_account_label)
+	top_chip_hbox.add_child(top_account_label)
+
+	top_account_badge = VerifiedBadgeScript.create_control(14.0)
+	top_account_badge.visible = false
+	top_chip_hbox.add_child(top_account_badge)
 
 	account_btn = Button.new()
 	account_btn.text = LocScript.pick("AKUN / MASUK", "ACCOUNT / SIGN IN")
@@ -2586,12 +2601,30 @@ func _build_account_modal() -> void:
 		profile_avatar_dialog.file_selected.connect(_on_profile_photo_file_selected)
 		add_child(profile_avatar_dialog)
 
+	var uname_hdr_row := HBoxContainer.new()
+	uname_hdr_row.add_theme_constant_override("separation", 6)
+	uname_hdr_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	account_profile_section.add_child(uname_hdr_row)
+
 	var uname_ro_lbl := _make_label(
 		LocScript.pick("Username (tidak dapat diganti)", "Username (cannot be changed)"),
 		12, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm"
 	)
+	uname_ro_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	uname_ro_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	account_profile_section.add_child(uname_ro_lbl)
+	uname_hdr_row.add_child(uname_ro_lbl)
+
+	profile_verified_badge = VerifiedBadgeScript.create_control(15.0)
+	profile_verified_badge.visible = false
+	uname_hdr_row.add_child(profile_verified_badge)
+
+	profile_verified_label = _make_label(
+		LocScript.pick("Terverifikasi", "Verified"),
+		11, Color(0.114, 0.608, 0.941, 1.0), HORIZONTAL_ALIGNMENT_RIGHT, "label-sm"
+	)
+	profile_verified_label.visible = false
+	profile_verified_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	uname_hdr_row.add_child(profile_verified_label)
 
 	profile_username_input = LineEdit.new()
 	profile_username_input.editable = false
@@ -2774,6 +2807,15 @@ func _refresh_account_ui() -> void:
 	if top_account_label:
 		top_account_label.text = chip_text
 		top_account_label.add_theme_color_override("font_color", chip_color)
+	var is_v: bool = logged_in and am != null and bool(am.get("is_verified"))
+	if account_chip_badge:
+		account_chip_badge.visible = is_v
+	if top_account_badge:
+		top_account_badge.visible = is_v
+	if profile_verified_badge:
+		profile_verified_badge.visible = is_v
+	if profile_verified_label:
+		profile_verified_label.visible = is_v
 	if account_btn:
 		account_btn.text = LocScript.pick("AKUN / PROFIL", "ACCOUNT / PROFILE") if logged_in else LocScript.pick("AKUN / MASUK", "ACCOUNT / SIGN IN")
 	if account_auth_section:
@@ -3356,10 +3398,11 @@ func _compute_rooms_signature(rooms: Array) -> String:
 			var r_mode: String = str(r.get("mode", mp_mode_filter))
 			if r_mode != mp_mode_filter:
 				continue
-			parts.append("%s|%s|%s|%d|%d|%s|%s|%s" % [
+			parts.append("%s|%s|%s|%s|%d|%d|%s|%s|%s" % [
 				str(r.get("id", r.get("roomId", ""))),
 				str(r.get("name", "")),
 				str(r.get("hostUsername", r.get("host", ""))),
+				"1" if bool(r.get("hostIsVerified", false)) else "0",
 				int(r.get("playerCount", 1)),
 				int(r.get("maxPlayers", 4)),
 				str(r.get("status", "lobby")),
@@ -3448,11 +3491,25 @@ func _render_mp_room_list(rooms: Array) -> void:
 		title_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		info.add_child(title_lbl)
 
+		var host_row := HBoxContainer.new()
+		host_row.add_theme_constant_override("separation", 4)
+		host_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		info.add_child(host_row)
+
+		var host_lbl := _make_label(
+			LocScript.pick("Host: %s" % host_name, "Host: %s" % host_name),
+			11, HorrorTheme.ON_SURFACE_VARIANT, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm"
+		)
+		host_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		host_row.add_child(host_lbl)
+		if bool(r.get("hostIsVerified", false)):
+			host_row.add_child(VerifiedBadgeScript.create_control(13.0))
+
 		var shop_tag: String = "ON" if can_shop else "OFF"
 		var meta_lbl := _make_label(
 			LocScript.pick(
-				"Host: %s  ·  Pemain: %d/%d  ·  %s  ·  Shop Item: %s%s" % [host_name, p_count, p_max, diff_str, shop_tag, ("  ·  Kode: " + room_code) if not room_code.is_empty() else ""],
-				"Host: %s  ·  Players: %d/%d  ·  %s  ·  Shop Item: %s%s" % [host_name, p_count, p_max, diff_str, shop_tag, ("  ·  Code: " + room_code) if not room_code.is_empty() else ""]
+				"Pemain: %d/%d  ·  %s  ·  Shop Item: %s%s" % [p_count, p_max, diff_str, shop_tag, ("  ·  Kode: " + room_code) if not room_code.is_empty() else ""],
+				"Players: %d/%d  ·  %s  ·  Shop Item: %s%s" % [p_count, p_max, diff_str, shop_tag, ("  ·  Code: " + room_code) if not room_code.is_empty() else ""]
 			),
 			11, HorrorTheme.ON_SURFACE_VARIANT, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm"
 		)
@@ -4052,9 +4109,10 @@ func _refresh_lobby_ui(room: Dictionary, players: Array) -> void:
 		var uname_s: String = str(p_s.get("username", "Player"))
 		var host_s: bool = bool(p_s.get("isHost", uid_s == host_uid))
 		var ready_s: bool = bool(p_s.get("isReady", false))
+		var verified_s: bool = bool(p_s.get("isVerified", false))
 		if uid_s == my_uid:
 			my_ready = ready_s
-		sig_parts.append("%s|%s|%s|%s" % [uid_s, uname_s, "1" if host_s else "0", "1" if ready_s else "0"])
+		sig_parts.append("%s|%s|%s|%s|%s" % [uid_s, uname_s, "1" if host_s else "0", "1" if ready_s else "0", "1" if verified_s else "0"])
 	var roster_sig: String = ";".join(sig_parts)
 
 	if is_instance_valid(lobby_players_box) and roster_sig != _last_lobby_roster_sig:
@@ -4069,6 +4127,7 @@ func _refresh_lobby_ui(room: Dictionary, players: Array) -> void:
 			var uname: String = ProfanityFilterScript.censor(str(p.get("username", "Player")))
 			var is_host: bool = bool(p.get("isHost", uid == host_uid))
 			var is_ready: bool = bool(p.get("isReady", false))
+			var is_p_verified: bool = bool(p.get("isVerified", false))
 
 			var slot_card := PanelContainer.new()
 			slot_card.mouse_filter = Control.MOUSE_FILTER_PASS
@@ -4080,12 +4139,20 @@ func _refresh_lobby_ui(room: Dictionary, players: Array) -> void:
 			p_row.mouse_filter = Control.MOUSE_FILTER_PASS
 			slot_card.add_child(p_row)
 
+			var name_box := HBoxContainer.new()
+			name_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			name_box.add_theme_constant_override("separation", 5)
+			name_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			p_row.add_child(name_box)
+
 			var you_tag: String = LocScript.pick(" (Anda)", " (You)") if uid == my_uid else ""
 			var host_tag: String = "  [HOST]" if is_host else ""
 			var p_name_lbl := _make_label("%s%s%s" % [uname, you_tag, host_tag], 13, HorrorTheme.RELIC_BRASS if is_host else HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "body-md")
-			p_name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			p_name_lbl.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 			p_name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			p_row.add_child(p_name_lbl)
+			name_box.add_child(p_name_lbl)
+			if is_p_verified:
+				name_box.add_child(VerifiedBadgeScript.create_control(14.0))
 
 			var ready_lbl := _make_label(
 				LocScript.pick("[SIAP]", "[READY]") if is_ready else LocScript.pick("[MENUNGGU]", "[WAITING]"),
@@ -4124,19 +4191,27 @@ func _refresh_lobby_chat() -> void:
 		return
 	var mp: Variant = _mp()
 	var hist: Array = mp.lobby_chat_history if mp != null else []
+	lobby_chat_view.clear()
 	if hist.is_empty():
-		lobby_chat_view.text = "[color=#a98e8b]%s[/color]" % LocScript.pick("Belum ada pesan. Sapa rekanmu di sini.", "No messages yet. Say hello to your teammates.")
+		lobby_chat_view.append_text("[color=#a98e8b]%s[/color]" % LocScript.pick("Belum ada pesan. Sapa rekanmu di sini.", "No messages yet. Say hello to your teammates."))
 		_last_chat_count = 0
 		return
-	var lines := PackedStringArray()
-	for entry_var: Variant in hist:
+	var badge_tex: ImageTexture = VerifiedBadgeScript.get_texture(16)
+	for idx: int in range(hist.size()):
+		var entry_var: Variant = hist[idx]
 		if not entry_var is Dictionary:
 			continue
 		var entry: Dictionary = entry_var as Dictionary
 		var sender: String = ProfanityFilterScript.censor(str(entry.get("sender", entry.get("sender_name", entry.get("username", "Pemain"))))).replace("[", "[lb]").replace("]", "[rb]")
 		var msg_text: String = ProfanityFilterScript.censor(str(entry.get("text", entry.get("message", "")))).replace("[", "[lb]").replace("]", "[rb]")
-		lines.append("[color=#c99a5b][b]%s[/b][/color]: %s" % [sender, msg_text])
-	lobby_chat_view.text = "\n".join(lines)
+		var sender_v: bool = bool(entry.get("is_verified", false))
+		lobby_chat_view.append_text("[color=#c99a5b][b]%s[/b][/color]" % sender)
+		if sender_v and badge_tex != null:
+			lobby_chat_view.append_text(" ")
+			lobby_chat_view.add_image(badge_tex, 13, 13)
+		lobby_chat_view.append_text(": %s" % msg_text)
+		if idx < hist.size() - 1:
+			lobby_chat_view.append_text("\n")
 	if hist.size() != _last_chat_count:
 		_last_chat_count = hist.size()
 		if lobby_chat_scroll:

@@ -515,7 +515,7 @@ func _write_json_file_direct(path: String, json_text: String) -> bool:
 	f.close()
 	return true
 
-func save_game_data(explicit_write: bool = false, sync_cloud: bool = true) -> void:
+func save_game_data(explicit_write: bool = false, sync_cloud: bool = true, increment_seq: bool = true) -> void:
 	coins = clampi(coins, 0, MAX_COINS)
 	var disk_best: Dictionary = _pick_best_save_candidate()
 	if not disk_best.is_empty():
@@ -523,9 +523,11 @@ func save_game_data(explicit_write: bool = false, sync_cloud: bool = true) -> vo
 		if not explicit_write and (_save_load_failed or (coins == 0 and total_wins == 0)) and _save_progress_score(disk_best) > 0:
 			push_warning("[GameManager] Mencegah save kosong menimpa data koin yang tersimpan.")
 			return
-		save_seq = maxi(save_seq, disk_seq)
+		if increment_seq:
+			save_seq = maxi(save_seq, disk_seq)
 	_save_load_failed = false
-	save_seq += 1
+	if increment_seq:
+		save_seq += 1
 	var is_explicit_zero: bool = explicit_write and coins == 0 and total_wins == 0 and extra_lives == 0
 	var data: Dictionary = {
 		"save_version": 2,

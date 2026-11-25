@@ -18,6 +18,7 @@ var display_name: String = ""
 var bio: String = ""
 var avatar_url: String = ""
 var role: String = "player"
+var is_verified: bool = false
 var session_token: String = ""
 var is_busy: bool = false
 var last_error: String = ""
@@ -27,6 +28,7 @@ var _is_syncing_profile: bool = false
 var _pending_profile_sync: bool = false
 var _applying_cloud_profile: bool = false
 var _me_refresh_in_flight: bool = false
+var _realtime_poll_accum: float = 0.0
 var _web_sync_pending: bool = false
 var _rx_username: RegEx = null
 var _rx_letter: RegEx = null
@@ -39,6 +41,20 @@ func _ready() -> void:
 	_load_account_storage()
 	if OS.has_feature("web"):
 		call_deferred("_schedule_web_account_reconcile")
+
+func _process(delta: float) -> void:
+	if DisplayServer.get_name() == "headless":
+		return
+	if not can_access_online_modes() or is_busy or _me_refresh_in_flight or _is_syncing_profile:
+		return
+	var mp: Variant = GameManager.get_multiplayer_manager(false)
+	if mp != null and bool(mp.get("is_online_session")):
+		return
+	var interval: float = 2.0 if GameManager.is_in_active_gameplay() else 1.0
+	_realtime_poll_accum += delta
+	if _realtime_poll_accum >= interval:
+		_realtime_poll_accum = 0.0
+		refresh_profile_from_server()
 
 func _ensure_regexes() -> void:
 	if _rx_username == null:
@@ -170,6 +186,7 @@ func api_request(method: String, path: String, body: Variant = null, use_auth: b
 	var headers := PackedStringArray([
 		"Content-Type: application/json",
 		"Accept: application/json",
+		"Cache-Control: no-cache",
 		"X-Lampor-Client-Version: 1.3.0"
 	])
 	var used_token: String = session_token if (use_auth and not session_token.is_empty()) else ""
@@ -261,6 +278,7 @@ func _handle_session_expired(reason_msg: String) -> void:
 	bio = ""
 	avatar_url = ""
 	role = "player"
+	is_verified = false
 	last_error = reason_msg if not reason_msg.is_empty() else LocScript.network_error_label(401)
 	_clear_account_storage()
 	SignalBus.account_state_changed.emit()
@@ -432,6 +450,7 @@ func enter_guest_mode() -> void:
 	bio = ""
 	avatar_url = ""
 	role = "player"
+	is_verified = false
 	last_error = ""
 	_save_account_storage()
 	SignalBus.account_state_changed.emit()
@@ -455,6 +474,7 @@ func logout_account() -> void:
 	bio = ""
 	avatar_url = ""
 	role = "player"
+	is_verified = false
 	is_logged_in = false
 	is_guest_mode = false
 	account_gate_resolved = false
@@ -569,24 +589,31 @@ func refresh_profile_from_server() -> Dictionary:
 		return res
 	var data: Dictionary = res.get("data", {})
 	var user_dict: Dictionary = data.get("user", {}) if data.get("user") is Dictionary else {}
+	if not user_dict.is_empty():
+		apply_live_server_user(user_dict)
+	return res
+
+func apply_live_server_user(user_dict: Dictionary) -> void:
 	if user_dict.is_empty():
-		return res
+		return
 	var prev_role: String = role
+	var prev_verified: bool = is_verified
 	var prev_disp: String = display_name
 	var prev_bio: String = bio
 	var prev_avatar: String = avatar_url
 	_extract_identity_from_user(user_dict)
-	var server_seq: int = maxi(0, int(user_data_seq(user_dict)))
+	var server_seq: int = user_data_seq(user_dict)
 	var server_coins: int = clampi(int(user_dict.get("coins", GameManager.coins)), 0, GameManager.MAX_COINS)
 	var server_wins: int = maxi(0, int(user_dict.get("totalWins", user_dict.get("total_wins", GameManager.total_wins))))
 	var server_lives: int = clampi(int(user_dict.get("extraLives", user_dict.get("extra_lives", GameManager.extra_lives))), 0, GameManager.MAX_EXTRA_LIVES)
-	var should_apply: bool = (server_seq > GameManager.save_seq) or (server_seq >= GameManager.save_seq and (server_coins != GameManager.coins or server_wins != GameManager.total_wins or server_lives != GameManager.extra_lives))
+	var progress_differs: bool = (server_coins != GameManager.coins or server_wins != GameManager.total_wins or server_lives != GameManager.extra_lives)
+	var should_apply: bool = (server_seq > GameManager.save_seq) or ((not _is_syncing_profile) and (not _pending_profile_sync) and server_seq >= GameManager.save_seq and progress_differs)
 	if should_apply:
 		_apply_server_user_to_game_manager(user_dict)
-	if should_apply or prev_role != role or prev_disp != display_name or prev_bio != bio or prev_avatar != avatar_url:
+	var identity_changed: bool = (prev_role != role or prev_verified != is_verified or prev_disp != display_name or prev_bio != bio or prev_avatar != avatar_url)
+	if should_apply or identity_changed:
 		_save_account_storage()
 		SignalBus.account_state_changed.emit()
-	return res
 
 func user_data_seq(user_data: Dictionary) -> int:
 	return maxi(0, int(user_data.get("saveSeq", user_data.get("save_seq", 0))))
@@ -659,6 +686,8 @@ func _extract_identity_from_user(user_data: Dictionary) -> void:
 	role = str(user_data.get("role", "player")).strip_edges().to_lower()
 	if role.is_empty():
 		role = "player"
+	if user_data.has("isVerified") or user_data.has("is_verified"):
+		is_verified = bool(user_data.get("isVerified", user_data.get("is_verified", false)))
 
 func _apply_server_user_to_game_manager(user_data: Dictionary) -> void:
 	if user_data.is_empty():
@@ -685,7 +714,7 @@ func _apply_server_user_to_game_manager(user_data: Dictionary) -> void:
 			if not norm_code.is_empty() and not GameManager.redeemed_codes.has(norm_code):
 				GameManager.redeemed_codes.append(norm_code)
 
-	GameManager.save_game_data(true)
+	GameManager.save_game_data(true, false, false)
 	_applying_cloud_profile = false
 	SignalBus.coins_changed.emit(GameManager.coins)
 
@@ -698,6 +727,7 @@ func _save_account_storage() -> void:
 	cfg.set_value("account", "bio", bio)
 	cfg.set_value("account", "avatar_url", avatar_url)
 	cfg.set_value("account", "role", role)
+	cfg.set_value("account", "is_verified", is_verified)
 	cfg.set_value("account", "is_guest", is_guest_mode)
 	cfg.save(ACCOUNT_CFG_PATH)
 	if OS.has_feature("web"):
@@ -719,6 +749,7 @@ func _load_account_storage() -> void:
 	var saved_bio: String = str(cfg.get_value("account", "bio", "")).strip_edges()
 	var saved_avatar: String = str(cfg.get_value("account", "avatar_url", "")).strip_edges()
 	var saved_role: String = str(cfg.get_value("account", "role", "player")).strip_edges().to_lower()
+	var saved_verified: bool = bool(cfg.get_value("account", "is_verified", false))
 	var saved_guest: bool = bool(cfg.get_value("account", "is_guest", false))
 
 	if not saved_token.is_empty():
@@ -729,6 +760,7 @@ func _load_account_storage() -> void:
 		bio = saved_bio
 		avatar_url = saved_avatar
 		role = saved_role if not saved_role.is_empty() else "player"
+		is_verified = saved_verified
 		is_logged_in = false
 		is_guest_mode = false
 		account_gate_resolved = false

@@ -6,7 +6,8 @@ const REMOTE_PLAYER_SCRIPT = preload("res://scripts/player/RemotePlayer.gd")
 
 const LOBBY_POLL_INTERVAL: float = 1.0
 const GAME_POLL_INTERVAL: float = 0.22
-const GAME_POLL_INTERVAL_MOBILE_LOW: float = 0.40
+const GAME_POLL_INTERVAL_LOW: float = 0.35
+const GAME_POLL_INTERVAL_MOBILE_LOW: float = 0.45
 const MAX_PENDING_EVENTS: int = 10
 const MAX_CHAT_HISTORY: int = 80
 
@@ -50,8 +51,9 @@ func _process(delta: float) -> void:
 	if _sync_in_flight or _is_leaving:
 		return
 	var status_str: String = str(current_room.get("status", "lobby")).to_lower()
-	var is_mobile_low: bool = (OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios") or DisplayServer.is_touchscreen_available()) and SettingsManager.get_effective_graphics_quality() == "low"
-	var game_interval: float = GAME_POLL_INTERVAL_MOBILE_LOW if is_mobile_low else GAME_POLL_INTERVAL
+	var eff_q: String = SettingsManager.get_effective_graphics_quality()
+	var is_mobile: bool = OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios") or DisplayServer.is_touchscreen_available()
+	var game_interval: float = GAME_POLL_INTERVAL_MOBILE_LOW if (is_mobile and eff_q == "low") else (GAME_POLL_INTERVAL_LOW if eff_q == "low" else GAME_POLL_INTERVAL)
 	var interval: float = game_interval if status_str == "playing" else LOBBY_POLL_INTERVAL
 	_poll_elapsed += delta
 	if _poll_elapsed >= interval:
@@ -424,6 +426,8 @@ func _sync_tick() -> void:
 
 	ping_ms = maxi(1, Time.get_ticks_msec() - started_ms)
 	var data: Dictionary = res.get("data", {})
+	if data.get("user") is Dictionary and am.has_method("apply_live_server_user"):
+		am.call("apply_live_server_user", data["user"])
 	var prev_status: String = _last_room_status
 	var prev_seq: int = last_event_seq
 
@@ -451,9 +455,11 @@ func _sync_tick() -> void:
 			var sender_name: String = ProfanityFilterScript.censor(str(ev_dict.get("senderUsername", ev_dict.get("senderName", ev_dict.get("username", "")))))
 			if ev_type == "chat":
 				var chat_txt: String = ProfanityFilterScript.censor(str(ev_payload.get("text", "")))
+				var sender_v: bool = bool(ev_dict.get("senderIsVerified", ev_payload.get("senderIsVerified", false)))
 				lobby_chat_history.append({
 					"seq": ev_seq,
 					"sender": sender_name,
+					"is_verified": sender_v,
 					"text": chat_txt,
 					"time": str(ev_dict.get("createdAt", ""))
 				})
@@ -511,6 +517,7 @@ func _sync_remote_players() -> void:
 		merged_state["userId"] = uid
 		merged_state["username"] = ProfanityFilterScript.censor(str(p_dict.get("username", "Player")))
 		merged_state["isHost"] = bool(p_dict.get("isHost", not host_uid.is_empty() and uid.to_lower() == host_uid.to_lower()))
+		merged_state["isVerified"] = bool(p_dict.get("isVerified", p_dict.get("is_verified", false)))
 		if rp.has_method("apply_network_state"):
 			rp.call("apply_network_state", merged_state)
 

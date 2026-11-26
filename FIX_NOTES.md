@@ -12,10 +12,8 @@
 - **Sistem Akun LAMPOR (Neon PostgreSQL) & Gerbang Masuk (Force Login / Guest Mode)**:
   - Mengintegrasikan akun **LAMPOR** dengan penyimpanan cloud **Neon PostgreSQL** untuk menyinkronkan total kemenangan, koin, nyawa tambahan, persediaan item toko, dan kode redeem.
   - Menambahkan gerbang autentikasi otomatis di Menu Utama (**Force Login Gate**) dengan tab **Masuk (Login)**, **Buat Akun (Daftar)**, pengaturan URL server & tes koneksi, serta opsi **Lanjut Sebagai Guest** (Mode Guest hanya dapat memainkan Singleplayer; Multiplayer & Sandbox terkunci).
-- **Dashboard Web Admin (`/admin`)**:
-  - Menambahkan antarmuka command console web di `/admin` dengan autentikasi admin terpisah untuk memantau metrik server, mengelola akun pemain (buat, edit koin/win/nyawa, ban/unban, reset password, paksa logout), mengendalikan room aktif, mengatur *Maintenance Mode* & pengumuman global, mengelola kode redeem, serta memantau log keamanan dan blokir IP.
 - **Perlindungan Keamanan Siber (Cybersecurity)**:
-  - Melindungi autentikasi dan API dengan hashing password `scrypt` + perbandingan waktu konstan (`timingSafeEqual`), tantangan *Proof-of-Work* anti-bot bertanda tangan HMAC-SHA256, proteksi *honeypot*, validasi skema ketat (`Zod`), sanitasi XSS, pembatasan ukuran payload, *rate limiting* & penguncian brute-force, blokir IP, kueri SQL berparameter anti-SQL injection, serta cookie admin `HttpOnly; SameSite=Strict` dan token CSRF (`X-Lampor-CSRF`).
+  - Melindungi autentikasi dan API dengan hashing password `scrypt` + perbandingan waktu konstan (`timingSafeEqual`), tantangan *Proof-of-Work* anti-bot bertanda tangan HMAC-SHA256, proteksi *honeypot*, validasi skema ketat (`Zod`), sanitasi XSS, pembatasan ukuran payload, *rate limiting* & penguncian brute-force, blokir IP, kueri SQL berparameter anti-SQL injection, serta perlindungan token CSRF.
 
 ## v1.2.9
 
@@ -38,8 +36,7 @@
   - Memperbaiki pencahayaan preset `Low` dengan bayangan arah ringan (`SHADOW_ORTHOGONAL`), menonaktifkan `shadow_enabled` pada `OmniLight3D`/`SpotLight3D` saat `positional_shadow_atlas_size = 0`, membagi mesh tanah `Ground` menjadi grid `4x4` agar tidak melampaui batas lampu OpenGL/GLES3, serta menambahkan *distance fade* pada `ItemLight`.
   - Memperkuat ketahanan penyimpanan koin lintas update melalui `lampor_save_shadow.json`, `lampor_install.cfg`, pencegahan penulisan save kosong saat boot/reconcile Web, fallback direct write saat rename gagal, dan penghentian double-save saat restart pembaruan.
   - Menyembunyikan opsi **Tutorial Pemula** secara otomatis apabila pemain terdeteksi sudah menyelesaikan tutorial atau merupakan pemain lama/update (tutorial hanya muncul pada instalasi baru / fresh install).
-- **Set Win di Admin Panel & Animasi FPP Lebih Realistis**:
-  - Menambahkan input **Win + SET + [+1]** di Admin Panel (`Alt+F2`).
+- **Animasi FPP Lebih Realistis**:
   - Menambahkan animasi tangan mengambil/menyimpan barang dari saku celana kanan saat berganti slot hotbar, serta animasi lari (`sprint`), napas & *fidget* diam (`idle`), ayunan bahu, dan *follow-through* pergelangan tangan yang jauh lebih alami dan tidak kaku.
 
 ## v1.2.8

@@ -61,6 +61,8 @@ func _run_checks() -> void:
 				var mb_upper: String = (mb_child as Button).text.to_upper()
 				if mb_upper.contains("HAK CIPTA") or mb_upper.contains("CREDITS"):
 					errors.append("MainMenu MenuButtons still contains forbidden credits button: " + (mb_child as Button).text)
+				if mb_upper.contains("PANDUAN") or mb_upper.contains("GUIDE"):
+					errors.append("MainMenu MenuButtons settings/nav button still contains guide text: " + (mb_child as Button).text)
 
 	var ver_lbl: Label = mm.get("version_label") as Label
 	if ver_lbl == null or ver_lbl.get_parent() != mm or not is_equal_approx(ver_lbl.anchor_left, 1.0) or not is_equal_approx(ver_lbl.anchor_top, 1.0) or not is_equal_approx(ver_lbl.anchor_right, 1.0) or not is_equal_approx(ver_lbl.anchor_bottom, 1.0):
@@ -107,11 +109,44 @@ func _run_checks() -> void:
 	var acc_close_btn: Button = mm.get("account_close_btn") as Button
 	if acc_close_btn == null or acc_close_btn.text != "" or not (acc_close_btn.get_node_or_null("IconDraw") is Control):
 		errors.append("MainMenu account_close_btn must be icon-only X button (empty text + IconDraw)")
-	for ov_name: String in ["friends_overlay", "inbox_overlay", "settings_overlay", "shop_overlay", "fix_notes_overlay"]:
+	for ov_name: String in ["friends_overlay", "inbox_overlay", "settings_overlay", "guide_overlay", "shop_overlay", "fix_notes_overlay"]:
 		var ov_ctrl: Control = mm.get(ov_name) as Control
 		var x_btns: Array[Node] = ov_ctrl.find_children("IconDraw", "Control", true, false) if ov_ctrl != null else []
 		if x_btns.is_empty():
 			errors.append("MainMenu modal missing header X IconDraw close button: " + ov_name)
+
+	var settings_ov: Control = mm.get("settings_overlay") as Control
+	var guide_ov: Control = mm.get("guide_overlay") as Control
+	var guide_scr: ScrollContainer = mm.get("guide_scroll") as ScrollContainer
+	var guide_rt: RichTextLabel = mm.get("guide_rich_text") as RichTextLabel
+	if settings_ov == null or guide_ov == null or guide_scr == null or guide_rt == null or rail_guide_btn == null:
+		errors.append("MainMenu settings/guide separation controls missing")
+	else:
+		if settings_ov.is_ancestor_of(guide_rt):
+			errors.append("MainMenu settings_overlay still contains guide_rich_text")
+		if not guide_ov.is_ancestor_of(guide_rt):
+			errors.append("MainMenu guide_overlay does not contain guide_rich_text")
+		settings_ov.visible = false
+		guide_ov.visible = false
+		rail_guide_btn.pressed.emit()
+		if not guide_ov.visible or settings_ov.visible:
+			errors.append("MainMenu guide_button did not open guide_overlay without opening settings_overlay")
+		guide_ov.visible = false
+
+	var shop_scr: ScrollContainer = mm.get("shop_scroll") as ScrollContainer
+	if shop_scr == null:
+		errors.append("MainMenu shop_scroll missing")
+	else:
+		var shop_buy_btns: Array[Node] = shop_scr.find_children("*", "Button", true, false)
+		if shop_buy_btns.size() != 8:
+			errors.append("MainMenu shop_scroll expected 8 buy buttons, got " + str(shop_buy_btns.size()))
+		for sb_node: Node in shop_buy_btns:
+			var sb_btn: Button = sb_node as Button
+			if sb_btn == null:
+				continue
+			var price_token: String = sb_btn.text.strip_edges().split(" ")[0]
+			if not price_token.is_valid_int() or int(price_token.to_int()) <= 1500:
+				errors.append("MainMenu shop buy button price must be > 1500, got: " + sb_btn.text)
 	var sp_chk: CheckButton = mm.get("friend_join_sp_check") as CheckButton
 	if sp_chk == null or not sp_chk.button_pressed:
 		errors.append("MainMenu friend_join_sp_check missing or not enabled by default")
@@ -122,6 +157,42 @@ func _run_checks() -> void:
 	if am == null or gm == null:
 		errors.append("AccountManager or GameManager missing")
 	else:
+		var expected_shop_combos: Array = [
+			["baterai", 1], ["energy_drink", 1], ["jamu", 1], ["jamu", 3],
+			["kentongan", 1], ["extra_life", 1], ["extra_life", 2], ["extra_life", 3]
+		]
+		for combo: Array in expected_shop_combos:
+			var item_id: String = str(combo[0])
+			var qty: int = int(combo[1])
+			var item_price: int = int(gm.call("get_shop_item_price", item_id, qty))
+			if item_price <= 1500:
+				errors.append("Shop item price must be > 1500 for %s x%d, got %d" % [item_id, qty, item_price])
+
+		var prev_am_logged_in: bool = bool(am.get("is_logged_in"))
+		am.set("is_logged_in", false)
+		var orig_coins: int = int(gm.get("coins"))
+		var orig_extra_lives: int = int(gm.get("extra_lives"))
+		var orig_stash: Dictionary = (gm.get("item_stash") as Dictionary).duplicate(true)
+		var orig_save_seq: int = int(gm.get("save_seq"))
+		var test_stash: Dictionary = orig_stash.duplicate(true)
+		test_stash["baterai"] = 0
+		gm.set("item_stash", test_stash)
+		gm.set("coins", 1500)
+		var fail_buy: Dictionary = gm.call("purchase_shop_item", "baterai", 1)
+		if bool(fail_buy.get("success", true)) or int(gm.get("coins")) != 1500:
+			errors.append("purchase_shop_item('baterai', 1) should fail when coins=1500")
+		gm.set("coins", 2000)
+		var bat_price: int = int(gm.call("get_shop_item_price", "baterai", 1))
+		var ok_buy: Dictionary = gm.call("purchase_shop_item", "baterai", 1)
+		if not bool(ok_buy.get("success", false)) or int(gm.get("coins")) != 2000 - bat_price:
+			errors.append("purchase_shop_item('baterai', 1) failed or deducted wrong coins when coins=2000")
+		gm.set("coins", orig_coins)
+		gm.set("extra_lives", orig_extra_lives)
+		gm.set("item_stash", orig_stash)
+		gm.set("save_seq", orig_save_seq)
+		gm.call("save_game_data", true, false, false)
+		am.set("is_logged_in", prev_am_logged_in)
+
 		if sm_menu == null or not bool(sm_menu.get("allow_friend_join_singleplayer")):
 			errors.append("SettingsManager allow_friend_join_singleplayer must default to true")
 		else:
@@ -175,6 +246,28 @@ func _run_checks() -> void:
 			errors.append("MainMenu friends_button pending dot or empty text check failed")
 		am.set("incoming_friend_requests", [])
 		mm.call("_refresh_friends_button_badge")
+
+	var fix_file_text: String = FileAccess.get_file_as_string("res://FIX_NOTES.md")
+	if fix_file_text.is_empty() or fix_file_text.to_lower().contains("admin") or fix_file_text.to_lower().contains("alt+f2"):
+		errors.append("FIX_NOTES.md missing or contains forbidden admin/alt+f2 text")
+	var um: Variant = root.get_node_or_null("UpdateManager")
+	if um == null:
+		errors.append("UpdateManager missing")
+	else:
+		var um_notes: String = str(um.call("get_fix_notes_markdown"))
+		if um_notes.is_empty() or um_notes.to_lower().contains("admin") or um_notes.to_lower().contains("alt+f2"):
+			errors.append("UpdateManager.get_fix_notes_markdown() empty or contains admin/alt+f2")
+		var sample_notes: String = "- **Dashboard Web Admin (/admin)**:\n  - Sub detail\n- **Fitur Pemain**:\n  - Aman"
+		var sanitized_notes: String = str(um.call("sanitize_fix_notes_for_players", sample_notes))
+		if sanitized_notes.to_lower().contains("admin") or sanitized_notes.contains("Sub detail") or not sanitized_notes.contains("- **Fitur Pemain**") or not sanitized_notes.contains("Aman"):
+			errors.append("UpdateManager.sanitize_fix_notes_for_players failed to strip admin section while keeping player bullet")
+	mm.call("_show_fix_notes")
+	var fn_view: RichTextLabel = mm.get("fix_notes_view") as RichTextLabel
+	var fn_ov: Control = mm.get("fix_notes_overlay") as Control
+	if fn_view == null or fn_view.text.to_lower().contains("admin") or fn_view.text.to_lower().contains("alt+f2"):
+		errors.append("MainMenu _show_fix_notes rendered admin/alt+f2 content")
+	if fn_ov != null:
+		fn_ov.visible = false
 	var photo_filters: PackedStringArray = mm.call("_get_profile_photo_filters")
 	if photo_filters.is_empty() or not photo_filters[0].ends_with(";image/*"):
 		errors.append("Profile photo filters must end with ';image/*' for mobile gallery picker")
@@ -258,7 +351,80 @@ func _run_checks() -> void:
 		ap_node.call("_input", alt_f2)
 		if ap_root == null or not ap_root.visible:
 			errors.append("AdminPanel Alt+F2 did not open for admin!")
+		await process_frame
+		await process_frame
+
+		var ap_panel: Control = ap_node.get("panel") as Control
+		var ap_hdr: Control = ap_node.get("drag_header") as Control
+		if ap_panel == null or ap_hdr == null:
+			errors.append("AdminPanel panel or drag_header missing")
+		else:
+			ap_panel.position = Vector2(100.0, 50.0)
+			await process_frame
+			var hdr_rect: Rect2 = ap_hdr.get_global_rect()
+			var drag_pt: Vector2 = Vector2(hdr_rect.position.x + 24.0, hdr_rect.position.y + hdr_rect.size.y * 0.5)
+			if not bool(ap_node.call("_is_point_in_header_drag_zone", drag_pt)):
+				errors.append("AdminPanel header drag zone rejected valid header point")
+			var st_down := InputEventScreenTouch.new()
+			st_down.index = 0
+			st_down.pressed = true
+			st_down.position = drag_pt
+			ap_node.call("_input", st_down)
+			var sd_move := InputEventScreenDrag.new()
+			sd_move.index = 0
+			sd_move.position = drag_pt + Vector2(80.0, 60.0)
+			sd_move.relative = Vector2(80.0, 60.0)
+			ap_node.call("_input", sd_move)
+			var st_up := InputEventScreenTouch.new()
+			st_up.index = 0
+			st_up.pressed = false
+			st_up.position = drag_pt + Vector2(80.0, 60.0)
+			ap_node.call("_input", st_up)
+			if ap_panel.position.distance_to(Vector2(180.0, 110.0)) > 2.0:
+				errors.append("AdminPanel mobile touch drag failed, expected ~Vector2(180, 110), got " + str(ap_panel.position))
+
 		ap_node.call("close_panel")
+
+		var ap_sv := SubViewport.new()
+		ap_sv.size = Vector2i(640, 200)
+		ap_sv.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+		root.add_child(ap_sv)
+		var ap_script: Script = load("res://scripts/ui/AdminPanel.gd") as Script
+		var ap_mobile: Node = ap_script.new() as Node
+		ap_sv.add_child(ap_mobile)
+		ap_mobile.call("toggle_panel")
+		await process_frame
+		await process_frame
+		var ap_mob_scroll: ScrollContainer = ap_mobile.get("body_scroll") as ScrollContainer
+		if ap_mob_scroll == null or not ap_mob_scroll.visible:
+			errors.append("AdminPanel mobile SubViewport body_scroll missing or hidden")
+		else:
+			var vbar: VScrollBar = ap_mob_scroll.get_v_scroll_bar()
+			if vbar == null or vbar.max_value <= ap_mob_scroll.size.y:
+				errors.append("AdminPanel mobile body_scroll did not overflow at height 200 (max=%.1f, size=%.1f)" % [vbar.max_value if vbar else -1.0, ap_mob_scroll.size.y])
+			else:
+				var scr_rect: Rect2 = ap_mob_scroll.get_global_rect()
+				var scr_start: Vector2 = scr_rect.position + Vector2(12.0, minf(16.0, scr_rect.size.y * 0.25))
+				var scr_down := InputEventScreenTouch.new()
+				scr_down.index = 1
+				scr_down.pressed = true
+				scr_down.position = scr_start
+				ap_mobile.call("_input", scr_down)
+				var scr_drag := InputEventScreenDrag.new()
+				scr_drag.index = 1
+				scr_drag.position = scr_start + Vector2(0.0, -60.0)
+				scr_drag.relative = Vector2(0.0, -60.0)
+				ap_mobile.call("_input", scr_drag)
+				var scr_up := InputEventScreenTouch.new()
+				scr_up.index = 1
+				scr_up.pressed = false
+				scr_up.position = scr_start + Vector2(0.0, -60.0)
+				ap_mobile.call("_input", scr_up)
+				if ap_mob_scroll.scroll_vertical <= 0:
+					errors.append("AdminPanel mobile touch scroll failed: scroll_vertical=" + str(ap_mob_scroll.scroll_vertical))
+		ap_mobile.call("close_panel")
+		ap_sv.queue_free()
+
 		am.set("role", "player")
 
 	var mp: Variant = root.get_node_or_null("MultiplayerManager")

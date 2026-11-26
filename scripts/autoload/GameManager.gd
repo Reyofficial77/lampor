@@ -1097,22 +1097,27 @@ func _broadcast_resumed_run_state() -> void:
 	if furnace_burning:
 		SignalBus.furnace_progress_updated.emit(furnace_time_left, furnace_total_time)
 
+func get_shop_item_price(item_id: String, quantity: int = 1) -> int:
+	var safe_quantity: int = clampi(quantity, 1, 3)
+	match item_id:
+		"baterai":
+			return 1600 * safe_quantity
+		"energy_drink":
+			return 1800 * safe_quantity
+		"jamu":
+			return 5400 if safe_quantity == 3 else 2000 * safe_quantity
+		"kentongan":
+			return 3500 * safe_quantity
+		"extra_life":
+			return 2500 if safe_quantity == 1 else (4700 if safe_quantity == 2 else 6800)
+		_:
+			return 0
+
 func purchase_shop_item(item_id: String, quantity: int = 1) -> Dictionary:
 	var safe_quantity: int = clampi(quantity, 1, 3)
-	var price: int = 0
-	match item_id:
-		"jamu":
-			price = 30 * safe_quantity
-		"baterai":
-			price = 20 * safe_quantity
-		"energy_drink":
-			price = 25 * safe_quantity
-		"kentongan":
-			price = 250 * safe_quantity
-		"extra_life":
-			price = 80 if safe_quantity == 1 else (150 if safe_quantity == 2 else 210)
-		_:
-			return {"success": false, "message": LocScript.pick("Item tidak tersedia di toko.", "Item is not available in the shop.")}
+	var price: int = get_shop_item_price(item_id, safe_quantity)
+	if price <= 0:
+		return {"success": false, "message": LocScript.pick("Item tidak tersedia di toko.", "Item is not available in the shop.")}
 
 	# Periksa batas maksimal kuantitas (maksimal 5 per item dan nyawa)
 	if item_id == "extra_life":

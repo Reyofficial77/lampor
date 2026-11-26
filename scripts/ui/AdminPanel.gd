@@ -19,6 +19,7 @@ var menu_only_notice: Label
 var status_label: Label
 var god_mode_btn: Button
 var min_btn: Button
+var close_btn: Button
 var coins_input: LineEdit
 var wins_input: LineEdit
 var is_authenticated: bool = false
@@ -26,6 +27,13 @@ var is_dragging: bool = false
 var is_minimized: bool = false
 var last_in_gameplay: bool = false
 var drag_offset: Vector2 = Vector2.ZERO
+var _drag_touch_index: int = -1
+var _is_mouse_dragging: bool = false
+var _scroll_touch_index: int = -1
+var _scroll_drag_start_y: float = 0.0
+var _scroll_drag_last_y: float = 0.0
+var _scroll_drag_moved: bool = false
+var _scroll_pressed_button: BaseButton = null
 var _shortcut_latched: bool = false
 var _last_toggle_msec: int = -1000
 
@@ -63,6 +71,11 @@ func _on_account_state_changed() -> void:
 
 func close_panel() -> void:
 	is_dragging = false
+	_drag_touch_index = -1
+	_is_mouse_dragging = false
+	_scroll_touch_index = -1
+	_scroll_drag_moved = false
+	_scroll_pressed_button = null
 	if root_control and root_control.visible:
 		root_control.visible = false
 		if password_input and password_input.has_focus():
@@ -149,27 +162,92 @@ func _input(event: InputEvent) -> void:
 			close_panel()
 		return
 
-	if not root_control or not root_control.visible:
+	if not root_control or not root_control.visible or not panel:
 		return
 
-	if is_dragging:
-		if event is InputEventMouseMotion:
-			var mm := event as InputEventMouseMotion
-			_move_panel_to(mm.position - drag_offset)
-			get_viewport().set_input_as_handled()
-		elif event is InputEventMouseButton:
-			var mb := event as InputEventMouseButton
-			if mb.button_index == MOUSE_BUTTON_LEFT and not mb.pressed:
+	if event is InputEventScreenTouch:
+		var st := event as InputEventScreenTouch
+		if st.pressed:
+			if _is_point_in_header_drag_zone(st.position):
+				is_dragging = true
+				_drag_touch_index = st.index
+				_is_mouse_dragging = false
+				drag_offset = st.position - panel.position
+				if get_viewport():
+					get_viewport().set_input_as_handled()
+				return
+			if body_scroll != null and body_scroll.visible and body_scroll.get_global_rect().has_point(st.position) and not _is_point_in_text_input(st.position):
+				_scroll_touch_index = st.index
+				_scroll_drag_start_y = st.position.y
+				_scroll_drag_last_y = st.position.y
+				_scroll_drag_moved = false
+				_scroll_pressed_button = _find_button_at_point(body_vbox, st.position)
+		else:
+			if is_dragging and st.index == _drag_touch_index:
 				is_dragging = false
-				get_viewport().set_input_as_handled()
-		elif event is InputEventScreenDrag:
-			var sd := event as InputEventScreenDrag
+				_drag_touch_index = -1
+				if get_viewport():
+					get_viewport().set_input_as_handled()
+				return
+			if st.index == _scroll_touch_index:
+				var was_scrolled: bool = _scroll_drag_moved
+				_scroll_touch_index = -1
+				_scroll_drag_moved = false
+				_scroll_pressed_button = null
+				if was_scrolled and get_viewport():
+					get_viewport().set_input_as_handled()
+		return
+
+	if event is InputEventScreenDrag:
+		var sd := event as InputEventScreenDrag
+		if is_dragging and sd.index == _drag_touch_index:
 			_move_panel_to(sd.position - drag_offset)
-			get_viewport().set_input_as_handled()
-		elif event is InputEventScreenTouch:
-			var st := event as InputEventScreenTouch
-			if not st.pressed:
+			if get_viewport():
+				get_viewport().set_input_as_handled()
+			return
+		if _scroll_touch_index == sd.index and body_scroll != null and body_scroll.visible:
+			if not _scroll_drag_moved and absf(sd.position.y - _scroll_drag_start_y) > 8.0:
+				_scroll_drag_moved = true
+				if is_instance_valid(_scroll_pressed_button):
+					var was_disabled: bool = _scroll_pressed_button.disabled
+					_scroll_pressed_button.disabled = true
+					_scroll_pressed_button.disabled = was_disabled
+					_scroll_pressed_button = null
+			if _scroll_drag_moved:
+				var dy: float = sd.position.y - _scroll_drag_last_y
+				body_scroll.scroll_vertical = maxi(0, body_scroll.scroll_vertical - int(round(dy)))
+				if get_viewport():
+					get_viewport().set_input_as_handled()
+			_scroll_drag_last_y = sd.position.y
+			return
+		return
+
+	if _drag_touch_index != -1 or _scroll_touch_index != -1:
+		return
+
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_LEFT:
+			if mb.pressed and _is_point_in_header_drag_zone(mb.position):
+				is_dragging = true
+				_is_mouse_dragging = true
+				drag_offset = mb.position - panel.position
+				if get_viewport():
+					get_viewport().set_input_as_handled()
+				return
+			elif not mb.pressed and _is_mouse_dragging:
 				is_dragging = false
+				_is_mouse_dragging = false
+				if get_viewport():
+					get_viewport().set_input_as_handled()
+				return
+	elif event is InputEventMouseMotion:
+		var mm := event as InputEventMouseMotion
+		if is_dragging and _is_mouse_dragging:
+			_move_panel_to(mm.position - drag_offset)
+			if get_viewport():
+				get_viewport().set_input_as_handled()
+			return
 
 func toggle_panel() -> void:
 	if not root_control:
@@ -248,7 +326,7 @@ func _fit_and_clamp_panel() -> void:
 	var panel_w: float = minf(312.0, maxf(260.0, view_size.x - 16.0))
 	var max_panel_h: float = maxf(180.0, view_size.y - 16.0)
 	if body_scroll and body_scroll.visible and body_vbox:
-		var header_h: float = drag_header.get_combined_minimum_size().y if drag_header else 34.0
+		var header_h: float = drag_header.get_combined_minimum_size().y if drag_header else 36.0
 		var max_scroll_h: float = maxf(100.0, max_panel_h - header_h - 32.0)
 		var content_h: float = body_vbox.get_combined_minimum_size().y
 		body_scroll.custom_minimum_size = Vector2(panel_w - 24.0, minf(content_h, max_scroll_h))
@@ -267,7 +345,7 @@ func _deferred_fit_panel() -> void:
 	var panel_w: float = minf(312.0, maxf(260.0, view_size.x - 16.0))
 	var max_panel_h: float = maxf(180.0, view_size.y - 16.0)
 	if body_scroll and body_scroll.visible and body_vbox:
-		var header_h: float = drag_header.get_combined_minimum_size().y if drag_header else 34.0
+		var header_h: float = drag_header.get_combined_minimum_size().y if drag_header else 36.0
 		var max_scroll_h: float = maxf(100.0, max_panel_h - header_h - 32.0)
 		var content_h: float = body_vbox.get_combined_minimum_size().y
 		body_scroll.custom_minimum_size = Vector2(panel_w - 24.0, minf(content_h, max_scroll_h))
@@ -287,31 +365,49 @@ func _restore_mouse_mode_if_playing() -> void:
 func _move_panel_to(target_pos: Vector2) -> void:
 	if not panel:
 		return
-	var view_size: Vector2 = get_viewport().get_visible_rect().size
-	if view_size.x <= 0.0:
+	var view_size: Vector2 = get_viewport().get_visible_rect().size if get_viewport() else Vector2(1280.0, 720.0)
+	if view_size.x <= 0.0 or view_size.y <= 0.0:
 		view_size = Vector2(1280.0, 720.0)
-	var psize: Vector2 = panel.size
+	var psize: Vector2 = Vector2(maxf(panel.size.x, panel.custom_minimum_size.x), maxf(panel.size.y, panel.get_combined_minimum_size().y))
 	panel.position = Vector2(
 		clampf(target_pos.x, 6.0, maxf(6.0, view_size.x - psize.x - 6.0)),
 		clampf(target_pos.y, 6.0, maxf(6.0, view_size.y - psize.y - 6.0))
 	)
 
-func _on_header_gui_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton:
-		var mb := event as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_LEFT:
-			if mb.pressed:
-				is_dragging = true
-				drag_offset = mb.global_position - panel.global_position
-			else:
-				is_dragging = false
-	elif event is InputEventScreenTouch:
-		var st := event as InputEventScreenTouch
-		if st.pressed:
-			is_dragging = true
-			drag_offset = st.position - panel.global_position
-		else:
-			is_dragging = false
+func _is_point_in_header_drag_zone(pos: Vector2) -> bool:
+	if drag_header == null or not drag_header.visible:
+		return false
+	if not drag_header.get_global_rect().has_point(pos):
+		return false
+	if is_instance_valid(min_btn) and min_btn.visible and min_btn.get_global_rect().has_point(pos):
+		return false
+	if is_instance_valid(close_btn) and close_btn.visible and close_btn.get_global_rect().has_point(pos):
+		return false
+	return true
+
+func _is_point_in_text_input(pos: Vector2) -> bool:
+	for field: LineEdit in [password_input, coins_input, wins_input]:
+		if is_instance_valid(field) and field.visible and field.get_global_rect().has_point(pos):
+			return true
+	return false
+
+func _find_button_at_point(node: Node, pos: Vector2) -> BaseButton:
+	if node == null or not is_instance_valid(node):
+		return null
+	if node is Control:
+		var ctrl := node as Control
+		if not ctrl.visible:
+			return null
+	if node is BaseButton:
+		var btn := node as BaseButton
+		if btn.get_global_rect().has_point(pos):
+			return btn
+		return null
+	for child: Node in node.get_children():
+		var found: BaseButton = _find_button_at_point(child, pos)
+		if found != null:
+			return found
+	return null
 
 func _build_ui() -> void:
 	root_control = Control.new()
@@ -342,13 +438,13 @@ func _build_ui() -> void:
 	panel.add_child(main_vbox)
 
 	drag_header = PanelContainer.new()
+	drag_header.custom_minimum_size.y = 36.0
 	drag_header.mouse_filter = Control.MOUSE_FILTER_STOP
 	drag_header.mouse_default_cursor_shape = Control.CURSOR_MOVE
 	drag_header.add_theme_stylebox_override(
 		"panel",
 		HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOWEST, HorrorTheme.BORDER_SUBTLE, 2, 8, 4)
 	)
-	drag_header.gui_input.connect(_on_header_gui_input)
 	main_vbox.add_child(drag_header)
 
 	var header_row := HBoxContainer.new()
@@ -363,11 +459,11 @@ func _build_ui() -> void:
 	HorrorTheme.style_label(title, "label-lg", HorrorTheme.PRIMARY, 10)
 	header_row.add_child(title)
 
-	min_btn = _make_admin_btn("–", "ghost", 24.0)
+	min_btn = _make_admin_btn("–", "ghost", 28.0)
 	min_btn.pressed.connect(_toggle_minimize)
 	header_row.add_child(min_btn)
 
-	var close_btn := _make_admin_btn("X", "danger", 26.0)
+	close_btn = _make_admin_btn("X", "danger", 28.0)
 	close_btn.pressed.connect(toggle_panel)
 	header_row.add_child(close_btn)
 
@@ -422,16 +518,19 @@ func _build_ui() -> void:
 
 	body_vbox = VBoxContainer.new()
 	body_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	body_vbox.mouse_filter = Control.MOUSE_FILTER_PASS
 	body_vbox.add_theme_constant_override("separation", 4)
 	body_scroll.add_child(body_vbox)
 
 	# Bagian Khusus In-Game (Hanya tampil saat permainan dimulai di VillageMap)
 	ingame_section_box = VBoxContainer.new()
+	ingame_section_box.mouse_filter = Control.MOUSE_FILTER_PASS
 	ingame_section_box.add_theme_constant_override("separation", 4)
 	body_vbox.add_child(ingame_section_box)
 
 	ingame_section_box.add_child(_make_section_label("HASIL & STATUS (IN-GAME)"))
 	var row_outcome := HBoxContainer.new()
+	row_outcome.mouse_filter = Control.MOUSE_FILTER_PASS
 	row_outcome.add_theme_constant_override("separation", 4)
 	ingame_section_box.add_child(row_outcome)
 
@@ -456,6 +555,7 @@ func _build_ui() -> void:
 	row_outcome.add_child(lose_btn)
 
 	var row_stats := HBoxContainer.new()
+	row_stats.mouse_filter = Control.MOUSE_FILTER_PASS
 	row_stats.add_theme_constant_override("separation", 4)
 	ingame_section_box.add_child(row_stats)
 
@@ -483,6 +583,7 @@ func _build_ui() -> void:
 
 	ingame_section_box.add_child(_make_section_label("BABAK & WAKTU (IN-GAME)"))
 	var row_acts := HBoxContainer.new()
+	row_acts.mouse_filter = Control.MOUSE_FILTER_PASS
 	row_acts.add_theme_constant_override("separation", 4)
 	ingame_section_box.add_child(row_acts)
 
@@ -495,6 +596,7 @@ func _build_ui() -> void:
 		row_acts.add_child(a_btn)
 
 	var row_time := HBoxContainer.new()
+	row_time.mouse_filter = Control.MOUSE_FILTER_PASS
 	row_time.add_theme_constant_override("separation", 4)
 	ingame_section_box.add_child(row_time)
 
@@ -516,6 +618,7 @@ func _build_ui() -> void:
 
 	ingame_section_box.add_child(_make_section_label("MISI & BARANG (IN-GAME)"))
 	var row_m1 := HBoxContainer.new()
+	row_m1.mouse_filter = Control.MOUSE_FILTER_PASS
 	row_m1.add_theme_constant_override("separation", 4)
 	ingame_section_box.add_child(row_m1)
 
@@ -538,6 +641,7 @@ func _build_ui() -> void:
 	row_m1.add_child(ritual_btn)
 
 	var row_m2 := HBoxContainer.new()
+	row_m2.mouse_filter = Control.MOUSE_FILTER_PASS
 	row_m2.add_theme_constant_override("separation", 4)
 	ingame_section_box.add_child(row_m2)
 
@@ -563,17 +667,20 @@ func _build_ui() -> void:
 	menu_only_notice.text = "Di Main Menu hanya untuk Koin, Nyawa & Mode.\nMulai permainan untuk uji Menang/Kalah/Babak."
 	menu_only_notice.custom_minimum_size.x = 276.0
 	menu_only_notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	menu_only_notice.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	HorrorTheme.style_label(menu_only_notice, "label-sm", HorrorTheme.ON_SURFACE_VARIANT, 10)
 	body_vbox.add_child(menu_only_notice)
 
 	# Bagian Koin, Nyawa & Mode (Tersedia di Main Menu maupun In-Game)
 	body_vbox.add_child(_make_section_label("KOIN, NYAWA & MODE"))
 	var row_coins := HBoxContainer.new()
+	row_coins.mouse_filter = Control.MOUSE_FILTER_PASS
 	row_coins.add_theme_constant_override("separation", 4)
 	body_vbox.add_child(row_coins)
 
 	var coin_lbl := Label.new()
 	coin_lbl.text = "Koin:"
+	coin_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	HorrorTheme.style_label(coin_lbl, "label-sm", HorrorTheme.ON_SURFACE, 10)
 	row_coins.add_child(coin_lbl)
 
@@ -613,11 +720,13 @@ func _build_ui() -> void:
 	row_coins.add_child(add500_btn)
 
 	var row_wins := HBoxContainer.new()
+	row_wins.mouse_filter = Control.MOUSE_FILTER_PASS
 	row_wins.add_theme_constant_override("separation", 4)
 	body_vbox.add_child(row_wins)
 
 	var wins_lbl := Label.new()
 	wins_lbl.text = "Win:"
+	wins_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	HorrorTheme.style_label(wins_lbl, "label-sm", HorrorTheme.ON_SURFACE, 10)
 	row_wins.add_child(wins_lbl)
 
@@ -657,11 +766,13 @@ func _build_ui() -> void:
 	row_wins.add_child(add1_win_btn)
 
 	var row_lives := HBoxContainer.new()
+	row_lives.mouse_filter = Control.MOUSE_FILTER_PASS
 	row_lives.add_theme_constant_override("separation", 4)
 	body_vbox.add_child(row_lives)
 
 	var lives_lbl := Label.new()
 	lives_lbl.text = "Nyawa:"
+	lives_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	HorrorTheme.style_label(lives_lbl, "label-sm", HorrorTheme.ON_SURFACE, 10)
 	row_lives.add_child(lives_lbl)
 
@@ -675,6 +786,7 @@ func _build_ui() -> void:
 		row_lives.add_child(l_btn)
 
 	var row_nm := HBoxContainer.new()
+	row_nm.mouse_filter = Control.MOUSE_FILTER_PASS
 	row_nm.add_theme_constant_override("separation", 4)
 	body_vbox.add_child(row_nm)
 
@@ -697,6 +809,7 @@ func _build_ui() -> void:
 	row_nm.add_child(reset_nm_btn)
 
 	var row_tut := HBoxContainer.new()
+	row_tut.mouse_filter = Control.MOUSE_FILTER_PASS
 	row_tut.add_theme_constant_override("separation", 4)
 	body_vbox.add_child(row_tut)
 
@@ -720,12 +833,14 @@ func _build_ui() -> void:
 	status_label.text = "Seret header untuk geser · [–] perkecil"
 	status_label.custom_minimum_size.x = 276.0
 	status_label.clip_text = true
+	status_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	HorrorTheme.style_label(status_label, "mono-sm", HorrorTheme.RELIC_BRASS, 9)
 	body_vbox.add_child(status_label)
 
 func _make_section_label(txt: String) -> Label:
 	var lbl := Label.new()
 	lbl.text = txt
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	HorrorTheme.style_label(lbl, "label-lg", HorrorTheme.PRIMARY, 9)
 	return lbl
 

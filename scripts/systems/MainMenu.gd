@@ -48,6 +48,8 @@ var difficulty_overlay: ColorRect
 var difficulty_panel: PanelContainer
 var settings_overlay: ColorRect
 var settings_panel: PanelContainer
+var guide_overlay: ColorRect
+var guide_panel: PanelContainer
 var credits_overlay: ColorRect
 var credits_panel: PanelContainer
 var shop_overlay: ColorRect
@@ -92,10 +94,8 @@ var nightmare_lock_label: Label
 var volume_slider: HSlider
 var fullscreen_button: Button
 var settings_scroll: ScrollContainer
-var settings_tab_btn: Button
-var guide_tab_btn: Button
 var settings_tab_box: VBoxContainer
-var guide_tab_box: VBoxContainer
+var guide_scroll: ScrollContainer
 var shop_scroll: ScrollContainer
 var mouse_sensitivity_slider: HSlider
 var camera_sensitivity_slider: HSlider
@@ -434,9 +434,10 @@ func _build_menu() -> void:
 	)
 	menu_buttons.add_child(shop_button)
 
-	var settings_button := _make_nav_button(LocScript.pick("PENGATURAN & PANDUAN", "SETTINGS & GUIDE"))
+	var settings_button := _make_nav_button(LocScript.pick("PENGATURAN", "SETTINGS"))
 	settings_button.pressed.connect(func() -> void:
-		_select_settings_tab(0)
+		if settings_scroll:
+			settings_scroll.scroll_vertical = 0
 		_open_modal(settings_overlay, settings_panel)
 	)
 	menu_buttons.add_child(settings_button)
@@ -465,8 +466,11 @@ func _build_menu() -> void:
 
 	guide_button = _make_icon_rail_button("guide", LocScript.pick("Panduan", "Guide"))
 	guide_button.pressed.connect(func() -> void:
-		_select_settings_tab(1)
-		_open_modal(settings_overlay, settings_panel)
+		if guide_rich_text:
+			guide_rich_text.text = _build_guide_bbcode()
+		if guide_scroll:
+			guide_scroll.scroll_vertical = 0
+		_open_modal(guide_overlay, guide_panel)
 	)
 	right_icon_rail.add_child(guide_button)
 
@@ -541,6 +545,7 @@ func _build_menu() -> void:
 	_build_mode_select_modal()
 	_build_difficulty_modal()
 	_build_settings_modal()
+	_build_guide_modal()
 	_build_shop_modal()
 	_build_credits_modal()
 	_build_fix_notes_modal()
@@ -903,7 +908,7 @@ func _build_difficulty_modal() -> void:
 	difficulty_buttons.append(back)
 
 func _build_settings_modal() -> void:
-	var modal: Dictionary = _create_modal(LocScript.pick("PENGATURAN & PANDUAN", "SETTINGS & GUIDE"))
+	var modal: Dictionary = _create_modal(LocScript.pick("PENGATURAN", "SETTINGS"))
 	settings_overlay = modal["overlay"] as ColorRect
 	settings_panel = modal["panel"] as PanelContainer
 	var settings_close_btn: Button = modal.get("close_button") as Button
@@ -915,20 +920,6 @@ func _build_settings_modal() -> void:
 			settings_overlay.visible = false
 		)
 	var body: VBoxContainer = modal["body"] as VBoxContainer
-
-	var tab_row := HBoxContainer.new()
-	tab_row.add_theme_constant_override("separation", 8)
-	body.add_child(tab_row)
-
-	settings_tab_btn = _make_button(LocScript.pick("PENGATURAN", "SETTINGS"), true)
-	settings_tab_btn.custom_minimum_size.y = 40.0
-	settings_tab_btn.pressed.connect(func() -> void: _select_settings_tab(0))
-	tab_row.add_child(settings_tab_btn)
-
-	guide_tab_btn = _make_button(LocScript.pick("PANDUAN BERMAIN", "HOW TO PLAY"), false, "ghost")
-	guide_tab_btn.custom_minimum_size.y = 40.0
-	guide_tab_btn.pressed.connect(func() -> void: _select_settings_tab(1))
-	tab_row.add_child(guide_tab_btn)
 
 	settings_scroll = ScrollContainer.new()
 	settings_scroll.custom_minimum_size = Vector2(0, 290)
@@ -943,16 +934,11 @@ func _build_settings_modal() -> void:
 	settings_margin.add_theme_constant_override("margin_right", 10)
 	settings_scroll.add_child(settings_margin)
 
-	var tab_stack := VBoxContainer.new()
-	tab_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	tab_stack.mouse_filter = Control.MOUSE_FILTER_PASS
-	settings_margin.add_child(tab_stack)
-
 	settings_tab_box = VBoxContainer.new()
 	settings_tab_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	settings_tab_box.mouse_filter = Control.MOUSE_FILTER_PASS
 	settings_tab_box.add_theme_constant_override("separation", 10)
-	tab_stack.add_child(settings_tab_box)
+	settings_margin.add_child(settings_tab_box)
 
 	var lang_row := HBoxContainer.new()
 	var lang_label := _make_label(LocScript.pick("Bahasa / Language", "Language"), 13, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "body-md")
@@ -1118,11 +1104,24 @@ func _build_settings_modal() -> void:
 	redeem_result_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	settings_tab_box.add_child(redeem_result_label)
 
-	guide_tab_box = VBoxContainer.new()
-	guide_tab_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	guide_tab_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	guide_tab_box.visible = false
-	tab_stack.add_child(guide_tab_box)
+func _build_guide_modal() -> void:
+	var modal: Dictionary = _create_modal(LocScript.pick("PANDUAN BERMAIN", "HOW TO PLAY"))
+	guide_overlay = modal["overlay"] as ColorRect
+	guide_panel = modal["panel"] as PanelContainer
+	var body: VBoxContainer = modal["body"] as VBoxContainer
+
+	guide_scroll = ScrollContainer.new()
+	guide_scroll.custom_minimum_size = Vector2(0, 310)
+	guide_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	guide_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	HorrorTheme.style_scroll_container(guide_scroll)
+	body.add_child(guide_scroll)
+
+	var guide_margin := MarginContainer.new()
+	guide_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	guide_margin.mouse_filter = Control.MOUSE_FILTER_PASS
+	guide_margin.add_theme_constant_override("margin_right", 10)
+	guide_scroll.add_child(guide_margin)
 
 	var guide := RichTextLabel.new()
 	guide_rich_text = guide
@@ -1138,7 +1137,7 @@ func _build_settings_modal() -> void:
 	guide.add_theme_font_size_override("bold_font_size", 14)
 	guide.add_theme_constant_override("line_separation", 6)
 	guide.text = _build_guide_bbcode()
-	guide_tab_box.add_child(guide)
+	guide_margin.add_child(guide)
 
 func _build_guide_bbcode() -> String:
 	var move_k: String = _sm_get_move_keys_summary()
@@ -1246,7 +1245,8 @@ func _rebuild_for_language_change() -> void:
 	_apply_layout()
 	call_deferred("_apply_layout")
 	_refresh_account_ui()
-	_select_settings_tab(0)
+	if settings_scroll:
+		settings_scroll.scroll_vertical = 0
 	_open_modal(settings_overlay, settings_panel)
 
 func _begin_keybind_listen(action: String) -> void:
@@ -1277,19 +1277,6 @@ func _refresh_keybind_buttons() -> void:
 			HorrorTheme.style_button(btn, "secondary", 11, true)
 	if guide_rich_text:
 		guide_rich_text.text = _build_guide_bbcode()
-
-func _select_settings_tab(tab_idx: int) -> void:
-	var show_settings: bool = (tab_idx == 0)
-	if settings_tab_box:
-		settings_tab_box.visible = show_settings
-	if guide_tab_box:
-		guide_tab_box.visible = not show_settings
-	if settings_tab_btn:
-		HorrorTheme.style_button(settings_tab_btn, "primary" if show_settings else "ghost", 12, true)
-	if guide_tab_btn:
-		HorrorTheme.style_button(guide_tab_btn, "primary" if not show_settings else "ghost", 12, true)
-	if settings_scroll:
-		settings_scroll.scroll_vertical = 0
 
 func _add_slider_setting(parent: VBoxContainer, title_text: String, initial_value: float, min_value: float, max_value: float, step_value: float, callback: Callable) -> HSlider:
 	var row := HBoxContainer.new()
@@ -1352,14 +1339,14 @@ func _build_shop_modal() -> void:
 	shop_margin.add_child(offers)
 
 	var coin_unit: String = LocScript.pick("Koin", "Coins")
-	_add_shop_offer(offers, LocScript.pick("Jamu Tolak Bala x1", "Herbal Elixir x1"), LocScript.pick("Pulihkan 45 kewarasan dan seluruh stamina.", "Restore 45 sanity and full stamina."), "30 %s" % coin_unit, "jamu", 1)
-	_add_shop_offer(offers, LocScript.pick("Jamu Tolak Bala x3", "Herbal Elixir x3"), LocScript.pick("Persediaan jamu tiga kali pakai.", "Three-dose herbal supply."), "90 %s" % coin_unit, "jamu", 3)
-	_add_shop_offer(offers, LocScript.pick("Baterai Senter x1", "Flashlight Battery x1"), LocScript.pick("Isi ulang 50% daya senter.", "Recharge 50% flashlight power."), "20 %s" % coin_unit, "baterai", 1)
-	_add_shop_offer(offers, "Energy Drink x1", LocScript.pick("Stamina 100% penuh selama 3 detik (anti-spam).", "Locks 100% stamina for 3 seconds (anti-spam)."), "25 %s" % coin_unit, "energy_drink", 1)
-	_add_shop_offer(offers, "Kentongan x1", LocScript.pick("Usir kejaran Lampor selama 5 detik (1x pakai).", "Repels Lampor's pursuit for 5 seconds (1 use)."), "250 %s" % coin_unit, "kentongan", 1)
-	_add_shop_offer(offers, LocScript.pick("Nyawa Tambahan x1", "Extra Life x1"), LocScript.pick("Bangkit sekali di titik awal saat terbunuh.", "Revive once at village spawn when caught."), "80 %s" % coin_unit, "extra_life", 1)
-	_add_shop_offer(offers, LocScript.pick("Nyawa Tambahan x2", "Extra Life x2"), LocScript.pick("Dua kesempatan bangkit tambahan.", "Two extra revival chances."), "150 %s" % coin_unit, "extra_life", 2)
-	_add_shop_offer(offers, LocScript.pick("Nyawa Tambahan x3", "Extra Life x3"), LocScript.pick("Tiga kesempatan bangkit tambahan.", "Three extra revival chances."), "210 %s" % coin_unit, "extra_life", 3)
+	_add_shop_offer(offers, LocScript.pick("Jamu Tolak Bala x1", "Herbal Elixir x1"), LocScript.pick("Pulihkan 45 kewarasan dan seluruh stamina.", "Restore 45 sanity and full stamina."), "%d %s" % [GameManager.get_shop_item_price("jamu", 1), coin_unit], "jamu", 1)
+	_add_shop_offer(offers, LocScript.pick("Jamu Tolak Bala x3", "Herbal Elixir x3"), LocScript.pick("Persediaan jamu tiga kali pakai.", "Three-dose herbal supply."), "%d %s" % [GameManager.get_shop_item_price("jamu", 3), coin_unit], "jamu", 3)
+	_add_shop_offer(offers, LocScript.pick("Baterai Senter x1", "Flashlight Battery x1"), LocScript.pick("Isi ulang 50% daya senter.", "Recharge 50% flashlight power."), "%d %s" % [GameManager.get_shop_item_price("baterai", 1), coin_unit], "baterai", 1)
+	_add_shop_offer(offers, "Energy Drink x1", LocScript.pick("Stamina 100% penuh selama 3 detik (anti-spam).", "Locks 100% stamina for 3 seconds (anti-spam)."), "%d %s" % [GameManager.get_shop_item_price("energy_drink", 1), coin_unit], "energy_drink", 1)
+	_add_shop_offer(offers, "Kentongan x1", LocScript.pick("Usir kejaran Lampor selama 5 detik (1x pakai).", "Repels Lampor's pursuit for 5 seconds (1 use)."), "%d %s" % [GameManager.get_shop_item_price("kentongan", 1), coin_unit], "kentongan", 1)
+	_add_shop_offer(offers, LocScript.pick("Nyawa Tambahan x1", "Extra Life x1"), LocScript.pick("Bangkit sekali di titik awal saat terbunuh.", "Revive once at village spawn when caught."), "%d %s" % [GameManager.get_shop_item_price("extra_life", 1), coin_unit], "extra_life", 1)
+	_add_shop_offer(offers, LocScript.pick("Nyawa Tambahan x2", "Extra Life x2"), LocScript.pick("Dua kesempatan bangkit tambahan.", "Two extra revival chances."), "%d %s" % [GameManager.get_shop_item_price("extra_life", 2), coin_unit], "extra_life", 2)
+	_add_shop_offer(offers, LocScript.pick("Nyawa Tambahan x3", "Extra Life x3"), LocScript.pick("Tiga kesempatan bangkit tambahan.", "Three extra revival chances."), "%d %s" % [GameManager.get_shop_item_price("extra_life", 3), coin_unit], "extra_life", 3)
 
 	shop_result_label = _make_label(LocScript.pick("Batas simpan: maks. 5 item & 5 nyawa tambahan.", "Storage limit: max 5 per item & 5 extra lives."), 11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm")
 	shop_result_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -1397,7 +1384,7 @@ func _add_shop_offer(parent: VBoxContainer, title_text: String, description: Str
 
 	var buy := Button.new()
 	buy.text = price_text
-	buy.custom_minimum_size = Vector2(98.0, 44.0)
+	buy.custom_minimum_size = Vector2(114.0, 44.0)
 	buy.size_flags_horizontal = Control.SIZE_SHRINK_END
 	buy.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	HorrorTheme.style_button(buy, "primary", 12, true)
@@ -1836,6 +1823,8 @@ func _get_active_scroll_container() -> ScrollContainer:
 		return fix_notes_scroll
 	if top_ov == settings_overlay and settings_scroll:
 		return settings_scroll
+	if top_ov == guide_overlay and guide_scroll:
+		return guide_scroll
 	if top_ov == shop_overlay and shop_scroll:
 		return shop_scroll
 	if top_ov == account_overlay and account_scroll:
@@ -1971,6 +1960,8 @@ func _show_fix_notes() -> void:
 			"# Catatan Pembaruan\n\nBelum ada catatan untuk versi ini.",
 			"# Patch Notes\n\nNo release notes available for this version yet."
 		)
+	if UpdateManager.has_method("sanitize_fix_notes_for_players"):
+		markdown = str(UpdateManager.call("sanitize_fix_notes_for_players", markdown))
 	_render_initial_fix_notes(markdown)
 	_open_modal(fix_notes_overlay, fix_notes_panel)
 	UpdateManager.fetch_latest_fix_notes(true)
@@ -1986,6 +1977,8 @@ func _on_fix_notes_updated(markdown: String, commit_sha: String) -> void:
 		var clean_md: String = UpdateManager.get_fix_notes_markdown()
 		if clean_md.strip_edges().is_empty():
 			clean_md = markdown
+		if UpdateManager.has_method("sanitize_fix_notes_for_players"):
+			clean_md = str(UpdateManager.call("sanitize_fix_notes_for_players", clean_md))
 		_render_initial_fix_notes(clean_md)
 
 func _markdown_to_bbcode(markdown: String) -> String:
@@ -2542,6 +2535,8 @@ func _apply_layout() -> void:
 			panel.custom_minimum_size = Vector2(maxf(280.0, minf(500.0, view_size.x - 28.0)), panel.custom_minimum_size.y)
 	if settings_scroll:
 		settings_scroll.custom_minimum_size.y = maxf(130.0, minf(310.0, view_size.y - 250.0))
+	if guide_scroll:
+		guide_scroll.custom_minimum_size.y = maxf(130.0, minf(330.0, view_size.y - 230.0))
 	if shop_scroll:
 		shop_scroll.custom_minimum_size.y = maxf(140.0, minf(310.0, view_size.y - 260.0))
 	if inbox_scroll:

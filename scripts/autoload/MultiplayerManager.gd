@@ -3,12 +3,16 @@ extends Node
 const LocScript = preload("res://scripts/systems/Loc.gd")
 const ProfanityFilterScript = preload("res://scripts/systems/ProfanityFilter.gd")
 const REMOTE_PLAYER_SCRIPT = preload("res://scripts/player/RemotePlayer.gd")
+const VOICE_CHAT_SCRIPT = preload("res://scripts/systems/VoiceChatSystem.gd")
 
 const LOBBY_POLL_INTERVAL: float = 1.0
+const LOBBY_VOICE_POLL_INTERVAL: float = 0.30
 const GAME_POLL_INTERVAL: float = 0.22
 const GAME_POLL_INTERVAL_LOW: float = 0.35
 const GAME_POLL_INTERVAL_MOBILE_LOW: float = 0.45
 const MAX_PENDING_EVENTS: int = 10
+const MAX_PENDING_VOICE_EVENTS: int = 4
+const MAX_SYNC_EVENTS_TOTAL: int = 14
 const MAX_CHAT_HISTORY: int = 80
 
 var session_mode: String = "singleplayer"
@@ -28,6 +32,8 @@ var _sync_in_flight: bool = false
 var _is_leaving: bool = false
 var _last_room_status: String = ""
 var _pending_events: Array[Dictionary] = []
+var _pending_voice_events: Array[Dictionary] = []
+var voice_chat: Node = null
 
 func _am() -> Variant:
 	return GameManager.get_account_manager()
@@ -35,6 +41,11 @@ func _am() -> Variant:
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	SignalBus.account_state_changed.connect(_on_account_state_changed)
+	voice_chat = VOICE_CHAT_SCRIPT.new()
+	voice_chat.name = "VoiceChatSystem"
+	add_child(voice_chat)
+	voice_chat.voice_chunk_ready.connect(_on_voice_chunk_ready)
+	voice_chat.speaking_state_changed.connect(_on_voice_speaking_state_changed)
 
 func _on_account_state_changed() -> void:
 	var am: Variant = _am()
@@ -54,7 +65,8 @@ func _process(delta: float) -> void:
 	var eff_q: String = SettingsManager.get_effective_graphics_quality()
 	var is_mobile: bool = OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios") or DisplayServer.is_touchscreen_available()
 	var game_interval: float = GAME_POLL_INTERVAL_MOBILE_LOW if (is_mobile and eff_q == "low") else (GAME_POLL_INTERVAL_LOW if eff_q == "low" else GAME_POLL_INTERVAL)
-	var interval: float = game_interval if status_str == "playing" else LOBBY_POLL_INTERVAL
+	var lobby_interval: float = LOBBY_VOICE_POLL_INTERVAL if is_mic_enabled() else LOBBY_POLL_INTERVAL
+	var interval: float = game_interval if status_str == "playing" else lobby_interval
 	_poll_elapsed += delta
 	if _poll_elapsed >= interval:
 		_poll_elapsed = 0.0
@@ -238,7 +250,49 @@ func get_room_setting(key: String, default_val: Variant) -> Variant:
 		return current_room.get(key, default_val)
 	return default_val
 
+func is_mic_enabled() -> bool:
+	return voice_chat != null and bool(voice_chat.get("mic_enabled"))
+
+func set_mic_enabled(enabled: bool) -> bool:
+	if voice_chat == null:
+		return false
+	return bool(voice_chat.call("set_mic_enabled", enabled))
+
+func toggle_mic() -> bool:
+	if voice_chat == null:
+		return false
+	return bool(voice_chat.call("toggle_mic"))
+
+func is_local_speaking() -> bool:
+	return voice_chat != null and bool(voice_chat.get("local_speaking"))
+
+func is_peer_speaking(user_id: String) -> bool:
+	if voice_chat == null:
+		return false
+	return bool(voice_chat.call("is_peer_speaking", user_id))
+
+func _on_voice_chunk_ready(b64_data: String, sample_rate: int, rms: float) -> void:
+	if not is_online_session or _get_current_room_id().is_empty():
+		return
+	if _pending_voice_events.size() >= MAX_PENDING_VOICE_EVENTS:
+		_pending_voice_events.remove_at(0)
+	_pending_voice_events.append({
+		"type": "voice",
+		"payload": {
+			"d": b64_data,
+			"sr": sample_rate,
+			"rms": rms
+		}
+	})
+
+func _on_voice_speaking_state_changed(local_spk: bool, active_spk: Dictionary) -> void:
+	SignalBus.voice_activity_updated.emit(local_spk, active_spk)
+
 func reset_to_singleplayer() -> void:
+	if voice_chat != null:
+		voice_chat.call("set_mic_enabled", false)
+		voice_chat.call("clear_peer_audio")
+	_pending_voice_events.clear()
 	_clear_remote_players()
 	current_room.clear()
 	room_players.clear()
@@ -335,7 +389,9 @@ func _collect_local_player_state() -> Dictionary:
 		"character": SettingsManager.character_model,
 		"sanity": snappedf(sanity_val, 0.1),
 		"isHiding": hiding,
-		"isAlive": not caught
+		"isAlive": not caught,
+		"micOn": is_mic_enabled(),
+		"speaking": is_local_speaking()
 	}
 
 func _collect_owner_world_state() -> Dictionary:
@@ -383,6 +439,11 @@ func _sync_tick() -> void:
 	var events_to_send: Array = _pending_events.slice(0, MAX_PENDING_EVENTS)
 	for _i: int in range(events_to_send.size()):
 		_pending_events.remove_at(0)
+	var voice_cap: int = mini(MAX_PENDING_VOICE_EVENTS, MAX_SYNC_EVENTS_TOTAL - events_to_send.size())
+	var voice_to_send: Array = _pending_voice_events.slice(0, maxi(0, voice_cap))
+	for _j: int in range(voice_to_send.size()):
+		_pending_voice_events.remove_at(0)
+	events_to_send.append_array(voice_to_send)
 	var body: Dictionary = {
 		"roomId": active_room_id,
 		"lastEventSeq": last_event_seq
@@ -415,10 +476,10 @@ func _sync_tick() -> void:
 		return
 
 	if not bool(res.get("ok", false)):
-		# Re-queue unsent events ahead of newly queued ones, keeping cap at MAX_PENDING_EVENTS.
+		# Re-queue unsent non-voice events ahead of newly queued ones, keeping cap at MAX_PENDING_EVENTS.
 		var restored: Array[Dictionary] = []
 		for ev_item: Variant in events_to_send:
-			if ev_item is Dictionary:
+			if ev_item is Dictionary and str((ev_item as Dictionary).get("type", "")) != "voice":
 				restored.append(ev_item as Dictionary)
 		restored.append_array(_pending_events)
 		if restored.size() > MAX_PENDING_EVENTS:
@@ -467,6 +528,11 @@ func _sync_tick() -> void:
 				})
 				if lobby_chat_history.size() > MAX_CHAT_HISTORY:
 					lobby_chat_history.remove_at(0)
+			elif ev_type == "voice":
+				var sender_uid: String = str(ev_dict.get("senderUserId", ev_dict.get("sender_user_id", ev_dict.get("userId", "")))).strip_edges()
+				var my_uid_str: String = str(am.user_id).strip_edges() if am != null else ""
+				if not sender_uid.is_empty() and sender_uid != my_uid_str and voice_chat != null:
+					voice_chat.call("decode_and_route_peer_audio", sender_uid, ev_payload, remote_players)
 			SignalBus.multiplayer_event_received.emit(ev_type, ev_payload, sender_name)
 
 	if data.has("lastEventSeq"):

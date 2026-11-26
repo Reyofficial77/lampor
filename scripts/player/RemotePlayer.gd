@@ -40,6 +40,8 @@ var equipped_item: String = ""
 var sanity: float = 100.0
 var is_hiding: bool = false
 var is_alive: bool = true
+var mic_on: bool = false
+var is_speaking: bool = false
 var character_model: String = "male"
 
 var visual_root: Node3D = null
@@ -47,6 +49,8 @@ var head_pivot: Node3D = null
 var flashlight: SpotLight3D = null
 var name_label: Label3D = null
 var verified_sprite: Sprite3D = null
+var voice_player_3d: AudioStreamPlayer3D = null
+var voice_generator: AudioStreamGenerator = null
 var _skeleton: Skeleton3D = null
 var _anim_player: AnimationPlayer = null
 var _initialized: bool = false
@@ -109,6 +113,20 @@ func _ensure_initialized() -> void:
 	verified_sprite.texture = VerifiedBadgeScript.get_texture(48)
 	verified_sprite.visible = is_verified
 	add_child(verified_sprite)
+
+	voice_player_3d = AudioStreamPlayer3D.new()
+	voice_player_3d.name = "VoicePlayer3D"
+	voice_player_3d.position = Vector3(0.0, 1.65, 0.0)
+	voice_player_3d.unit_size = 14.0
+	voice_player_3d.max_distance = 55.0
+	voice_player_3d.bus = &"Master"
+	add_child(voice_player_3d)
+	if DisplayServer.get_name() != "headless":
+		voice_generator = AudioStreamGenerator.new()
+		voice_generator.mix_rate = 8000.0
+		voice_generator.buffer_length = 0.65
+		voice_player_3d.stream = voice_generator
+		voice_player_3d.play()
 
 	_setup_character_visuals()
 
@@ -348,6 +366,22 @@ func _play_anim(anim_name: String) -> void:
 	_last_played_anim = target_anim
 	_anim_player.play(target_anim, 0.14)
 
+func push_voice_frames(samples: PackedFloat32Array) -> void:
+	if DisplayServer.get_name() == "headless" or samples.is_empty():
+		return
+	_ensure_initialized()
+	if not is_instance_valid(voice_player_3d):
+		return
+	if not voice_player_3d.playing and voice_generator != null:
+		voice_player_3d.play()
+	var playback: AudioStreamGeneratorPlayback = voice_player_3d.get_stream_playback() as AudioStreamGeneratorPlayback
+	if playback == null:
+		return
+	var max_push: int = mini(playback.get_frames_available(), samples.size())
+	for i: int in range(max_push):
+		var s: float = samples[i]
+		playback.push_frame(Vector2(s, s))
+
 func apply_network_state(data: Dictionary) -> void:
 	_ensure_initialized()
 	var raw_char: Variant = data.get("character", character_model)
@@ -396,6 +430,10 @@ func apply_network_state(data: Dictionary) -> void:
 		is_hiding = bool(data.get("isHiding", false))
 	if data.has("isAlive"):
 		is_alive = bool(data.get("isAlive", true))
+	if data.has("micOn"):
+		mic_on = bool(data.get("micOn", false))
+	if data.has("speaking"):
+		is_speaking = bool(data.get("speaking", false))
 
 	if has_pos_in_packet and not _has_network_pose:
 		if is_inside_tree():
@@ -409,7 +447,7 @@ func apply_network_state(data: Dictionary) -> void:
 		visible = true
 
 	if name_label:
-		name_label.text = username + (" [HOST]" if is_host else "")
+		name_label.text = username + (" [HOST]" if is_host else "") + (" [MIC]" if is_speaking else "")
 		if not is_alive:
 			name_label.modulate = Color(0.83, 0.26, 0.24, 0.85)
 		elif is_host:

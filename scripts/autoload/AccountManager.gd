@@ -24,6 +24,8 @@ var is_busy: bool = false
 var last_error: String = ""
 var server_base_url: String = ""
 var friends_list: Array = []
+var incoming_friend_requests: Array = []
+var outgoing_friend_requests: Array = []
 var players_directory: Array = []
 
 var _is_syncing_profile: bool = false
@@ -96,6 +98,11 @@ func validate_credentials_format(uname: String, pwd: String, is_register: bool) 
 	var clean_uname: String = uname.strip_edges()
 	if clean_uname.is_empty():
 		return LocScript.pick("Username wajib diisi.", "Username is required.")
+	if clean_uname.to_lower() == "admin_lampor":
+		return LocScript.pick(
+			"Akun admin_lampor khusus akses Admin Dashboard web dan tidak dapat dimainkan di dalam game.",
+			"The admin_lampor account is reserved for the web Admin Dashboard and cannot be played in-game."
+		)
 	if _rx_username.search(clean_uname) == null:
 		return LocScript.pick(
 			"Username harus 3-24 karakter (huruf, angka, atau underscore _).",
@@ -282,6 +289,8 @@ func _clear_session_local() -> void:
 	role = "player"
 	is_verified = false
 	friends_list.clear()
+	incoming_friend_requests.clear()
+	outgoing_friend_requests.clear()
 	players_directory.clear()
 
 func _handle_session_expired(reason_msg: String) -> void:
@@ -391,6 +400,12 @@ func _submit_auth_request(endpoint: String, uname: String, pwd: String, is_regis
 	if token.is_empty() or user_dict.is_empty():
 		last_error = LocScript.pick("Respons sesi server tidak lengkap.", "Incomplete session response from server.")
 		return {"ok": false, "status": int(res.get("status", 500)), "message": last_error}
+	if str(user_dict.get("username", "")).strip_edges().to_lower() == "admin_lampor":
+		last_error = LocScript.pick(
+			"Akun admin_lampor khusus akses Admin Dashboard web dan tidak dapat dimainkan di dalam game.",
+			"The admin_lampor account is reserved for the web Admin Dashboard and cannot be played in-game."
+		)
+		return {"ok": false, "status": 403, "message": last_error}
 
 	session_token = token
 	is_logged_in = true
@@ -426,6 +441,12 @@ func verify_saved_session() -> bool:
 		var data: Dictionary = res.get("data", {})
 		var user_dict: Dictionary = data.get("user", {}) if data.get("user") is Dictionary else {}
 		if not user_dict.is_empty():
+			if str(user_dict.get("username", "")).strip_edges().to_lower() == "admin_lampor":
+				_handle_session_expired(LocScript.pick(
+					"Akun admin_lampor khusus akses Admin Dashboard web dan tidak dapat dimainkan di dalam game.",
+					"The admin_lampor account is reserved for the web Admin Dashboard and cannot be played in-game."
+				))
+				return false
 			is_logged_in = true
 			is_guest_mode = false
 			account_gate_resolved = true
@@ -437,7 +458,8 @@ func verify_saved_session() -> bool:
 			return true
 
 	var status_code: int = int(res.get("status", 0))
-	if status_code == 401 or status_code == 403:
+	var res_data: Dictionary = res.get("data", {}) if res.get("data") is Dictionary else {}
+	if status_code == 401 or status_code == 403 or str(res_data.get("code", "")) == "ADMIN_DASHBOARD_ONLY":
 		_handle_session_expired(str(res.get("message", "")))
 		return false
 
@@ -478,6 +500,8 @@ func fetch_friends_and_directory(search_query: String = "") -> Dictionary:
 			"ok": false,
 			"status": 401,
 			"friends": [],
+			"incomingRequests": [],
+			"outgoingRequests": [],
 			"directory": [],
 			"message": LocScript.pick("Masuk ke akun LAMPOR terlebih dahulu.", "Sign in to a LAMPOR account first.")
 		}
@@ -491,19 +515,27 @@ func fetch_friends_and_directory(search_query: String = "") -> Dictionary:
 			"ok": false,
 			"status": int(res.get("status", 0)),
 			"friends": friends_list,
+			"incomingRequests": incoming_friend_requests,
+			"outgoingRequests": outgoing_friend_requests,
 			"directory": players_directory,
 			"message": str(res.get("message", LocScript.pick("Gagal memuat daftar teman.", "Failed to load friends list.")))
 		}
 	var data: Dictionary = res.get("data", {})
 	var f_raw: Variant = data.get("friends", [])
+	var ir_raw: Variant = data.get("incomingRequests", [])
+	var or_raw: Variant = data.get("outgoingRequests", [])
 	var d_raw: Variant = data.get("directory", [])
 	friends_list = (f_raw as Array).duplicate(true) if f_raw is Array else []
+	incoming_friend_requests = (ir_raw as Array).duplicate(true) if ir_raw is Array else []
+	outgoing_friend_requests = (or_raw as Array).duplicate(true) if or_raw is Array else []
 	players_directory = (d_raw as Array).duplicate(true) if d_raw is Array else []
 	SignalBus.friends_updated.emit(friends_list, players_directory)
 	return {
 		"ok": true,
 		"status": int(res.get("status", 200)),
 		"friends": friends_list,
+		"incomingRequests": incoming_friend_requests,
+		"outgoingRequests": outgoing_friend_requests,
 		"directory": players_directory,
 		"message": str(res.get("message", ""))
 	}
@@ -523,6 +555,50 @@ func add_friend_by_username(target_username: String) -> Dictionary:
 			"message": LocScript.pick("Masukkan username pemain.", "Enter a player username.")
 		}
 	var res: Dictionary = await api_request("POST", "/api/friends/add", {"username": cleaned}, true)
+	return {
+		"ok": bool(res.get("ok", false)),
+		"status": int(res.get("status", 0)),
+		"data": res.get("data", {}),
+		"message": str(res.get("message", ""))
+	}
+
+func accept_friend_request(requester_user_id: String) -> Dictionary:
+	if not can_access_online_modes():
+		return {
+			"ok": false,
+			"status": 401,
+			"message": LocScript.pick("Masuk ke akun LAMPOR terlebih dahulu.", "Sign in to a LAMPOR account first.")
+		}
+	var cleaned: String = requester_user_id.strip_edges()
+	if cleaned.is_empty():
+		return {
+			"ok": false,
+			"status": 400,
+			"message": LocScript.pick("ID pengirim permintaan tidak valid.", "Invalid requester ID.")
+		}
+	var res: Dictionary = await api_request("POST", "/api/friends/accept", {"requesterUserId": cleaned}, true)
+	return {
+		"ok": bool(res.get("ok", false)),
+		"status": int(res.get("status", 0)),
+		"data": res.get("data", {}),
+		"message": str(res.get("message", ""))
+	}
+
+func decline_friend_request(target_user_id: String) -> Dictionary:
+	if not can_access_online_modes():
+		return {
+			"ok": false,
+			"status": 401,
+			"message": LocScript.pick("Masuk ke akun LAMPOR terlebih dahulu.", "Sign in to a LAMPOR account first.")
+		}
+	var cleaned: String = target_user_id.strip_edges()
+	if cleaned.is_empty():
+		return {
+			"ok": false,
+			"status": 400,
+			"message": LocScript.pick("ID pemain tidak valid.", "Invalid player ID.")
+		}
+	var res: Dictionary = await api_request("POST", "/api/friends/decline", {"targetUserId": cleaned}, true)
 	return {
 		"ok": bool(res.get("ok", false)),
 		"status": int(res.get("status", 0)),
@@ -656,6 +732,10 @@ func refresh_profile_from_server() -> Dictionary:
 	var res: Dictionary = await api_request("GET", "/api/auth/me", null, true)
 	_me_refresh_in_flight = false
 	if not bool(res.get("ok", false)):
+		var err_status: int = int(res.get("status", 0))
+		var err_data: Dictionary = res.get("data", {}) if res.get("data") is Dictionary else {}
+		if err_status == 403 and str(err_data.get("code", "")) == "ADMIN_DASHBOARD_ONLY":
+			_handle_session_expired(str(res.get("message", "")))
 		return res
 	var data: Dictionary = res.get("data", {})
 	var user_dict: Dictionary = data.get("user", {}) if data.get("user") is Dictionary else {}
@@ -665,6 +745,12 @@ func refresh_profile_from_server() -> Dictionary:
 
 func apply_live_server_user(user_dict: Dictionary) -> void:
 	if user_dict.is_empty():
+		return
+	if str(user_dict.get("username", "")).strip_edges().to_lower() == "admin_lampor":
+		_handle_session_expired(LocScript.pick(
+			"Akun admin_lampor khusus akses Admin Dashboard web dan tidak dapat dimainkan di dalam game.",
+			"The admin_lampor account is reserved for the web Admin Dashboard and cannot be played in-game."
+		))
 		return
 	var prev_role: String = role
 	var prev_verified: bool = is_verified

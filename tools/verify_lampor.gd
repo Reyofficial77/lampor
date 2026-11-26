@@ -32,10 +32,11 @@ func _run_checks() -> void:
 		errors.append("profile_username_input missing or editable")
 	var fr_ov: Control = mm.get("friends_overlay") as Control
 	var fr_panel: Control = mm.get("friends_panel") as Control
+	var fr_req_list: Control = mm.get("friends_requests_list") as Control
 	var fr_list: Control = mm.get("friends_my_list") as Control
 	var dir_list: Control = mm.get("friends_directory_list") as Control
-	if fr_ov == null or fr_panel == null or fr_list == null or dir_list == null:
-		errors.append("MainMenu friends_modal controls missing")
+	if fr_ov == null or fr_panel == null or fr_req_list == null or fr_list == null or dir_list == null:
+		errors.append("MainMenu friends_modal or friends_requests_list controls missing")
 
 	var am: Variant = root.get_node_or_null("AccountManager")
 	var gm: Variant = root.get_node_or_null("GameManager")
@@ -115,6 +116,9 @@ func _run_checks() -> void:
 		if str(pf.call("censor", "classic assassin night malam lampor")) != "classic assassin night malam lampor":
 			errors.append("ProfanityFilter false positive")
 	if am != null:
+		var bad_admin_err: String = str(am.call("validate_credentials_format", "admin_lampor", "PassAman123", false))
+		if bad_admin_err.is_empty():
+			errors.append("validate_credentials_format did not block dashboard-only admin_lampor")
 		var bad_uname_err: String = str(am.call("validate_credentials_format", "anjing_123", "PassAman123", true))
 		if bad_uname_err.is_empty():
 			errors.append("validate_credentials_format did not reject profane username")
@@ -193,6 +197,21 @@ func _run_checks() -> void:
 	if hud_node == null:
 		errors.append("VillageMap HUD missing")
 	else:
+		var mic_btn: Button = hud_node.get("mic_toggle_button") as Button
+		if mic_btn == null:
+			errors.append("HUD top-left mic_toggle_button missing")
+		var vcs: Variant = load("res://scripts/systems/VoiceChatSystem.gd")
+		if vcs == null:
+			errors.append("VoiceChatSystem.gd failed to load")
+		else:
+			var pcm_in := PackedFloat32Array()
+			for si: int in range(160):
+				pcm_in.append(sin(float(si) * 0.25) * 0.6)
+			var b64: String = str(vcs.call("encode_pcm_to_ulaw_b64", pcm_in))
+			var pcm_out: PackedFloat32Array = vcs.call("decode_ulaw_b64_to_pcm", b64)
+			if b64.is_empty() or pcm_out.size() != pcm_in.size() or absf(pcm_out[2]) < 0.05:
+				errors.append("VoiceChatSystem mu-law roundtrip invalid")
+
 		var ho: CanvasItem = hud_node.get("post_process_rect") as CanvasItem
 		if ho != null and ho.visible:
 			errors.append("Low graphics did not hide HorrorOverlay")
@@ -209,6 +228,33 @@ func _run_checks() -> void:
 		for i: int in range(4):
 			if wb.get_node_or_null("BorderWall" + str(i)) == null:
 				errors.append("Missing BorderWall" + str(i))
+		var low_mode: String = str(wb.call("get_active_tree_mode"))
+		var trunks_low: Node3D = wb.get_node_or_null("ForestTrunks") as Node3D
+		var trees2d_low: Node3D = wb.get_node_or_null("Forest2DTrees") as Node3D
+		if low_mode != "2d" or trees2d_low == null or not trees2d_low.visible or (trunks_low != null and trunks_low.visible):
+			errors.append("Low graphics must render 2D trees only")
+		var test_cam := Camera3D.new()
+		vm.add_child(test_cam)
+		test_cam.global_position = Vector3(0.0, 2.0, 0.0)
+		test_cam.look_at(Vector3(0.0, 2.0, -30.0), Vector3.UP)
+		wb.call("force_update_culling_for_camera", test_cam)
+		var total_sec: int = int(wb.call("get_total_sector_count"))
+		var vis_sec: int = int(wb.call("get_visible_sector_count"))
+		if total_sec != 8 or vis_sec <= 0 or vis_sec >= total_sec:
+			errors.append("WorldBorder 8-sector culling did not cull rear sectors (vis=%d/%d)" % [vis_sec, total_sec])
+		if sm != null:
+			sm.call("set_graphics_quality", "medium")
+			await process_frame
+			if str(wb.call("get_active_tree_mode")) != "2d":
+				errors.append("Medium graphics must render 2D trees")
+			sm.call("set_graphics_quality", "high")
+			await process_frame
+			var trunks_high: Node3D = wb.get_node_or_null("ForestTrunks") as Node3D
+			var trees2d_high: Node3D = wb.get_node_or_null("Forest2DTrees") as Node3D
+			if str(wb.call("get_active_tree_mode")) != "3d" or trunks_high == null or not trunks_high.visible or (trees2d_high != null and trees2d_high.visible):
+				errors.append("High graphics must switch to 3D trees")
+			sm.call("set_graphics_quality", "low")
+		test_cam.queue_free()
 
 	var rp_script: Script = load("res://scripts/player/RemotePlayer.gd") as Script
 	var rp: Node3D = rp_script.new() as Node3D

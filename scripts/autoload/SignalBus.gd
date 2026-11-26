@@ -49,6 +49,8 @@ signal multiplayer_event_received(event_type: String, payload: Dictionary, sende
 signal multiplayer_disconnected(reason: String)
 signal sandbox_panel_toggled(is_open: bool)
 signal friends_updated(friends: Array, directory: Array)
+signal voice_mic_toggled(enabled: bool)
+signal voice_activity_updated(local_speaking: bool, active_speakers: Dictionary)
 
 # Fate Card signals
 signal fate_card_applied(card_data: Dictionary)

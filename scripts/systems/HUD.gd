@@ -136,6 +136,10 @@ var _inv_hint_lbl: Label = null
 var fate_card_overlay: FATE_CARD_OVERLAY_SCRIPT = null
 var fate_cards_strip: VBoxContainer = null
 var _pending_fate_offers: Dictionary = {}
+var mic_toggle_button: Button = null
+var _mission_mic_row: HBoxContainer = null
+var _mic_icon_ctrl: Control = null
+var _mic_text_lbl: Label = null
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -171,9 +175,17 @@ func _ready() -> void:
 		SignalBus.multiplayer_room_updated.connect(func(_r: Dictionary, _p: Array) -> void:
 			_refresh_host_and_admin_controls()
 			_refresh_online_room_overlay(true)
+			_refresh_mic_button_visuals()
 		)
 	if SignalBus.has_signal("account_state_changed"):
 		SignalBus.account_state_changed.connect(_refresh_host_and_admin_controls)
+	if SignalBus.has_signal("voice_mic_toggled"):
+		SignalBus.voice_mic_toggled.connect(func(_enabled: bool) -> void: _refresh_mic_button_visuals())
+	if SignalBus.has_signal("voice_activity_updated"):
+		SignalBus.voice_activity_updated.connect(func(_local_spk: bool, _speakers: Dictionary) -> void:
+			_refresh_mic_button_visuals()
+			_refresh_online_room_overlay(false)
+		)
 	SettingsManager.keybinds_changed.connect(_on_settings_keybinds_changed)
 	SettingsManager.language_changed.connect(_on_language_changed)
 
@@ -235,7 +247,10 @@ func _ready() -> void:
 
 func _style_horror_hud_containers() -> void:
 	var touch: bool = _is_touch_device()
+	top_left.mouse_filter = Control.MOUSE_FILTER_PASS
 	var tl_vbox: VBoxContainer = top_left.get_node_or_null("VBox") as VBoxContainer
+	if tl_vbox:
+		tl_vbox.mouse_filter = Control.MOUSE_FILTER_PASS
 	var tl_sep: Control = top_left.get_node_or_null("VBox/HSeparator") as Control
 
 	clock_label.add_theme_font_size_override("font_size", 20 if touch else 28)
@@ -259,7 +274,18 @@ func _style_horror_hud_containers() -> void:
 			tl_vbox.move_child(clock_label, 0)
 			tl_vbox.move_child(act_label, 1)
 			tl_vbox.move_child(tl_sep, 2)
-			tl_vbox.move_child(objectives_container, 3)
+			_mission_mic_row = HBoxContainer.new()
+			_mission_mic_row.name = "MissionAndMicRow"
+			_mission_mic_row.mouse_filter = Control.MOUSE_FILTER_PASS
+			_mission_mic_row.add_theme_constant_override("separation", 14)
+			tl_vbox.add_child(_mission_mic_row)
+			tl_vbox.move_child(_mission_mic_row, 3)
+			objectives_container.get_parent().remove_child(objectives_container)
+			objectives_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			objectives_container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			_mission_mic_row.add_child(objectives_container)
+			var mic_btn: Button = _build_top_left_mic_control()
+			_mission_mic_row.add_child(mic_btn)
 
 	bottom_right.visible = false
 	sanity_val.visible = true
@@ -429,6 +455,174 @@ func _is_key_bound_to_gameplay(event: InputEventKey) -> bool:
 		if action != "toggle_inventory" and event.is_action(action):
 			return true
 	return false
+
+func _build_top_left_mic_control() -> Button:
+	var touch: bool = _is_touch_device()
+	mic_toggle_button = Button.new()
+	mic_toggle_button.name = "MicToggleButton"
+	mic_toggle_button.text = ""
+	mic_toggle_button.focus_mode = Control.FOCUS_NONE
+	mic_toggle_button.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
+	mic_toggle_button.size_flags_horizontal = Control.SIZE_SHRINK_END
+	mic_toggle_button.custom_minimum_size = Vector2(46.0, 46.0) if touch else Vector2(88.0, 38.0)
+	mic_toggle_button.pressed.connect(_on_mic_toggle_pressed)
+
+	var content: BoxContainer = VBoxContainer.new() if touch else HBoxContainer.new()
+	content.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	content.alignment = BoxContainer.ALIGNMENT_CENTER
+	content.add_theme_constant_override("separation", 2 if touch else 4)
+	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	mic_toggle_button.add_child(content)
+
+	_mic_icon_ctrl = Control.new()
+	_mic_icon_ctrl.name = "MicIcon"
+	_mic_icon_ctrl.custom_minimum_size = Vector2(18.0, 18.0) if touch else Vector2(14.0, 18.0)
+	_mic_icon_ctrl.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_mic_icon_ctrl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_mic_icon_ctrl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_mic_icon_ctrl.draw.connect(_draw_mic_icon)
+	content.add_child(_mic_icon_ctrl)
+
+	_mic_text_lbl = Label.new()
+	_mic_text_lbl.name = "MicStateLabel"
+	_mic_text_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_mic_text_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_mic_text_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	content.add_child(_mic_text_lbl)
+
+	_refresh_mic_button_visuals()
+	return mic_toggle_button
+
+func _on_mic_toggle_pressed() -> void:
+	var mp: Variant = _mp()
+	if mp == null or not mp.is_online_session:
+		return
+	if mp.has_method("toggle_mic"):
+		mp.call("toggle_mic")
+	_refresh_mic_button_visuals()
+
+func _refresh_mic_button_visuals() -> void:
+	if not is_instance_valid(mic_toggle_button):
+		return
+	var mp: Variant = _mp()
+	var online: bool = mp != null and mp.is_online_session
+	mic_toggle_button.visible = online
+	_refresh_objectives_label_widths()
+
+	var mic_on: bool = online and mp.has_method("is_mic_enabled") and bool(mp.call("is_mic_enabled"))
+	var local_spk: bool = mic_on and mp.has_method("is_local_speaking") and bool(mp.call("is_local_speaking"))
+	var touch: bool = _is_touch_device()
+
+	var bg_col: Color = Color(0.08, 0.038, 0.042, 0.88)
+	var border_col: Color = HorrorTheme.OUTLINE_VARIANT
+	var text_col: Color = HorrorTheme.TEXT_MUTED
+	if local_spk:
+		bg_col = Color(0.08, 0.16, 0.10, 0.94)
+		border_col = HorrorTheme.SUCCESS_SAGE
+		text_col = HorrorTheme.SUCCESS_SAGE
+	elif mic_on:
+		bg_col = Color(0.20, 0.05, 0.06, 0.92)
+		border_col = HorrorTheme.ACCENT
+		text_col = HorrorTheme.PRIMARY
+
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = bg_col
+	normal.border_color = border_col
+	normal.set_border_width_all(2)
+	normal.set_corner_radius_all(4)
+	normal.content_margin_left = 4.0 if touch else 6.0
+	normal.content_margin_right = 4.0 if touch else 6.0
+	normal.content_margin_top = 3.0 if touch else 4.0
+	normal.content_margin_bottom = 3.0 if touch else 4.0
+	normal.shadow_color = Color(border_col.r, border_col.g, border_col.b, 0.45 if local_spk else 0.25)
+	normal.shadow_size = 6 if local_spk else 3
+
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = bg_col.lightened(0.10)
+	mic_toggle_button.add_theme_stylebox_override("normal", normal)
+	mic_toggle_button.add_theme_stylebox_override("hover", hover)
+	mic_toggle_button.add_theme_stylebox_override("pressed", hover)
+	mic_toggle_button.add_theme_stylebox_override("focus", normal)
+
+	if is_instance_valid(_mic_text_lbl):
+		var label_str: String = ""
+		if local_spk:
+			label_str = LocScript.pick("BICARA", "SPEAK")
+		elif mic_on:
+			label_str = "MIC ON" if touch else "MIC ON [V]"
+		else:
+			label_str = "MIC OFF" if touch else "MIC OFF [V]"
+		_mic_text_lbl.text = label_str
+		HorrorTheme.style_label(_mic_text_lbl, "mono-sm", text_col, 7 if touch else 9)
+
+	if is_instance_valid(_mic_icon_ctrl):
+		_mic_icon_ctrl.queue_redraw()
+
+func _draw_mic_icon() -> void:
+	if not is_instance_valid(_mic_icon_ctrl):
+		return
+	var mp: Variant = _mp()
+	var online: bool = mp != null and mp.is_online_session
+	var mic_on: bool = online and mp.has_method("is_mic_enabled") and bool(mp.call("is_mic_enabled"))
+	var local_spk: bool = mic_on and mp.has_method("is_local_speaking") and bool(mp.call("is_local_speaking"))
+
+	var s: Vector2 = _mic_icon_ctrl.size
+	var c: Vector2 = s * 0.5
+	var u: float = minf(s.x, s.y)
+	var col: Color = HorrorTheme.SUCCESS_SAGE if local_spk else (HorrorTheme.PRIMARY if mic_on else HorrorTheme.TEXT_MUTED)
+	var stroke: float = maxf(1.5, u * 0.09)
+
+	var cap_w: float = u * 0.34
+	var cap_h: float = u * 0.48
+	var cap_rect := Rect2(c.x - cap_w * 0.5, c.y - u * 0.36, cap_w, cap_h)
+	_mic_icon_ctrl.draw_rect(cap_rect, col, true)
+	_mic_icon_ctrl.draw_arc(Vector2(c.x, c.y - u * 0.06), u * 0.28, 0.0, PI, 12, col, stroke, true)
+	_mic_icon_ctrl.draw_line(Vector2(c.x, c.y + u * 0.22), Vector2(c.x, c.y + u * 0.38), col, stroke)
+	_mic_icon_ctrl.draw_line(Vector2(c.x - u * 0.18, c.y + u * 0.38), Vector2(c.x + u * 0.18, c.y + u * 0.38), col, stroke)
+
+	if not mic_on:
+		_mic_icon_ctrl.draw_line(
+			c + Vector2(-u * 0.34, u * 0.32),
+			c + Vector2(u * 0.34, -u * 0.34),
+			HorrorTheme.ACCENT,
+			stroke * 1.15
+		)
+
+func _get_objectives_label_width() -> float:
+	var touch: bool = _is_touch_device()
+	var view_w: float = get_viewport().get_visible_rect().size.x if get_viewport() else 1280.0
+	var tl_w: float = clampf(view_w * 0.34, 260.0, 350.0) if touch else 380.0
+	if is_instance_valid(mic_toggle_button) and mic_toggle_button.visible:
+		return maxf(160.0, tl_w - (70.0 if touch else 96.0))
+	return tl_w - 16.0
+
+func _refresh_objectives_label_widths() -> void:
+	if not is_instance_valid(objectives_container):
+		return
+	var target_w: float = _get_objectives_label_width()
+	for obj_child: Node in objectives_container.get_children():
+		if obj_child is Label:
+			(obj_child as Label).custom_minimum_size.x = target_w
+
+func _unhandled_key_input(event: InputEvent) -> void:
+	if not _pause_listening_keybind_action.is_empty():
+		return
+	if is_cutscene_active() or is_fate_card_overlay_open():
+		return
+	if get_tree().paused or GameManager.current_state != GameManager.GameState.PLAYING:
+		return
+	if (pause_menu and pause_menu.visible) or (barricade_dialog and barricade_dialog.visible) or (inventory_overlay and inventory_overlay.visible) or (exit_confirm_overlay and exit_confirm_overlay.visible):
+		return
+	var focus_owner: Control = get_viewport().gui_get_focus_owner()
+	if focus_owner is LineEdit or focus_owner is TextEdit:
+		return
+	if event is InputEventKey:
+		var ke := event as InputEventKey
+		if ke.pressed and not ke.echo and ke.keycode == KEY_V and not ke.ctrl_pressed and not ke.alt_pressed and not ke.meta_pressed:
+			var mp: Variant = _mp()
+			if mp != null and mp.is_online_session:
+				_on_mic_toggle_pressed()
+				get_viewport().set_input_as_handled()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if is_cutscene_active() or is_fate_card_overlay_open():
@@ -1419,7 +1613,7 @@ func _apply_mobile_hud_layout() -> void:
 		if objective is Label:
 			var obj_lbl: Label = objective as Label
 			obj_lbl.add_theme_font_size_override("font_size", 11)
-			obj_lbl.custom_minimum_size.x = tl_width - 16.0
+			obj_lbl.custom_minimum_size.x = _get_objectives_label_width()
 	if is_instance_valid(fate_cards_strip):
 		fate_cards_strip.custom_minimum_size.x = tl_width - 16.0
 		_refresh_fate_cards_strip()
@@ -1644,7 +1838,10 @@ func _refresh_online_room_overlay(force: bool = false) -> void:
 			var is_v: bool = bool(p.get("isVerified", false))
 			var ps: Variant = p.get("playerState", {})
 			var san: int = clampi(int(round(float(ps.get("sanity", 100)) if ps is Dictionary else float(p.get("sanity", 100)))), 0, 100)
-			sig_parts.append("%s:%s:%s:%s:%d" % [uid, uname, "H" if is_h else "P", "V" if is_v else "N", san])
+			var is_spk: bool = bool(ps.get("speaking", false)) if ps is Dictionary else false
+			if not is_spk and mp.has_method("is_peer_speaking") and bool(mp.call("is_peer_speaking", uid)):
+				is_spk = true
+			sig_parts.append("%s:%s:%s:%s:%s:%d" % [uid, uname, "H" if is_h else "P", "V" if is_v else "N", "S" if is_spk else "Q", san])
 	var sig: String = "|".join(sig_parts)
 	if not force and sig == _mp_last_sig:
 		return
@@ -1672,6 +1869,9 @@ func _refresh_online_room_overlay(force: bool = false) -> void:
 			var is_v_p: bool = bool(p.get("isVerified", false))
 			var ps: Variant = p.get("playerState", {})
 			var san: int = clampi(int(round(float(ps.get("sanity", 100)) if ps is Dictionary else float(p.get("sanity", 100)))), 0, 100)
+			var is_spk_p: bool = bool(ps.get("speaking", false)) if ps is Dictionary else false
+			if not is_spk_p and mp.has_method("is_peer_speaking") and bool(mp.call("is_peer_speaking", uid)):
+				is_spk_p = true
 
 			var row := HBoxContainer.new()
 			row.add_theme_constant_override("separation", 6)
@@ -1685,7 +1885,7 @@ func _refresh_online_room_overlay(force: bool = false) -> void:
 			row.add_child(name_wrap)
 
 			var name_lbl := Label.new()
-			name_lbl.text = "%s%s" % [uname, " [HOST]" if is_host else ""]
+			name_lbl.text = "%s%s%s" % [uname, " [HOST]" if is_host else "", " [MIC]" if is_spk_p else ""]
 			name_lbl.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 			name_lbl.clip_text = true
 			name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1788,6 +1988,7 @@ func _refresh_localized_hud_texts() -> void:
 	if act_label:
 		act_label.text = GameManager.get_current_act_title()
 	_populate_desktop_hints()
+	_refresh_mic_button_visuals()
 	_on_inventory_updated(cached_inventory_slots)
 	var player: PlayerController = GameManager.player_character as PlayerController
 	if player and player.interaction_ray:
@@ -2899,9 +3100,7 @@ func _on_objective_updated(id: String, text: String, current: int, required: int
 		label.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.95))
 		label.add_theme_constant_override("outline_size", 3)
 		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		var view_w: float = get_viewport().get_visible_rect().size.x
-		var tl_w: float = clampf(view_w * 0.34, 260.0, 350.0) if touch else 380.0
-		label.custom_minimum_size.x = tl_w - 16.0
+		label.custom_minimum_size.x = _get_objectives_label_width()
 		objectives_container.add_child(label)
 		objective_labels[id] = label
 		

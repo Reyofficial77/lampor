@@ -5,6 +5,7 @@ const LocScript = preload("res://scripts/systems/Loc.gd")
 signal keybinds_changed()
 signal language_changed(new_language: String)
 signal character_model_changed(model_id: String)
+signal graphics_quality_changed(effective_quality: String)
 
 const CONFIG_PATH: String = "user://lampor_settings.cfg"
 const WEB_SETTINGS_STORAGE_KEY: String = "lampor_settings_v1"
@@ -591,6 +592,7 @@ func _apply_graphics_quality() -> void:
 			viewport.positional_shadow_atlas_size = 2048
 			RenderingServer.directional_shadow_atlas_set_size(2048, true)
 	_apply_scene_graphics_optimizations(effective, is_mobile)
+	graphics_quality_changed.emit(effective)
 
 func _apply_scene_graphics_optimizations(quality: String, is_mobile: bool = false) -> void:
 	var root_node: Node = get_tree().root

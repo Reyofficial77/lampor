@@ -235,15 +235,18 @@ var friends_refresh_btn: Button
 var friends_guest_box: VBoxContainer
 var friends_content_box: VBoxContainer
 var friends_status_label: Label
+var friends_requests_list: VBoxContainer = null
 var friends_my_list: VBoxContainer
 var friends_directory_header: Label
 var friends_directory_list: VBoxContainer
+var friends_button: Button = null
 var profile_status_badge_label: Label
 var _friends_refresh_in_flight: bool = false
 var _friends_auto_refresh_accum: float = 0.0
 var _friends_search_query: String = ""
 var _friends_last_sig: String = ""
 var _friends_loading: bool = false
+var _friends_initial_badge_uid: String = ""
 
 func _am() -> Variant:
 	return GameManager.get_account_manager()
@@ -288,6 +291,7 @@ func _ready() -> void:
 		_refresh_account_ui()
 		if am != null and am.can_access_online_modes() and am.has_method("refresh_profile_from_server"):
 			am.call_deferred("refresh_profile_from_server")
+			call_deferred("_trigger_initial_friends_badge_fetch")
 
 func _on_coins_changed(_new_coins: int) -> void:
 	_refresh_currency_display()
@@ -398,7 +402,7 @@ func _build_menu() -> void:
 	start_button.pressed.connect(func() -> void: _open_modal(warning_overlay, warning_panel))
 	menu_buttons.add_child(start_button)
 
-	var friends_button := _make_nav_button(LocScript.pick("TEMAN", "FRIENDS"))
+	friends_button = _make_nav_button(LocScript.pick("TEMAN", "FRIENDS"))
 	friends_button.pressed.connect(_open_friends_modal)
 	menu_buttons.add_child(friends_button)
 
@@ -2899,10 +2903,13 @@ func _refresh_account_ui() -> void:
 			account_title_label.text = LocScript.pick("PROFIL PENGGUNA", "USER PROFILE") if logged_in else LocScript.pick("AKUN LAMPOR", "LAMPOR ACCOUNT")
 	if logged_in:
 		_sync_profile_inputs_from_account(false)
+		call_deferred("_trigger_initial_friends_badge_fetch")
 	else:
 		_profile_dirty = false
 		_profile_loaded_for_uid = ""
 		_profile_draft_avatar = ""
+		_friends_initial_badge_uid = ""
+	_refresh_friends_button_badge()
 
 func _on_account_state_changed() -> void:
 	_refresh_account_ui()
@@ -4612,7 +4619,19 @@ func _build_friends_modal() -> void:
 	stack.add_theme_constant_override("separation", 12)
 	margin.add_child(stack)
 
-	var my_header := _make_label(LocScript.pick("TEMAN SAYA", "MY FRIENDS"), 13, HorrorTheme.PRIMARY, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
+	var req_header := _make_label(LocScript.pick("PERMINTAAN PERTEMANAN", "FRIEND REQUESTS"), 13, HorrorTheme.RELIC_BRASS, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
+	req_header.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stack.add_child(req_header)
+
+	friends_requests_list = VBoxContainer.new()
+	friends_requests_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	friends_requests_list.mouse_filter = Control.MOUSE_FILTER_PASS
+	friends_requests_list.add_theme_constant_override("separation", 8)
+	stack.add_child(friends_requests_list)
+
+	stack.add_child(HorrorTheme.make_hairline_divider())
+
+	var my_header := _make_label(LocScript.pick("DAFTAR TEMAN", "MY FRIENDS"), 13, HorrorTheme.PRIMARY, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
 	my_header.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	stack.add_child(my_header)
 
@@ -4624,7 +4643,7 @@ func _build_friends_modal() -> void:
 
 	stack.add_child(HorrorTheme.make_hairline_divider())
 
-	friends_directory_header = _make_label(LocScript.pick("AKUN PEMAIN (MAKS 10 TERATAS)", "PLAYERS DIRECTORY (TOP 10)"), 13, HorrorTheme.PRIMARY, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
+	friends_directory_header = _make_label(LocScript.pick("PEMAIN TERATAS · MAKS 10", "TOP PLAYERS · MAX 10"), 13, HorrorTheme.PRIMARY, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
 	friends_directory_header.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	stack.add_child(friends_directory_header)
 
@@ -4676,12 +4695,38 @@ func _on_friends_reset_pressed() -> void:
 		friends_search_input.clear()
 	_refresh_friends_data(false)
 
+func _trigger_initial_friends_badge_fetch() -> void:
+	var am: Variant = _am()
+	if am == null or not am.can_access_online_modes():
+		return
+	var uid: String = str(am.get("user_id")).strip_edges()
+	if uid.is_empty() or uid == _friends_initial_badge_uid or _friends_refresh_in_flight:
+		return
+	_friends_initial_badge_uid = uid
+	await _refresh_friends_data(true)
+
+func _refresh_friends_button_badge() -> void:
+	if not is_instance_valid(friends_button):
+		return
+	var am: Variant = _am()
+	var logged_in: bool = am != null and am.can_access_online_modes()
+	var pending_count: int = 0
+	if logged_in and "incoming_friend_requests" in am:
+		var reqs: Variant = am.get("incoming_friend_requests")
+		if reqs is Array:
+			pending_count = (reqs as Array).size()
+	if logged_in and pending_count > 0:
+		friends_button.text = LocScript.pick("TEMAN (%d)" % pending_count, "FRIENDS (%d)" % pending_count)
+	else:
+		friends_button.text = LocScript.pick("TEMAN", "FRIENDS")
+
 func _refresh_friends_data(silent: bool = false) -> void:
 	if not is_instance_valid(self) or not is_inside_tree():
 		return
 	var am: Variant = _am()
 	if am == null or not am.can_access_online_modes():
 		_sync_friends_modal_auth_state()
+		_refresh_friends_button_badge()
 		return
 	if _friends_refresh_in_flight:
 		return
@@ -4700,26 +4745,41 @@ func _refresh_friends_data(silent: bool = false) -> void:
 		return
 	if friends_refresh_btn:
 		friends_refresh_btn.disabled = false
+	_refresh_friends_button_badge()
 	if not bool(res.get("ok", false)):
 		if not silent:
 			_set_friends_status(_extract_error(res, "Gagal memuat daftar teman.", "Failed to load friends list."), HorrorTheme.ERROR)
 		return
 	var friends_arr: Array = res.get("friends", [])
 	var dir_arr: Array = res.get("directory", [])
-	var next_sig: String = _compute_friends_signature(friends_arr, dir_arr, _friends_search_query)
+	var incoming_arr: Array = res.get("incomingRequests", [])
+	var outgoing_arr: Array = res.get("outgoingRequests", [])
+	var next_sig: String = _compute_friends_signature(friends_arr, dir_arr, _friends_search_query, incoming_arr, outgoing_arr)
 	if not silent or next_sig != _friends_last_sig:
 		_friends_last_sig = next_sig
 		_render_friends_modal(friends_arr, dir_arr)
 
 func _on_friends_updated(friends_arr: Array, dir_arr: Array) -> void:
+	_refresh_friends_button_badge()
 	if friends_overlay and friends_overlay.visible:
-		var next_sig: String = _compute_friends_signature(friends_arr, dir_arr, _friends_search_query)
+		var am: Variant = _am()
+		var incoming_arr: Array = am.get("incoming_friend_requests") if (am != null and "incoming_friend_requests" in am and am.get("incoming_friend_requests") is Array) else []
+		var outgoing_arr: Array = am.get("outgoing_friend_requests") if (am != null and "outgoing_friend_requests" in am and am.get("outgoing_friend_requests") is Array) else []
+		var next_sig: String = _compute_friends_signature(friends_arr, dir_arr, _friends_search_query, incoming_arr, outgoing_arr)
 		if next_sig != _friends_last_sig or _friends_loading:
 			_friends_last_sig = next_sig
 			_render_friends_modal(friends_arr, dir_arr)
 
-func _compute_friends_signature(friends_arr: Array, dir_arr: Array, q: String) -> String:
+func _compute_friends_signature(friends_arr: Array, dir_arr: Array, q: String, incoming_arr: Array = [], outgoing_arr: Array = []) -> String:
 	var parts := PackedStringArray([q])
+	for ir_var: Variant in incoming_arr:
+		if ir_var is Dictionary:
+			var ir: Dictionary = ir_var as Dictionary
+			parts.append("IR|%s|%s|%s" % [str(ir.get("id", "")), "1" if bool(ir.get("isOnline", false)) else "0", "1" if bool(ir.get("isVerified", false)) else "0"])
+	for or_var: Variant in outgoing_arr:
+		if or_var is Dictionary:
+			var out_d: Dictionary = or_var as Dictionary
+			parts.append("OR|%s|%s" % [str(out_d.get("id", "")), "1" if bool(out_d.get("isOnline", false)) else "0"])
 	for f_var: Variant in friends_arr:
 		if f_var is Dictionary:
 			var f: Dictionary = f_var as Dictionary
@@ -4741,10 +4801,11 @@ func _compute_friends_signature(friends_arr: Array, dir_arr: Array, q: String) -
 			var d: Dictionary = d_var as Dictionary
 			var dar: Variant = d.get("activeRoom", null)
 			var dar_sig: String = str((dar as Dictionary).get("roomCode", "")) + ":" + str((dar as Dictionary).get("currentAct", 1)) if dar is Dictionary else ""
-			parts.append("D|%s|%s|%s|%s|%d|%s" % [
+			parts.append("D|%s|%s|%s|%s|%s|%d|%s" % [
 				str(d.get("id", "")),
 				"1" if bool(d.get("isOnline", false)) else "0",
 				"1" if bool(d.get("isFriend", false)) else "0",
+				str(d.get("friendshipStatus", "")),
 				"1" if bool(d.get("isVerified", false)) else "0",
 				int(d.get("totalWins", 0)),
 				dar_sig
@@ -4824,6 +4885,9 @@ func _make_friend_room_join_btn(active_room: Dictionary) -> Button:
 func _render_friends_modal(friends_arr: Array, dir_arr: Array) -> void:
 	if not is_instance_valid(friends_my_list) or not is_instance_valid(friends_directory_list):
 		return
+	if is_instance_valid(friends_requests_list):
+		for ch: Node in friends_requests_list.get_children():
+			ch.queue_free()
 	for ch: Node in friends_my_list.get_children():
 		ch.queue_free()
 	for ch: Node in friends_directory_list.get_children():
@@ -4831,21 +4895,121 @@ func _render_friends_modal(friends_arr: Array, dir_arr: Array) -> void:
 
 	if friends_directory_header:
 		if _friends_search_query.is_empty():
-			friends_directory_header.text = LocScript.pick("AKUN PEMAIN (MAKS 10 TERATAS)", "PLAYERS DIRECTORY (TOP 10)")
+			friends_directory_header.text = LocScript.pick("PEMAIN TERATAS · MAKS 10", "TOP PLAYERS · MAX 10")
 		else:
 			friends_directory_header.text = LocScript.pick("HASIL PENCARIAN: \"%s\"" % _friends_search_query, "SEARCH RESULTS: \"%s\"" % _friends_search_query)
 
-	if _friends_loading and friends_arr.is_empty() and dir_arr.is_empty():
+	var am: Variant = _am()
+	var incoming_arr: Array = am.get("incoming_friend_requests") if (am != null and "incoming_friend_requests" in am and am.get("incoming_friend_requests") is Array) else []
+	var outgoing_arr: Array = am.get("outgoing_friend_requests") if (am != null and "outgoing_friend_requests" in am and am.get("outgoing_friend_requests") is Array) else []
+
+	if _friends_loading and friends_arr.is_empty() and dir_arr.is_empty() and incoming_arr.is_empty() and outgoing_arr.is_empty():
 		var load_lbl := _make_label(LocScript.pick("Memuat daftar teman dan pemain...", "Loading friends and players..."), 12, HorrorTheme.ON_SURFACE_VARIANT, HORIZONTAL_ALIGNMENT_CENTER, "body-md")
 		load_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		friends_my_list.add_child(load_lbl)
 		return
 
+	if is_instance_valid(friends_requests_list):
+		if incoming_arr.is_empty() and outgoing_arr.is_empty():
+			var empty_req := _make_label(
+				LocScript.pick("Belum ada permintaan pertemanan masuk.", "No incoming friend requests."),
+				12, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "body-md"
+			)
+			empty_req.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			empty_req.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			friends_requests_list.add_child(empty_req)
+		else:
+			for ir_var: Variant in incoming_arr:
+				if not (ir_var is Dictionary):
+					continue
+				var req: Dictionary = ir_var as Dictionary
+				var req_uid: String = str(req.get("id", ""))
+				var req_uname: String = str(req.get("username", ""))
+				var req_card := PanelContainer.new()
+				req_card.mouse_filter = Control.MOUSE_FILTER_PASS
+				req_card.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOW, HorrorTheme.RELIC_BRASS, 2, 10, 8))
+				friends_requests_list.add_child(req_card)
+
+				var req_row := HBoxContainer.new()
+				req_row.mouse_filter = Control.MOUSE_FILTER_PASS
+				req_row.add_theme_constant_override("separation", 8)
+				req_card.add_child(req_row)
+
+				var req_info := VBoxContainer.new()
+				req_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				req_info.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				req_info.add_theme_constant_override("separation", 3)
+				req_row.add_child(req_info)
+
+				req_info.add_child(_build_player_identity_row(req))
+				var req_meta := _make_label(
+					LocScript.pick("Mengirim permintaan pertemanan · Menang: %d" % int(req.get("totalWins", 0)), "Sent you a friend request · Wins: %d" % int(req.get("totalWins", 0))),
+					11, HorrorTheme.RELIC_BRASS, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm"
+				)
+				req_meta.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				req_info.add_child(req_meta)
+
+				var req_btns := HBoxContainer.new()
+				req_btns.add_theme_constant_override("separation", 6)
+				req_btns.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+				req_row.add_child(req_btns)
+
+				var accept_btn := _make_button(LocScript.pick("TAMBAHKAN", "ADD"), true)
+				accept_btn.custom_minimum_size = Vector2(104.0, 34.0)
+				accept_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
+				accept_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+				accept_btn.pressed.connect(_on_accept_friend_request_pressed.bind(req_uid, req_uname))
+				req_btns.add_child(accept_btn)
+
+				var decline_btn := _make_button(LocScript.pick("TOLAK", "DECLINE"), false, "danger")
+				decline_btn.custom_minimum_size = Vector2(76.0, 34.0)
+				decline_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
+				decline_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+				decline_btn.pressed.connect(_on_decline_friend_request_pressed.bind(req_uid, req_uname, false))
+				req_btns.add_child(decline_btn)
+
+			for or_var: Variant in outgoing_arr:
+				if not (or_var is Dictionary):
+					continue
+				var out_d: Dictionary = or_var as Dictionary
+				var out_uid: String = str(out_d.get("id", ""))
+				var out_uname: String = str(out_d.get("username", ""))
+				var out_card := PanelContainer.new()
+				out_card.mouse_filter = Control.MOUSE_FILTER_PASS
+				out_card.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOW, HorrorTheme.BORDER_SUBTLE, 2, 10, 8))
+				friends_requests_list.add_child(out_card)
+
+				var out_row := HBoxContainer.new()
+				out_row.mouse_filter = Control.MOUSE_FILTER_PASS
+				out_row.add_theme_constant_override("separation", 8)
+				out_card.add_child(out_row)
+
+				var out_info := VBoxContainer.new()
+				out_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				out_info.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				out_info.add_theme_constant_override("separation", 3)
+				out_row.add_child(out_info)
+
+				out_info.add_child(_build_player_identity_row(out_d))
+				var out_tag := _make_label(
+					LocScript.pick("[MENUNGGU KONFIRMASI]", "[AWAITING CONFIRMATION]"),
+					11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm"
+				)
+				out_tag.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				out_info.add_child(out_tag)
+
+				var cancel_btn := _make_button(LocScript.pick("BATAL", "CANCEL"), false, "ghost")
+				cancel_btn.custom_minimum_size = Vector2(76.0, 34.0)
+				cancel_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
+				cancel_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+				cancel_btn.pressed.connect(_on_decline_friend_request_pressed.bind(out_uid, out_uname, true))
+				out_row.add_child(cancel_btn)
+
 	if friends_arr.is_empty():
 		var empty_f := _make_label(
 			LocScript.pick(
-				"Belum ada teman. Cari username pemain di atas atau tekan TAMBAH TEMAN dari daftar 10 pemain teratas di bawah.",
-				"No friends yet. Search by username above or press ADD FRIEND on the top 10 players below."
+				"Belum ada teman. Cari username pemain di atas atau tekan TAMBAHKAN dari daftar 10 pemain teratas di bawah.",
+				"No friends yet. Search by username above or press ADD on the top 10 players below."
 			),
 			12, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "body-md"
 		)
@@ -4921,9 +5085,22 @@ func _render_friends_modal(friends_arr: Array, dir_arr: Array) -> void:
 		if not (d_var is Dictionary):
 			continue
 		var d: Dictionary = d_var as Dictionary
+		var did: String = str(d.get("id", ""))
 		var uname: String = str(d.get("username", ""))
 		var is_self: bool = bool(d.get("isSelf", false))
 		var is_friend: bool = bool(d.get("isFriend", false))
+		var f_status: String = str(d.get("friendshipStatus", "")).strip_edges().to_lower()
+		if f_status.is_empty():
+			if is_self:
+				f_status = "self"
+			elif is_friend:
+				f_status = "friends"
+			elif bool(d.get("hasIncomingRequest", false)):
+				f_status = "incoming_pending"
+			elif bool(d.get("hasOutgoingRequest", false)):
+				f_status = "outgoing_pending"
+			else:
+				f_status = "none"
 
 		var card := PanelContainer.new()
 		card.mouse_filter = Control.MOUSE_FILTER_PASS
@@ -4956,20 +5133,37 @@ func _render_friends_modal(friends_arr: Array, dir_arr: Array) -> void:
 		action_row.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		row.add_child(action_row)
 
-		if is_self:
+		if f_status == "self":
 			var self_lbl := _make_label(LocScript.pick("[AKUN ANDA]", "[YOUR ACCOUNT]"), 11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_RIGHT, "mono-sm")
 			self_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			action_row.add_child(self_lbl)
-		elif is_friend:
+		elif f_status == "friends":
 			var fr_lbl := _make_label(LocScript.pick("[BERTEMAN]", "[FRIENDED]"), 11, HorrorTheme.SUCCESS_SAGE, HORIZONTAL_ALIGNMENT_RIGHT, "mono-sm")
 			fr_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			action_row.add_child(fr_lbl)
 			var dar_var: Variant = d.get("activeRoom", null)
 			if dar_var is Dictionary and not (dar_var as Dictionary).is_empty():
 				action_row.add_child(_make_friend_room_join_btn(dar_var as Dictionary))
+		elif f_status == "incoming_pending":
+			var accept_dir_btn := _make_button(LocScript.pick("TAMBAHKAN", "ADD"), true)
+			accept_dir_btn.custom_minimum_size = Vector2(104.0, 34.0)
+			accept_dir_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
+			accept_dir_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			accept_dir_btn.pressed.connect(_on_accept_friend_request_pressed.bind(did, uname))
+			action_row.add_child(accept_dir_btn)
+		elif f_status == "outgoing_pending":
+			var pend_lbl := _make_label(LocScript.pick("[MENUNGGU]", "[PENDING]"), 11, HorrorTheme.RELIC_BRASS, HORIZONTAL_ALIGNMENT_RIGHT, "mono-sm")
+			pend_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			action_row.add_child(pend_lbl)
+			var cancel_dir_btn := _make_button(LocScript.pick("BATAL", "CANCEL"), false, "ghost")
+			cancel_dir_btn.custom_minimum_size = Vector2(72.0, 34.0)
+			cancel_dir_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
+			cancel_dir_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			cancel_dir_btn.pressed.connect(_on_decline_friend_request_pressed.bind(did, uname, true))
+			action_row.add_child(cancel_dir_btn)
 		else:
-			var add_btn := _make_button(LocScript.pick("TAMBAH TEMAN", "ADD FRIEND"), true)
-			add_btn.custom_minimum_size = Vector2(124.0, 34.0)
+			var add_btn := _make_button(LocScript.pick("TAMBAHKAN", "ADD"), true)
+			add_btn.custom_minimum_size = Vector2(104.0, 34.0)
 			add_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
 			add_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			add_btn.pressed.connect(_on_add_friend_pressed.bind(uname))
@@ -4979,15 +5173,57 @@ func _on_add_friend_pressed(target_username: String) -> void:
 	var am: Variant = _am()
 	if am == null:
 		return
-	_set_friends_status(LocScript.pick("Menambahkan teman...", "Adding friend..."), HorrorTheme.ON_SURFACE_VARIANT)
+	_set_friends_status(LocScript.pick("Mengirim permintaan pertemanan...", "Sending friend request..."), HorrorTheme.ON_SURFACE_VARIANT)
 	var res: Dictionary = await am.add_friend_by_username(target_username)
 	if not is_instance_valid(self) or not is_inside_tree():
 		return
 	if bool(res.get("ok", false)):
-		_set_friends_status(LocScript.pick("Berhasil berteman dengan %s." % target_username, "Added %s as friend." % target_username), HorrorTheme.SUCCESS_SAGE)
+		var res_data: Dictionary = res.get("data", {}) if res.get("data") is Dictionary else {}
+		var req_status: String = str(res_data.get("status", "request_sent")).strip_edges().to_lower()
+		if req_status == "accepted" or req_status == "friends":
+			_set_friends_status(LocScript.pick("Berhasil berteman dengan %s." % target_username, "You are now friends with %s." % target_username), HorrorTheme.SUCCESS_SAGE)
+		else:
+			_set_friends_status(LocScript.pick("Permintaan pertemanan dikirim ke %s." % target_username, "Friend request sent to %s." % target_username), HorrorTheme.SUCCESS_SAGE)
 		await _refresh_friends_data(false)
 	else:
-		_set_friends_status(_extract_error(res, "Gagal menambahkan teman.", "Failed to add friend."), HorrorTheme.ERROR)
+		_set_friends_status(_extract_error(res, "Gagal mengirim permintaan pertemanan.", "Failed to send friend request."), HorrorTheme.ERROR)
+
+func _on_accept_friend_request_pressed(requester_user_id: String, target_username: String = "") -> void:
+	var am: Variant = _am()
+	if am == null:
+		return
+	_set_friends_status(LocScript.pick("Menerima permintaan pertemanan...", "Accepting friend request..."), HorrorTheme.ON_SURFACE_VARIANT)
+	var res: Dictionary = await am.accept_friend_request(requester_user_id)
+	if not is_instance_valid(self) or not is_inside_tree():
+		return
+	if bool(res.get("ok", false)):
+		var msg: String = LocScript.pick("Berhasil berteman dengan %s." % target_username, "Accepted friend request from %s." % target_username) if not target_username.is_empty() else LocScript.pick("Permintaan pertemanan diterima.", "Friend request accepted.")
+		_set_friends_status(msg, HorrorTheme.SUCCESS_SAGE)
+		await _refresh_friends_data(false)
+	else:
+		_set_friends_status(_extract_error(res, "Gagal menerima permintaan pertemanan.", "Failed to accept friend request."), HorrorTheme.ERROR)
+
+func _on_decline_friend_request_pressed(target_user_id: String, target_username: String = "", is_cancel: bool = false) -> void:
+	var am: Variant = _am()
+	if am == null:
+		return
+	_set_friends_status(
+		LocScript.pick("Membatalkan permintaan...", "Cancelling request...") if is_cancel else LocScript.pick("Menolak permintaan...", "Declining request..."),
+		HorrorTheme.ON_SURFACE_VARIANT
+	)
+	var res: Dictionary = await am.decline_friend_request(target_user_id)
+	if not is_instance_valid(self) or not is_inside_tree():
+		return
+	if bool(res.get("ok", false)):
+		var msg: String = ""
+		if is_cancel:
+			msg = LocScript.pick("Permintaan pertemanan ke %s dibatalkan." % target_username, "Cancelled friend request to %s." % target_username) if not target_username.is_empty() else LocScript.pick("Permintaan pertemanan dibatalkan.", "Friend request cancelled.")
+		else:
+			msg = LocScript.pick("Permintaan pertemanan dari %s ditolak." % target_username, "Declined friend request from %s." % target_username) if not target_username.is_empty() else LocScript.pick("Permintaan pertemanan ditolak.", "Friend request declined.")
+		_set_friends_status(msg, HorrorTheme.ON_SURFACE_VARIANT)
+		await _refresh_friends_data(false)
+	else:
+		_set_friends_status(_extract_error(res, "Gagal memproses permintaan pertemanan.", "Failed to process friend request."), HorrorTheme.ERROR)
 
 func _on_remove_friend_pressed(friend_user_id: String) -> void:
 	var am: Variant = _am()

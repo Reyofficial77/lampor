@@ -32,6 +32,7 @@ var _is_syncing_profile: bool = false
 var _pending_profile_sync: bool = false
 var _applying_cloud_profile: bool = false
 var _me_refresh_in_flight: bool = false
+var _session_verified_with_server: bool = false
 var _realtime_poll_accum: float = 0.0
 var _web_sync_pending: bool = false
 var _rx_username: RegEx = null
@@ -266,7 +267,8 @@ func api_request(method: String, path: String, body: Variant = null, use_auth: b
 	if msg.is_empty() and not final_ok:
 		msg = LocScript.network_error_label(status_code)
 
-	if status_code == 401 and not used_token.is_empty() and session_token == used_token:
+	var api_code: String = str(parsed_data.get("code", "")).strip_edges().to_upper()
+	if status_code == 401 and not used_token.is_empty() and session_token == used_token and api_code in ["", "SESSION_EXPIRED", "UNAUTHORIZED", "INVALID_SESSION"]:
 		_handle_session_expired(msg)
 
 	return {
@@ -433,8 +435,19 @@ func login_account(uname: String, pwd: String) -> Dictionary:
 func verify_saved_session() -> bool:
 	if session_token.is_empty():
 		return false
+	if _me_refresh_in_flight:
+		return is_logged_in
 	is_busy = true
-	var res: Dictionary = await api_request("GET", "/api/auth/me", null, true)
+	var res: Dictionary = {}
+	for attempt: int in range(2):
+		res = await api_request("GET", "/api/auth/me", null, true)
+		if bool(res.get("ok", false)):
+			break
+		var st_try: int = int(res.get("status", 0))
+		if st_try == 401 or st_try == 403:
+			break
+		if attempt == 0 and is_inside_tree():
+			await get_tree().create_timer(0.8, true, false, true).timeout
 	is_busy = false
 
 	if bool(res.get("ok", false)):
@@ -447,6 +460,7 @@ func verify_saved_session() -> bool:
 					"The admin_lampor account is reserved for the web Admin Dashboard and cannot be played in-game."
 				))
 				return false
+			_session_verified_with_server = true
 			is_logged_in = true
 			is_guest_mode = false
 			account_gate_resolved = true
@@ -463,7 +477,14 @@ func verify_saved_session() -> bool:
 		_handle_session_expired(str(res.get("message", "")))
 		return false
 
+	# Pertahankan sesi lokal saat gangguan jaringan/timeout/cold-start server agar pemain
+	# tidak dipaksa login ulang setiap kali membuka game.
 	last_error = str(res.get("message", ""))
+	if not session_token.is_empty():
+		is_logged_in = true
+		is_guest_mode = false
+		account_gate_resolved = true
+		return true
 	is_logged_in = false
 	account_gate_resolved = false
 	return false
@@ -875,6 +896,8 @@ func _apply_server_user_to_game_manager(user_data: Dictionary) -> void:
 	SignalBus.coins_changed.emit(GameManager.coins)
 
 func _save_account_storage() -> void:
+	if DisplayServer.get_name() == "headless":
+		return
 	var cfg := ConfigFile.new()
 	cfg.set_value("account", "token", session_token)
 	cfg.set_value("account", "user_id", user_id)
@@ -908,7 +931,7 @@ func _load_account_storage() -> void:
 	var saved_verified: bool = bool(cfg.get_value("account", "is_verified", false))
 	var saved_guest: bool = bool(cfg.get_value("account", "is_guest", false))
 
-	if not saved_token.is_empty():
+	if not saved_token.is_empty() and saved_uname.to_lower() != "admin_lampor":
 		session_token = saved_token
 		user_id = saved_uid
 		username = saved_uname
@@ -917,9 +940,10 @@ func _load_account_storage() -> void:
 		avatar_url = saved_avatar
 		role = saved_role if not saved_role.is_empty() else "player"
 		is_verified = saved_verified
-		is_logged_in = false
+		is_logged_in = true
 		is_guest_mode = false
-		account_gate_resolved = false
+		account_gate_resolved = true
+		_session_verified_with_server = false
 	elif saved_guest:
 		session_token = ""
 		user_id = ""
@@ -933,6 +957,8 @@ func _load_account_storage() -> void:
 		account_gate_resolved = true
 
 func _clear_account_storage() -> void:
+	if DisplayServer.get_name() == "headless":
+		return
 	if FileAccess.file_exists(ACCOUNT_CFG_PATH):
 		var abs_path: String = ProjectSettings.globalize_path(ACCOUNT_CFG_PATH)
 		if DirAccess.remove_absolute(abs_path) != OK:
@@ -1006,3 +1032,5 @@ func _schedule_web_account_reconcile() -> void:
 		_load_account_storage()
 		if account_gate_resolved:
 			SignalBus.account_state_changed.emit()
+			if can_access_online_modes():
+				verify_saved_session()

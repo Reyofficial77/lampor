@@ -31,6 +31,7 @@ var _poll_elapsed: float = 0.0
 var _sync_in_flight: bool = false
 var _is_leaving: bool = false
 var _last_room_status: String = ""
+var is_friend_joinable_singleplayer: bool = false
 var _pending_events: Array[Dictionary] = []
 var _pending_voice_events: Array[Dictionary] = []
 var voice_chat: Node = null
@@ -264,6 +265,28 @@ func toggle_mic() -> bool:
 		return false
 	return bool(voice_chat.call("toggle_mic"))
 
+func has_mic_permission() -> bool:
+	return voice_chat != null and bool(voice_chat.call("has_mic_permission"))
+
+func request_mic_permission_and_enable() -> String:
+	if voice_chat == null:
+		return "unavailable"
+	return str(voice_chat.call("request_mic_permission_and_enable"))
+
+func confirm_mic_permission_grant() -> String:
+	if voice_chat == null:
+		return "unavailable"
+	return str(voice_chat.call("confirm_mic_permission_grant"))
+
+func deny_mic_permission() -> void:
+	if voice_chat != null:
+		voice_chat.call("deny_mic_permission")
+
+func get_active_mic_device_name() -> String:
+	if voice_chat == null:
+		return "Default"
+	return str(voice_chat.call("get_active_input_device_name"))
+
 func is_local_speaking() -> bool:
 	return voice_chat != null and bool(voice_chat.get("local_speaking"))
 
@@ -305,12 +328,74 @@ func reset_to_singleplayer() -> void:
 	session_mode = "singleplayer"
 	is_online_session = false
 	is_room_owner = false
+	is_friend_joinable_singleplayer = false
 	ping_ms = 0
 	last_event_seq = 0
 	server_announcement = ""
 	_poll_elapsed = 0.0
 	_sync_in_flight = false
 	_last_room_status = ""
+
+func has_remote_peers_joined() -> bool:
+	return room_players.size() > 1 or not remote_players.is_empty()
+
+func open_singleplayer_for_friends(difficulty_str: String, initial_act: int = 1, furnace_burning_val: bool = false) -> Dictionary:
+	if DisplayServer.get_name() == "headless":
+		return {"ok": false, "skipped": true}
+	if not SettingsManager.allow_friend_join_singleplayer:
+		return {"ok": false, "skipped": true}
+	if GameManager.is_tutorial_mode or GameManager.is_sandbox_mode:
+		return {"ok": false, "skipped": true}
+	if initial_act >= 3 or furnace_burning_val:
+		return {"ok": false, "skipped": true}
+	var am: Variant = _am()
+	if am == null or not am.can_access_online_modes():
+		return {"ok": false, "skipped": true}
+	if is_online_session:
+		return {"ok": true, "alreadyOpen": true}
+
+	var diff_norm: String = difficulty_str.strip_edges().to_lower()
+	if diff_norm not in ["easy", "normal", "hard", "nightmare"]:
+		diff_norm = "normal"
+	var disp_name: String = str(am.call("get_effective_display_name")) if am.has_method("get_effective_display_name") else str(am.get("username"))
+	if disp_name.strip_edges().is_empty():
+		disp_name = "Pemain"
+
+	var body: Dictionary = {
+		"name": ("Solo " + disp_name).left(40),
+		"mode": "multiplayer",
+		"maxPlayers": 4,
+		"difficulty": diff_norm,
+		"canUseShopItems": true,
+		"allowLateJoin": true,
+		"friendsOnly": true,
+		"startImmediately": true,
+		"initialWorldState": {
+			"act": clampi(initial_act, 1, 3),
+			"furnaceBurning": furnace_burning_val,
+			"hour": GameManager.current_hour,
+			"minute": GameManager.current_minute
+		}
+	}
+	var res: Dictionary = await am.api_request("POST", "/api/rooms/create", body, true)
+	if not bool(res.get("ok", false)):
+		return res
+	var data: Dictionary = res.get("data", {})
+	_apply_room_response(data, true)
+	if GameManager.current_state != GameManager.GameState.PLAYING or GameManager.is_sandbox_mode or GameManager.is_tutorial_mode or not SettingsManager.allow_friend_join_singleplayer:
+		await leave_room()
+		return {"ok": false, "cancelled": true}
+	is_online_session = true
+	is_room_owner = true
+	session_mode = "multiplayer"
+	is_friend_joinable_singleplayer = true
+	_last_room_status = "playing"
+	SignalBus.multiplayer_room_updated.emit(current_room, room_players)
+	return res
+
+func close_singleplayer_for_friends_if_solo() -> void:
+	if is_online_session and is_friend_joinable_singleplayer and not has_remote_peers_joined():
+		await leave_room()
 
 func _get_current_room_id() -> String:
 	return str(current_room.get("id", current_room.get("roomId", ""))).strip_edges()

@@ -58,6 +58,7 @@ var redeem_input: LineEdit
 var redeem_button: Button
 var redeem_result_label: Label
 var auto_update_check: CheckButton
+var friend_join_sp_check: CheckButton
 var update_button: Button
 var update_check_button: Button
 var update_status_label: Label
@@ -247,6 +248,17 @@ var friends_outgoing_list: VBoxContainer
 var friends_directory_header: Label
 var friends_directory_list: VBoxContainer
 var friends_button: Button = null
+var right_icon_rail: VBoxContainer
+var inbox_button: Button
+var guide_button: Button
+var inbox_overlay: ColorRect
+var inbox_panel: PanelContainer
+var inbox_scroll: ScrollContainer
+var inbox_list: VBoxContainer
+var _friends_icon_ctrl: Control
+var _inbox_icon_ctrl: Control
+var _friends_has_pending_dot: bool = false
+var _inbox_has_unread_dot: bool = false
 var profile_status_badge_label: Label
 var _friends_active_tab: String = "list"
 var _friends_refresh_in_flight: bool = false
@@ -297,9 +309,11 @@ func _ready() -> void:
 		call_deferred("_run_initial_account_gate")
 	else:
 		_refresh_account_ui()
-		if am != null and am.can_access_online_modes() and am.has_method("refresh_profile_from_server"):
-			am.call_deferred("refresh_profile_from_server")
-			call_deferred("_trigger_initial_friends_badge_fetch")
+		if am != null and am.can_access_online_modes():
+			call_deferred("_verify_saved_session_background")
+	var mp_ready: Variant = _mp()
+	if mp_ready != null and bool(mp_ready.get("is_online_session")) and bool(mp_ready.get("is_friend_joinable_singleplayer")):
+		mp_ready.call("leave_room")
 
 func _on_coins_changed(_new_coins: int) -> void:
 	_refresh_currency_display()
@@ -410,10 +424,6 @@ func _build_menu() -> void:
 	start_button.pressed.connect(func() -> void: _open_modal(warning_overlay, warning_panel))
 	menu_buttons.add_child(start_button)
 
-	friends_button = _make_nav_button(LocScript.pick("TEMAN", "FRIENDS"))
-	friends_button.pressed.connect(_open_friends_modal)
-	menu_buttons.add_child(friends_button)
-
 	var shop_button := _make_nav_button(LocScript.pick("TOKO BEKAL", "SUPPLY SHOP"))
 	shop_button.pressed.connect(func() -> void:
 		var am_s: Variant = _am()
@@ -431,13 +441,34 @@ func _build_menu() -> void:
 	)
 	menu_buttons.add_child(settings_button)
 
-	fix_notes_button = _make_nav_button(LocScript.pick("CATATAN PEMBARUAN", "PATCH NOTES"))
-	fix_notes_button.pressed.connect(_show_fix_notes)
-	menu_buttons.add_child(fix_notes_button)
+	right_icon_rail = VBoxContainer.new()
+	right_icon_rail.name = "RightIconRail"
+	right_icon_rail.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
+	right_icon_rail.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	right_icon_rail.grow_vertical = Control.GROW_DIRECTION_BOTH
+	right_icon_rail.add_theme_constant_override("separation", 10)
+	add_child(right_icon_rail)
 
-	var credits_button := _make_nav_button(LocScript.pick("HAK CIPTA", "CREDITS"))
-	credits_button.pressed.connect(func() -> void: _open_modal(credits_overlay, credits_panel))
-	menu_buttons.add_child(credits_button)
+	friends_button = _make_icon_rail_button("friends", LocScript.pick("Teman", "Friends"))
+	friends_button.pressed.connect(_open_friends_modal)
+	right_icon_rail.add_child(friends_button)
+	_friends_icon_ctrl = friends_button.get_node("IconDraw")
+
+	inbox_button = _make_icon_rail_button("inbox", LocScript.pick("Kotak Masuk", "Inbox"))
+	inbox_button.pressed.connect(_open_inbox_modal)
+	right_icon_rail.add_child(inbox_button)
+	_inbox_icon_ctrl = inbox_button.get_node("IconDraw")
+
+	fix_notes_button = _make_icon_rail_button("changelog", LocScript.pick("Catatan Pembaruan", "Patch Notes"))
+	fix_notes_button.pressed.connect(_show_fix_notes)
+	right_icon_rail.add_child(fix_notes_button)
+
+	guide_button = _make_icon_rail_button("guide", LocScript.pick("Panduan", "Guide"))
+	guide_button.pressed.connect(func() -> void:
+		_select_settings_tab(1)
+		_open_modal(settings_overlay, settings_panel)
+	)
+	right_icon_rail.add_child(guide_button)
 
 	top_right_bar = HBoxContainer.new()
 	top_right_bar.name = "TopRightBar"
@@ -467,13 +498,6 @@ func _build_menu() -> void:
 	top_account_badge.visible = false
 	top_chip_hbox.add_child(top_account_badge)
 
-	account_btn = Button.new()
-	account_btn.text = LocScript.pick("AKUN / MASUK", "ACCOUNT / SIGN IN")
-	account_btn.custom_minimum_size = Vector2(0.0, 36.0)
-	HorrorTheme.style_button(account_btn, "secondary", 11, true)
-	account_btn.pressed.connect(func() -> void: _open_account_modal(0))
-	top_right_bar.add_child(account_btn)
-
 	admin_panel_btn = Button.new()
 	admin_panel_btn.text = "ADMIN [ALT+F2]"
 	admin_panel_btn.visible = GameManager.is_logged_in_admin()
@@ -490,22 +514,28 @@ func _build_menu() -> void:
 	update_button.pressed.connect(_on_update_button_pressed)
 	top_right_bar.add_child(update_button)
 
+	account_btn = Button.new()
+	account_btn.text = LocScript.pick("AKUN / MASUK", "ACCOUNT / SIGN IN")
+	account_btn.custom_minimum_size = Vector2(0.0, 36.0)
+	HorrorTheme.style_button(account_btn, "secondary", 11, true)
+	account_btn.pressed.connect(func() -> void: _open_account_modal(0))
+	top_right_bar.add_child(account_btn)
+
+	exit_button = _make_icon_rail_button("exit_red", LocScript.pick("Keluar", "Quit"), true)
+	exit_button.custom_minimum_size = Vector2(36.0, 36.0)
+	exit_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	exit_button.pressed.connect(func() -> void: get_tree().quit())
+	top_right_bar.add_child(exit_button)
+
 	version_label = _make_label(GAME_VERSION, 12, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_RIGHT, "mono-sm")
-	top_right_bar.add_child(version_label)
+	version_label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	version_label.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	version_label.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	add_child(version_label)
 
 	copyright_label = _make_label("© 2026 AstraDev", 11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm")
 	copyright_label.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	add_child(copyright_label)
-
-	exit_button = Button.new()
-	exit_button.text = LocScript.pick("KELUAR", "QUIT")
-	HorrorTheme.style_button(exit_button, "ghost", 12, true)
-	exit_button.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	exit_button.grow_horizontal = Control.GROW_DIRECTION_BEGIN
-	exit_button.grow_vertical = Control.GROW_DIRECTION_BEGIN
-	exit_button.custom_minimum_size = Vector2(104.0, 44.0)
-	exit_button.pressed.connect(func() -> void: get_tree().quit())
-	add_child(exit_button)
 
 	_build_warning_modal()
 	_build_mode_select_modal()
@@ -521,6 +551,7 @@ func _build_menu() -> void:
 	_build_create_room_modal()
 	_build_room_lobby_modal()
 	_build_friends_modal()
+	_build_inbox_modal()
 	_refresh_account_ui()
 
 func _open_modal(overlay: ColorRect, panel: PanelContainer) -> void:
@@ -792,6 +823,15 @@ func _build_difficulty_modal() -> void:
 	var modal: Dictionary = _create_modal(LocScript.pick("PILIH TINGKAT KESULITAN", "SELECT DIFFICULTY"))
 	difficulty_overlay = modal["overlay"] as ColorRect
 	difficulty_panel = modal["panel"] as PanelContainer
+	var diff_close_btn: Button = modal.get("close_button") as Button
+	if is_instance_valid(diff_close_btn):
+		for c: Dictionary in diff_close_btn.pressed.get_connections():
+			diff_close_btn.pressed.disconnect(c["callable"])
+		diff_close_btn.pressed.connect(func() -> void:
+			difficulty_overlay.visible = false
+			_reset_mode_select_lock_notice()
+			_open_modal(mode_select_overlay, mode_select_panel)
+		)
 	var body: VBoxContainer = modal["body"] as VBoxContainer
 	var hint := _make_label(
 		LocScript.pick(
@@ -866,6 +906,14 @@ func _build_settings_modal() -> void:
 	var modal: Dictionary = _create_modal(LocScript.pick("PENGATURAN & PANDUAN", "SETTINGS & GUIDE"))
 	settings_overlay = modal["overlay"] as ColorRect
 	settings_panel = modal["panel"] as PanelContainer
+	var settings_close_btn: Button = modal.get("close_button") as Button
+	if is_instance_valid(settings_close_btn):
+		for c: Dictionary in settings_close_btn.pressed.get_connections():
+			settings_close_btn.pressed.disconnect(c["callable"])
+		settings_close_btn.pressed.connect(func() -> void:
+			_cancel_keybind_listening()
+			settings_overlay.visible = false
+		)
 	var body: VBoxContainer = modal["body"] as VBoxContainer
 
 	var tab_row := HBoxContainer.new()
@@ -1020,6 +1068,14 @@ func _build_settings_modal() -> void:
 	HorrorTheme.style_check_button(auto_update_check)
 	settings_tab_box.add_child(auto_update_check)
 
+	friend_join_sp_check = CheckButton.new()
+	friend_join_sp_check.text = LocScript.pick("Izinkan Teman Gabung Singleplayer", "Allow Friends to Join Singleplayer")
+	friend_join_sp_check.custom_minimum_size.y = 42.0
+	friend_join_sp_check.button_pressed = SettingsManager.allow_friend_join_singleplayer
+	friend_join_sp_check.toggled.connect(func(pressed: bool) -> void: SettingsManager.set_allow_friend_join_singleplayer(pressed))
+	HorrorTheme.style_check_button(friend_join_sp_check)
+	settings_tab_box.add_child(friend_join_sp_check)
+
 	update_check_button = _make_button(LocScript.pick("PERIKSA PEMBARUAN GAME", "CHECK FOR UPDATES"))
 	update_check_button.pressed.connect(func() -> void:
 		update_check_button.text = LocScript.pick("MEMERIKSA PEMBARUAN...", "CHECKING FOR UPDATES...")
@@ -1083,13 +1139,6 @@ func _build_settings_modal() -> void:
 	guide.add_theme_constant_override("line_separation", 6)
 	guide.text = _build_guide_bbcode()
 	guide_tab_box.add_child(guide)
-
-	var close := _make_button(LocScript.pick("TUTUP", "CLOSE"), false, "ghost")
-	close.pressed.connect(func() -> void:
-		_cancel_keybind_listening()
-		settings_overlay.visible = false
-	)
-	body.add_child(close)
 
 func _build_guide_bbcode() -> String:
 	var move_k: String = _sm_get_move_keys_summary()
@@ -1316,10 +1365,6 @@ func _build_shop_modal() -> void:
 	shop_result_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_child(shop_result_label)
 
-	var close := _make_button(LocScript.pick("TUTUP", "CLOSE"), false, "ghost")
-	close.pressed.connect(func() -> void: shop_overlay.visible = false)
-	body.add_child(close)
-
 func _add_shop_offer(parent: VBoxContainer, title_text: String, description: String, price_text: String, item_id: String, quantity: int) -> void:
 	if parent.get_child_count() > 0:
 		parent.add_child(HorrorTheme.make_hairline_divider(Color(HorrorTheme.OUTLINE_VARIANT.r, HorrorTheme.OUTLINE_VARIANT.g, HorrorTheme.OUTLINE_VARIANT.b, 0.35)))
@@ -1484,6 +1529,10 @@ func _on_continue_pressed() -> void:
 	GameManager.is_sandbox_mode = false
 	if GameManager.has_saved_run():
 		GameManager.resume_saved_game()
+		if mp != null and SettingsManager.allow_friend_join_singleplayer and not GameManager.is_tutorial_mode and not GameManager.is_sandbox_mode:
+			var diff_arr: Array[String] = ["easy", "normal", "hard", "nightmare"]
+			var diff_str: String = diff_arr[clampi(int(GameManager.selected_difficulty), 0, 3)]
+			mp.call("open_singleplayer_for_friends", diff_str, GameManager.get_current_act_number(), GameManager.furnace_burning)
 	else:
 		if continue_button:
 			continue_button.visible = false
@@ -1514,6 +1563,7 @@ func _on_update_available(commit_sha: String, commit_message: String) -> void:
 			update_status_label.text = LocScript.pick("Commit %s sudah terpasang." % commit_sha.substr(0, 10), "Commit %s is already installed." % commit_sha.substr(0, 10))
 		else:
 			update_status_label.text = LocScript.pick("Commit terbaru %s: %s" % [commit_sha.substr(0, 10), commit_message], "Latest commit %s: %s" % [commit_sha.substr(0, 10), commit_message])
+	_refresh_friends_button_badge()
 
 func _on_update_up_to_date(commit_sha: String) -> void:
 	if is_instance_valid(update_check_button):
@@ -1522,11 +1572,13 @@ func _on_update_up_to_date(commit_sha: String) -> void:
 		update_status_label.text = LocScript.pick("Game sudah sama dengan commit terbaru (%s)." % commit_sha.substr(0, 10), "Game is up to date (%s)." % commit_sha.substr(0, 10))
 	if is_instance_valid(update_button):
 		update_button.visible = false
+	_refresh_friends_button_badge()
 
 func _on_update_installed(destination_path: String, commit_sha: String, applied_to_project: bool) -> void:
 	if is_instance_valid(update_button):
 		update_button.disabled = false
 		update_button.visible = false
+	_refresh_friends_button_badge()
 	if is_instance_valid(update_check_button):
 		update_check_button.text = LocScript.pick("PERIKSA PEMBARUAN GAME", "CHECK FOR UPDATES")
 	if applied_to_project:
@@ -1548,7 +1600,7 @@ func _on_update_installed(destination_path: String, commit_sha: String, applied_
 			update_button.tooltip_text = destination_path
 
 func _build_update_restart_modal() -> void:
-	var modal: Dictionary = _create_modal(LocScript.pick("PEMBARUAN SIAP", "UPDATE READY"))
+	var modal: Dictionary = _create_modal(LocScript.pick("PEMBARUAN SIAP", "UPDATE READY"), false)
 	update_restart_overlay = modal["overlay"] as ColorRect
 	update_restart_panel = modal["panel"] as PanelContainer
 	var body: VBoxContainer = modal["body"] as VBoxContainer
@@ -1624,6 +1676,7 @@ func _on_update_failed(message: String) -> void:
 		update_check_button.text = LocScript.pick("PERIKSA PEMBARUAN GAME", "CHECK FOR UPDATES")
 	if update_status_label:
 		update_status_label.text = message
+	_refresh_friends_button_badge()
 
 func _on_update_button_pressed() -> void:
 	update_button.disabled = true
@@ -1694,10 +1747,6 @@ func _build_fix_notes_modal() -> void:
 	fix_notes_more_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	fix_notes_more_label.visible = false
 	notes_column.add_child(fix_notes_more_label)
-
-	var close := _make_button(LocScript.pick("TUTUP", "CLOSE"), false, "ghost")
-	close.pressed.connect(func() -> void: fix_notes_overlay.visible = false)
-	body.add_child(close)
 
 func _ensure_markdown_regexes() -> void:
 	if _rx_inline_code != null:
@@ -1797,6 +1846,8 @@ func _get_active_scroll_container() -> ScrollContainer:
 		return mp_rooms_scroll
 	if top_ov == friends_overlay and friends_scroll:
 		return friends_scroll
+	if top_ov == inbox_overlay and inbox_scroll:
+		return inbox_scroll
 	if top_ov == create_room_overlay and create_room_scroll:
 		return create_room_scroll
 	if top_ov == room_lobby_overlay:
@@ -2067,11 +2118,7 @@ func _build_credits_modal() -> void:
 	copy.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.add_child(copy)
 
-	var close := _make_button(LocScript.pick("TUTUP", "CLOSE"), false, "ghost")
-	close.pressed.connect(func() -> void: credits_overlay.visible = false)
-	body.add_child(close)
-
-func _create_modal(title_text: String) -> Dictionary:
+func _create_modal(title_text: String, show_close_x: bool = true) -> Dictionary:
 	var overlay := ColorRect.new()
 	overlay.color = Color(HorrorTheme.SCRIM_DARK.r, HorrorTheme.SCRIM_DARK.g, HorrorTheme.SCRIM_DARK.b, 0.78)
 	overlay.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -2097,15 +2144,29 @@ func _create_modal(title_text: String) -> Dictionary:
 	header_box.add_theme_constant_override("separation", 8)
 	body.add_child(header_box)
 
+	var header_row := HBoxContainer.new()
+	header_row.add_theme_constant_override("separation", 10)
+	header_box.add_child(header_row)
+
 	var title := _make_label(title_text, 19, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "headline-md")
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	header_box.add_child(title)
+	header_row.add_child(title)
+
+	var close_x_btn: Button = _make_icon_rail_button("close_x", LocScript.pick("Tutup", "Close"), false)
+	close_x_btn.custom_minimum_size = Vector2(34.0, 34.0)
+	close_x_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
+	close_x_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	close_x_btn.text = ""
+	close_x_btn.visible = show_close_x
+	close_x_btn.pressed.connect(func() -> void: overlay.visible = false)
+	header_row.add_child(close_x_btn)
 
 	header_box.add_child(HorrorTheme.make_hairline_divider())
 
 	modal_overlays.append(overlay)
 	modal_panels.append(panel)
-	return {"overlay": overlay, "panel": panel, "body": body, "title_label": title}
+	return {"overlay": overlay, "panel": panel, "body": body, "title_label": title, "close_button": close_x_btn}
 
 func _make_label(text_value: String, font_size: int, color: Color, alignment: int, role: String = "body-md") -> Label:
 	var label := Label.new()
@@ -2224,8 +2285,160 @@ func _make_button(text_value: String, primary: bool = false, variant_override: S
 	HorrorTheme.style_button(button, variant, 13, true)
 	return button
 
+func _make_icon_rail_button(icon_kind: String, tooltip_txt: String, is_red_exit: bool = false) -> Button:
+	var button := Button.new()
+	button.text = ""
+	button.tooltip_text = tooltip_txt
+	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	button.custom_minimum_size = Vector2(46.0, 46.0)
+	var normal_style: StyleBoxFlat
+	var hover_style: StyleBoxFlat
+	var pressed_style: StyleBoxFlat
+	if is_red_exit:
+		normal_style = HorrorTheme.make_chip_style(Color(0.18, 0.05, 0.05, 0.92), Color(0.85, 0.22, 0.22, 0.72), 4, 0, 0)
+		hover_style = HorrorTheme.make_chip_style(Color(0.32, 0.07, 0.07, 0.96), Color(0.95, 0.28, 0.28, 0.95), 4, 0, 0)
+		pressed_style = HorrorTheme.make_chip_style(Color(0.42, 0.09, 0.09, 0.98), Color(1.0, 0.35, 0.35, 1.0), 4, 0, 0)
+	else:
+		normal_style = HorrorTheme.make_chip_style(Color(HorrorTheme.SURFACE_LOWEST.r, HorrorTheme.SURFACE_LOWEST.g, HorrorTheme.SURFACE_LOWEST.b, 0.90), HorrorTheme.OUTLINE_VARIANT, 4, 0, 0)
+		hover_style = HorrorTheme.make_chip_style(Color(HorrorTheme.SURFACE_HIGH.r, HorrorTheme.SURFACE_HIGH.g, HorrorTheme.SURFACE_HIGH.b, 0.94), HorrorTheme.BORDER_INTERACTIVE, 4, 0, 0)
+		pressed_style = HorrorTheme.make_chip_style(HorrorTheme.SECONDARY_CONTAINER, HorrorTheme.ACCENT, 4, 0, 0)
+	var focus_style := hover_style.duplicate() as StyleBoxFlat
+	focus_style.border_color = Color(0.95, 0.28, 0.28, 1.0) if is_red_exit else HorrorTheme.PRIMARY
+	focus_style.set_border_width_all(2)
+	button.add_theme_stylebox_override("normal", normal_style)
+	button.add_theme_stylebox_override("hover", hover_style)
+	button.add_theme_stylebox_override("pressed", pressed_style)
+	button.add_theme_stylebox_override("focus", focus_style)
+	button.add_theme_stylebox_override("disabled", normal_style)
+
+	var icon_ctrl := Control.new()
+	icon_ctrl.name = "IconDraw"
+	icon_ctrl.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	icon_ctrl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon_ctrl.draw.connect(_draw_menu_icon.bind(icon_ctrl, icon_kind))
+	button.add_child(icon_ctrl)
+	return button
+
+func _draw_menu_icon(ctrl: Control, icon_kind: String) -> void:
+	if not is_instance_valid(ctrl):
+		return
+	var s: float = minf(ctrl.size.x, ctrl.size.y)
+	if s <= 2.0:
+		return
+	var c: Vector2 = ctrl.size * 0.5
+	var lw: float = maxf(1.6, s * 0.045)
+	var col: Color = HorrorTheme.ON_SURFACE
+
+	match icon_kind:
+		"friends":
+			var dim_col := Color(col.r, col.g, col.b, 0.82)
+			# Back person (right)
+			ctrl.draw_circle(Vector2(c.x + s * 0.14, c.y - s * 0.15), s * 0.072, dim_col)
+			ctrl.draw_arc(Vector2(c.x + s * 0.14, c.y + s * 0.15), s * 0.13, PI * 1.32, TAU, 14, dim_col, lw * 1.1, true)
+			ctrl.draw_line(Vector2(c.x + s * 0.09, c.y + s * 0.15), Vector2(c.x + s * 0.27, c.y + s * 0.15), dim_col, lw * 1.1, true)
+			# Front person (left)
+			ctrl.draw_circle(Vector2(c.x - s * 0.09, c.y - s * 0.12), s * 0.092, col)
+			ctrl.draw_arc(Vector2(c.x - s * 0.09, c.y + s * 0.20), s * 0.17, PI, TAU, 18, col, lw * 1.2, true)
+			ctrl.draw_line(Vector2(c.x - s * 0.26, c.y + s * 0.20), Vector2(c.x + s * 0.08, c.y + s * 0.20), col, lw * 1.2, true)
+			if _friends_has_pending_dot:
+				var dot_pos := Vector2(ctrl.size.x - s * 0.18, s * 0.18)
+				ctrl.draw_circle(dot_pos, s * 0.105, Color(HorrorTheme.ACCENT.r, HorrorTheme.ACCENT.g, HorrorTheme.ACCENT.b, 0.38))
+				ctrl.draw_circle(dot_pos, s * 0.068, HorrorTheme.RELIC_BRASS)
+		"inbox":
+			var ew: float = s * 0.54
+			var eh: float = s * 0.38
+			var env_rect := Rect2(c.x - ew * 0.5, c.y - eh * 0.5, ew, eh)
+			ctrl.draw_rect(env_rect, col, false, lw)
+			var flap := PackedVector2Array([
+				Vector2(env_rect.position.x + lw * 0.35, env_rect.position.y + lw * 0.35),
+				Vector2(c.x, c.y + eh * 0.08),
+				Vector2(env_rect.end.x - lw * 0.35, env_rect.position.y + lw * 0.35)
+			])
+			ctrl.draw_polyline(flap, col, lw, true)
+			if _inbox_has_unread_dot:
+				var dot_pos := Vector2(ctrl.size.x - s * 0.18, s * 0.18)
+				ctrl.draw_circle(dot_pos, s * 0.105, Color(HorrorTheme.ACCENT.r, HorrorTheme.ACCENT.g, HorrorTheme.ACCENT.b, 0.38))
+				ctrl.draw_circle(dot_pos, s * 0.068, HorrorTheme.RELIC_BRASS)
+		"changelog":
+			var doc_w: float = s * 0.42
+			var doc_h: float = s * 0.54
+			var doc_rect := Rect2(c.x - doc_w * 0.5, c.y - doc_h * 0.5, doc_w, doc_h)
+			ctrl.draw_rect(doc_rect, col, false, lw)
+			var lx1: float = doc_rect.position.x + doc_w * 0.22
+			var lx2: float = doc_rect.end.x - doc_w * 0.22
+			ctrl.draw_line(Vector2(lx1, doc_rect.position.y + doc_h * 0.30), Vector2(lx2, doc_rect.position.y + doc_h * 0.30), col, lw, true)
+			ctrl.draw_line(Vector2(lx1, doc_rect.position.y + doc_h * 0.50), Vector2(lx2, doc_rect.position.y + doc_h * 0.50), col, lw, true)
+			ctrl.draw_line(Vector2(lx1, doc_rect.position.y + doc_h * 0.70), Vector2(lx2 - doc_w * 0.16, doc_rect.position.y + doc_h * 0.70), col, lw, true)
+		"guide":
+			var bw: float = s * 0.56
+			var bh: float = s * 0.42
+			var left_x: float = c.x - bw * 0.5
+			var right_x: float = c.x + bw * 0.5
+			var top_y: float = c.y - bh * 0.48
+			var bot_y: float = c.y + bh * 0.44
+			var spine_top := Vector2(c.x, top_y + bh * 0.10)
+			var spine_bot := Vector2(c.x, bot_y + bh * 0.08)
+			var left_page := PackedVector2Array([
+				spine_top,
+				Vector2(left_x, top_y),
+				Vector2(left_x, bot_y),
+				spine_bot
+			])
+			var right_page := PackedVector2Array([
+				spine_top,
+				Vector2(right_x, top_y),
+				Vector2(right_x, bot_y),
+				spine_bot
+			])
+			ctrl.draw_polyline(left_page, col, lw, true)
+			ctrl.draw_polyline(right_page, col, lw, true)
+			ctrl.draw_line(spine_top, spine_bot, col, lw, true)
+			ctrl.draw_line(Vector2(left_x + bw * 0.12, c.y - bh * 0.12), Vector2(c.x - bw * 0.10, c.y - bh * 0.08), col, lw * 0.85, true)
+			ctrl.draw_line(Vector2(left_x + bw * 0.12, c.y + bh * 0.08), Vector2(c.x - bw * 0.10, c.y + bh * 0.12), col, lw * 0.85, true)
+			ctrl.draw_line(Vector2(c.x + bw * 0.10, c.y - bh * 0.08), Vector2(right_x - bw * 0.12, c.y - bh * 0.12), col, lw * 0.85, true)
+			ctrl.draw_line(Vector2(c.x + bw * 0.10, c.y + bh * 0.12), Vector2(right_x - bw * 0.12, c.y + bh * 0.08), col, lw * 0.85, true)
+		"exit_red":
+			var red_col := Color(0.92, 0.22, 0.22, 1.0)
+			var door_w: float = s * 0.34
+			var door_h: float = s * 0.54
+			var dx1: float = c.x - s * 0.25
+			var dx2: float = dx1 + door_w
+			var dy1: float = c.y - door_h * 0.5
+			var dy2: float = c.y + door_h * 0.5
+			var door_frame := PackedVector2Array([
+				Vector2(dx2, dy1 + door_h * 0.18),
+				Vector2(dx2, dy1),
+				Vector2(dx1, dy1),
+				Vector2(dx1, dy2),
+				Vector2(dx2, dy2),
+				Vector2(dx2, dy2 - door_h * 0.18)
+			])
+			ctrl.draw_polyline(door_frame, red_col, lw, true)
+			var ax1: float = c.x - s * 0.04
+			var ax2: float = c.x + s * 0.28
+			var head_sz: float = s * 0.12
+			ctrl.draw_line(Vector2(ax1, c.y), Vector2(ax2, c.y), red_col, lw, true)
+			var arrow_head := PackedVector2Array([
+				Vector2(ax2 - head_sz, c.y - head_sz),
+				Vector2(ax2, c.y),
+				Vector2(ax2 - head_sz, c.y + head_sz)
+			])
+			ctrl.draw_polyline(arrow_head, red_col, lw, true)
+		"close_x":
+			var xr: float = s * 0.23
+			var xw: float = maxf(1.8, lw * 1.1)
+			ctrl.draw_line(c + Vector2(-xr, -xr), c + Vector2(xr, xr), col, xw, true)
+			ctrl.draw_line(c + Vector2(xr, -xr), c + Vector2(-xr, xr), col, xw, true)
+
 func _panel_style() -> StyleBoxFlat:
 	return HorrorTheme.make_minimal_panel_style(Color(0.086, 0.045, 0.043, 0.96), HorrorTheme.BORDER_INTERACTIVE, 2, 24, 22)
+
+func _compute_menu_column_width(view_size: Vector2, narrow: bool) -> float:
+	var left_pad: float = 24.0 if narrow else (34.0 if view_size.y < 520.0 else 64.0)
+	if narrow:
+		var right_rail_reserve: float = 14.0 + 40.0 + 16.0
+		return clampf(view_size.x - left_pad - right_rail_reserve, 220.0, 340.0)
+	return clampf(view_size.x * 0.34, 280.0, 360.0)
 
 func _apply_layout() -> void:
 	var view_size: Vector2 = get_viewport_rect().size
@@ -2234,8 +2447,7 @@ func _apply_layout() -> void:
 	var narrow: bool = view_size.x < 700.0
 	var short_screen: bool = view_size.y < 520.0
 
-	var left_pad: float = 24.0 if narrow else (34.0 if short_screen else 64.0)
-	var col_w: float = clampf(view_size.x - left_pad * 2.0, 260.0, 340.0) if narrow else clampf(view_size.x * 0.34, 280.0, 360.0)
+	var col_w: float = _compute_menu_column_width(view_size, narrow)
 
 	title_label.add_theme_font_size_override("font_size", 30 if short_screen else (38 if narrow else 52))
 	subtitle_label.add_theme_font_size_override("font_size", 11 if short_screen else 13)
@@ -2291,12 +2503,29 @@ func _apply_layout() -> void:
 		copyright_label.text = "© 2026 AstraDev" if narrow else "© 2026 AstraDev. All rights reserved."
 
 	if exit_button:
-		var br_margin: float = 14.0 if narrow or short_screen else 20.0
-		exit_button.custom_minimum_size = Vector2(96.0, 44.0)
-		exit_button.offset_right = -br_margin
-		exit_button.offset_left = -(br_margin + 104.0)
-		exit_button.offset_bottom = -br_margin
-		exit_button.offset_top = -(br_margin + 44.0)
+		exit_button.custom_minimum_size = Vector2(34.0, 34.0) if (narrow or short_screen) else Vector2(36.0, 36.0)
+		exit_button.text = ""
+
+	if version_label:
+		var br_margin: float = 16.0 if narrow or short_screen else 24.0
+		version_label.offset_right = -br_margin
+		version_label.offset_bottom = -br_margin
+		version_label.offset_top = -(br_margin + 20.0)
+		version_label.offset_left = -(br_margin + 120.0)
+
+	if right_icon_rail:
+		var btn_sz: float = 40.0 if (narrow or short_screen) else 46.0
+		var r_margin: float = 14.0 if (narrow or short_screen) else 24.0
+		var total_h: float = btn_sz * 4.0 + 10.0 * 3.0
+		right_icon_rail.offset_top = -total_h * 0.5
+		right_icon_rail.offset_bottom = total_h * 0.5
+		right_icon_rail.offset_right = -r_margin
+		right_icon_rail.offset_left = -(r_margin + btn_sz)
+		for child: Node in right_icon_rail.get_children():
+			if child is Button:
+				var icon_btn: Button = child as Button
+				icon_btn.custom_minimum_size = Vector2(btn_sz, btn_sz)
+				icon_btn.text = ""
 
 	for panel: PanelContainer in modal_panels:
 		if panel == fix_notes_panel:
@@ -2305,7 +2534,7 @@ func _apply_layout() -> void:
 			panel.custom_minimum_size = Vector2(maxf(290.0, minf(640.0, view_size.x - 28.0)), panel.custom_minimum_size.y)
 		elif panel == create_room_panel:
 			panel.custom_minimum_size = Vector2(maxf(290.0, minf(560.0, view_size.x - 28.0)), panel.custom_minimum_size.y)
-		elif panel == account_panel or panel == mode_select_panel:
+		elif panel == account_panel or panel == mode_select_panel or panel == inbox_panel:
 			panel.custom_minimum_size = Vector2(maxf(280.0, minf(520.0, view_size.x - 28.0)), panel.custom_minimum_size.y)
 		elif panel == room_password_panel:
 			panel.custom_minimum_size = Vector2(maxf(280.0, minf(440.0, view_size.x - 28.0)), panel.custom_minimum_size.y)
@@ -2315,6 +2544,8 @@ func _apply_layout() -> void:
 		settings_scroll.custom_minimum_size.y = maxf(130.0, minf(310.0, view_size.y - 250.0))
 	if shop_scroll:
 		shop_scroll.custom_minimum_size.y = maxf(140.0, minf(310.0, view_size.y - 260.0))
+	if inbox_scroll:
+		inbox_scroll.custom_minimum_size.y = maxf(140.0, minf(340.0, view_size.y - 240.0))
 	if fix_notes_scroll:
 		fix_notes_scroll.custom_minimum_size.y = maxf(160.0, minf(450.0, view_size.y - 200.0))
 	if account_scroll:
@@ -2344,7 +2575,7 @@ func _sync_menu_anchor_position() -> void:
 	var narrow: bool = view_size.x < 700.0
 	var short_screen: bool = view_size.y < 520.0
 	var left_pad: float = 24.0 if narrow else (34.0 if short_screen else 64.0)
-	var col_w: float = clampf(view_size.x - left_pad * 2.0, 260.0, 340.0) if narrow else clampf(view_size.x * 0.34, 280.0, 360.0)
+	var col_w: float = _compute_menu_column_width(view_size, narrow)
 	var content_h: float = main_content.get_combined_minimum_size().y
 	var footer_clear: float = 44.0 if short_screen else (66.0 if narrow else 68.0)
 	var min_top: float = 16.0 if short_screen else (58.0 if narrow else 36.0)
@@ -2424,8 +2655,29 @@ func _start_with_difficulty(diff: GameManager.Difficulty) -> void:
 		mp.reset_to_singleplayer()
 	GameManager.is_sandbox_mode = false
 	GameManager.start_new_game(diff)
+	if mp != null and SettingsManager.allow_friend_join_singleplayer and not GameManager.is_tutorial_mode:
+		var diff_arr: Array[String] = ["easy", "normal", "hard", "nightmare"]
+		var diff_str: String = diff_arr[clampi(int(diff), 0, 3)]
+		mp.call("open_singleplayer_for_friends", diff_str, 1, false)
 
 # ---------- Gerbang Akun LAMPOR (Force Login / Daftar / Guest) ----------
+
+func _verify_saved_session_background() -> void:
+	var am: Variant = _am()
+	if am == null or not am.can_access_online_modes():
+		return
+	var verified: bool = await am.verify_saved_session()
+	if not is_instance_valid(self) or not is_inside_tree():
+		return
+	_refresh_account_ui()
+	_refresh_currency_display()
+	_refresh_shop_display()
+	_update_nightmare_status()
+	_refresh_tutorial_button_visibility()
+	if not verified and not am.can_access_online_modes() and not am.is_guest_mode:
+		_open_account_modal(0)
+		if not str(am.last_error).strip_edges().is_empty():
+			_set_account_status(str(am.last_error), HorrorTheme.RELIC_BRASS)
 
 func _run_initial_account_gate() -> void:
 	var am: Variant = _am()
@@ -2464,6 +2716,15 @@ func _build_account_modal() -> void:
 	account_overlay = modal["overlay"] as ColorRect
 	account_panel = modal["panel"] as PanelContainer
 	account_title_label = modal["title_label"] as Label
+	account_close_btn = modal.get("close_button") as Button
+	if is_instance_valid(account_close_btn):
+		for c: Dictionary in account_close_btn.pressed.get_connections():
+			account_close_btn.pressed.disconnect(c["callable"])
+		account_close_btn.pressed.connect(func() -> void:
+			var am: Variant = _am()
+			if am == null or am.account_gate_resolved:
+				account_overlay.visible = false
+		)
 	var body: VBoxContainer = modal["body"] as VBoxContainer
 
 	account_scroll = ScrollContainer.new()
@@ -2785,14 +3046,6 @@ func _build_account_modal() -> void:
 	guest_btn.pressed.connect(_on_guest_pressed)
 	guest_section.add_child(guest_btn)
 
-	account_close_btn = _make_button(LocScript.pick("TUTUP", "CLOSE"), false, "ghost")
-	account_close_btn.pressed.connect(func() -> void:
-		var am: Variant = _am()
-		if am == null or am.account_gate_resolved:
-			account_overlay.visible = false
-	)
-	body.add_child(account_close_btn)
-
 func _open_account_modal(tab_idx: int = 0) -> void:
 	if account_scroll:
 		account_scroll.scroll_vertical = 0
@@ -2928,6 +3181,10 @@ func _on_account_state_changed() -> void:
 	var am: Variant = _am()
 	if am != null and am.can_access_online_modes() and mode_lock_box:
 		mode_lock_box.visible = false
+	if am != null and not am.account_gate_resolved and not am.can_access_online_modes() and not am.is_guest_mode and (account_overlay == null or not account_overlay.visible):
+		_open_account_modal(0)
+		if not str(am.last_error).strip_edges().is_empty():
+			_set_account_status(str(am.last_error), HorrorTheme.RELIC_BRASS)
 	if friends_overlay and friends_overlay.visible:
 		_sync_friends_modal_auth_state()
 		if am != null and am.can_access_online_modes():
@@ -3797,6 +4054,14 @@ func _build_create_room_modal() -> void:
 	var modal: Dictionary = _create_modal(LocScript.pick("CREATE ROOM", "CREATE ROOM"))
 	create_room_overlay = modal["overlay"] as ColorRect
 	create_room_panel = modal["panel"] as PanelContainer
+	var create_close_btn: Button = modal.get("close_button") as Button
+	if is_instance_valid(create_close_btn):
+		for c: Dictionary in create_close_btn.pressed.get_connections():
+			create_close_btn.pressed.disconnect(c["callable"])
+		create_close_btn.pressed.connect(func() -> void:
+			create_room_overlay.visible = false
+			_open_modal(mp_server_overlay, mp_server_panel)
+		)
 	var body: VBoxContainer = modal["body"] as VBoxContainer
 
 	create_room_mode_badge = _make_label("", 12, HorrorTheme.RELIC_BRASS, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm")
@@ -4053,6 +4318,11 @@ func _build_room_lobby_modal() -> void:
 	var modal: Dictionary = _create_modal(LocScript.pick("ROOM LOBBY", "ROOM LOBBY"))
 	room_lobby_overlay = modal["overlay"] as ColorRect
 	room_lobby_panel = modal["panel"] as PanelContainer
+	var lobby_close_btn: Button = modal.get("close_button") as Button
+	if is_instance_valid(lobby_close_btn):
+		for c: Dictionary in lobby_close_btn.pressed.get_connections():
+			lobby_close_btn.pressed.disconnect(c["callable"])
+		lobby_close_btn.pressed.connect(_on_lobby_leave_pressed)
 	var body: VBoxContainer = modal["body"] as VBoxContainer
 
 	var head_row := HBoxContainer.new()
@@ -4380,6 +4650,9 @@ func _refresh_lobby_chat() -> void:
 func _on_multiplayer_event_received(event_type: String, _payload: Dictionary, _sender_name: String) -> void:
 	if event_type == "chat" and room_lobby_overlay and room_lobby_overlay.visible:
 		_refresh_lobby_chat()
+	_refresh_friends_button_badge()
+	if inbox_overlay and inbox_overlay.visible:
+		_render_inbox_modal()
 
 func _on_lobby_copy_code_pressed() -> void:
 	var mp: Variant = _mp()
@@ -4714,10 +4987,6 @@ func _build_friends_modal() -> void:
 	friends_directory_list.mouse_filter = Control.MOUSE_FILTER_PASS
 	friends_directory_list.add_theme_constant_override("separation", 8)
 	friends_add_tab_box.add_child(friends_directory_list)
-
-	var close_btn := _make_button(LocScript.pick("TUTUP", "CLOSE"), false, "ghost")
-	close_btn.pressed.connect(func() -> void: friends_overlay.visible = false)
-	body.add_child(close_btn)
 	_refresh_friends_tab_buttons()
 
 func _select_friends_tab(tab_id: String) -> void:
@@ -4798,8 +5067,6 @@ func _trigger_initial_friends_badge_fetch() -> void:
 	await _refresh_friends_data(true)
 
 func _refresh_friends_button_badge() -> void:
-	if not is_instance_valid(friends_button):
-		return
 	var am: Variant = _am()
 	var logged_in: bool = am != null and am.can_access_online_modes()
 	var pending_count: int = 0
@@ -4807,10 +5074,179 @@ func _refresh_friends_button_badge() -> void:
 		var reqs: Variant = am.get("incoming_friend_requests")
 		if reqs is Array:
 			pending_count = (reqs as Array).size()
-	if logged_in and pending_count > 0:
-		friends_button.text = LocScript.pick("TEMAN (%d)" % pending_count, "FRIENDS (%d)" % pending_count)
-	else:
-		friends_button.text = LocScript.pick("TEMAN", "FRIENDS")
+	_friends_has_pending_dot = (logged_in and pending_count > 0)
+	if is_instance_valid(friends_button):
+		friends_button.text = ""
+	var mp: Variant = _mp()
+	var ann_text: String = str(mp.get("server_announcement")).strip_edges() if (mp != null and "server_announcement" in mp) else ""
+	var has_update_notice: bool = is_instance_valid(update_button) and update_button.visible
+	_inbox_has_unread_dot = _friends_has_pending_dot or (not ann_text.is_empty()) or has_update_notice
+	if is_instance_valid(inbox_button):
+		inbox_button.text = ""
+	if is_instance_valid(_friends_icon_ctrl):
+		_friends_icon_ctrl.queue_redraw()
+	if is_instance_valid(_inbox_icon_ctrl):
+		_inbox_icon_ctrl.queue_redraw()
+
+func _build_inbox_modal() -> void:
+	var modal: Dictionary = _create_modal(LocScript.pick("KOTAK MASUK", "INBOX"))
+	inbox_overlay = modal["overlay"] as ColorRect
+	inbox_panel = modal["panel"] as PanelContainer
+	var body: VBoxContainer = modal["body"] as VBoxContainer
+
+	inbox_scroll = ScrollContainer.new()
+	inbox_scroll.custom_minimum_size = Vector2(0.0, 260.0)
+	inbox_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	inbox_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	HorrorTheme.style_scroll_container(inbox_scroll)
+	body.add_child(inbox_scroll)
+
+	var margin := MarginContainer.new()
+	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.mouse_filter = Control.MOUSE_FILTER_PASS
+	margin.add_theme_constant_override("margin_right", 8)
+	inbox_scroll.add_child(margin)
+
+	inbox_list = VBoxContainer.new()
+	inbox_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	inbox_list.mouse_filter = Control.MOUSE_FILTER_PASS
+	inbox_list.add_theme_constant_override("separation", 10)
+	margin.add_child(inbox_list)
+
+func _open_inbox_modal() -> void:
+	_refresh_friends_button_badge()
+	_render_inbox_modal()
+	_open_modal(inbox_overlay, inbox_panel)
+	if inbox_scroll:
+		inbox_scroll.scroll_vertical = 0
+
+func _render_inbox_modal() -> void:
+	if not is_instance_valid(inbox_list):
+		return
+	for ch: Node in inbox_list.get_children():
+		ch.queue_free()
+
+	var has_items: bool = false
+	var mp: Variant = _mp()
+	var ann_text: String = str(mp.get("server_announcement")).strip_edges() if (mp != null and "server_announcement" in mp) else ""
+	if not ann_text.is_empty():
+		has_items = true
+		var ann_card := PanelContainer.new()
+		ann_card.mouse_filter = Control.MOUSE_FILTER_PASS
+		ann_card.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOW, HorrorTheme.ACCENT, 2, 12, 10))
+		inbox_list.add_child(ann_card)
+
+		var ann_col := VBoxContainer.new()
+		ann_col.add_theme_constant_override("separation", 6)
+		ann_col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		ann_card.add_child(ann_col)
+
+		var ann_hdr := _make_label(LocScript.pick("PENGUMUMAN SERVER", "SERVER ANNOUNCEMENT"), 12, HorrorTheme.ACCENT, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
+		ann_hdr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		ann_col.add_child(ann_hdr)
+
+		var ann_body := _make_label(ann_text, 13, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "body-md")
+		ann_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		ann_body.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		ann_col.add_child(ann_body)
+
+	if is_instance_valid(update_button) and update_button.visible:
+		has_items = true
+		var upd_card := PanelContainer.new()
+		upd_card.mouse_filter = Control.MOUSE_FILTER_PASS
+		upd_card.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOW, HorrorTheme.RELIC_BRASS, 2, 12, 10))
+		inbox_list.add_child(upd_card)
+
+		var upd_col := VBoxContainer.new()
+		upd_col.add_theme_constant_override("separation", 8)
+		upd_col.mouse_filter = Control.MOUSE_FILTER_PASS
+		upd_card.add_child(upd_col)
+
+		var upd_hdr := _make_label(LocScript.pick("PEMBARUAN GAME TERSEDIA", "GAME UPDATE AVAILABLE"), 12, HorrorTheme.RELIC_BRASS, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
+		upd_hdr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		upd_col.add_child(upd_hdr)
+
+		var upd_detail: String = update_button.tooltip_text.strip_edges()
+		if upd_detail.is_empty():
+			upd_detail = LocScript.pick("Versi pembaruan terbaru siap diunduh dan dipasang.", "A newer version is ready to download and install.")
+		var upd_body := _make_label(upd_detail, 13, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "body-md")
+		upd_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		upd_body.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		upd_col.add_child(upd_body)
+
+		var upd_btn := _make_button(update_button.text, true)
+		upd_btn.custom_minimum_size = Vector2(0.0, 38.0)
+		upd_btn.disabled = update_button.disabled
+		upd_btn.pressed.connect(func() -> void:
+			if inbox_overlay:
+				inbox_overlay.visible = false
+			_on_update_button_pressed()
+		)
+		upd_col.add_child(upd_btn)
+
+	var am: Variant = _am()
+	var logged_in: bool = am != null and am.can_access_online_modes()
+	var incoming_arr: Array = am.get("incoming_friend_requests") if (logged_in and "incoming_friend_requests" in am and am.get("incoming_friend_requests") is Array) else []
+	if not incoming_arr.is_empty():
+		has_items = true
+		var req_card := PanelContainer.new()
+		req_card.mouse_filter = Control.MOUSE_FILTER_PASS
+		req_card.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOW, HorrorTheme.RELIC_BRASS, 2, 12, 10))
+		inbox_list.add_child(req_card)
+
+		var req_col := VBoxContainer.new()
+		req_col.add_theme_constant_override("separation", 8)
+		req_col.mouse_filter = Control.MOUSE_FILTER_PASS
+		req_card.add_child(req_col)
+
+		var req_hdr := _make_label(
+			LocScript.pick("PERMINTAAN PERTEMANAN (%d)" % incoming_arr.size(), "FRIEND REQUESTS (%d)" % incoming_arr.size()),
+			12, HorrorTheme.RELIC_BRASS, HORIZONTAL_ALIGNMENT_LEFT, "label-lg"
+		)
+		req_hdr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		req_col.add_child(req_hdr)
+
+		var sender_names := PackedStringArray()
+		for ir_var: Variant in incoming_arr:
+			if ir_var is Dictionary:
+				var uname: String = ProfanityFilterScript.censor(str((ir_var as Dictionary).get("username", "Pemain")))
+				sender_names.append(uname)
+		var req_summary := _make_label(
+			LocScript.pick(
+				"Permintaan masuk dari: %s" % ", ".join(sender_names),
+				"Incoming request from: %s" % ", ".join(sender_names)
+			),
+			13, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "body-md"
+		)
+		req_summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		req_summary.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		req_col.add_child(req_summary)
+
+		var open_friends_btn := _make_button(LocScript.pick("BUKA TEMAN", "OPEN FRIENDS"), true)
+		open_friends_btn.custom_minimum_size = Vector2(0.0, 38.0)
+		open_friends_btn.pressed.connect(func() -> void:
+			if inbox_overlay:
+				inbox_overlay.visible = false
+			_open_friends_modal()
+		)
+		req_col.add_child(open_friends_btn)
+
+	if not has_items:
+		var empty_card := PanelContainer.new()
+		empty_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		empty_card.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOWEST, HorrorTheme.BORDER_SUBTLE, 2, 12, 12))
+		inbox_list.add_child(empty_card)
+
+		var empty_lbl := _make_label(
+			LocScript.pick(
+				"Kotak masuk kosong. Tidak ada pesan, pengumuman, atau permintaan pertemanan baru.",
+				"Inbox is empty. No new messages, announcements, or friend requests."
+			),
+			13, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "body-md"
+		)
+		empty_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		empty_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		empty_card.add_child(empty_lbl)
 
 func _refresh_friends_data(silent: bool = false) -> void:
 	if not is_instance_valid(self) or not is_inside_tree():
@@ -4857,6 +5293,8 @@ func _refresh_friends_data(silent: bool = false) -> void:
 
 func _on_friends_updated(friends_arr: Array, dir_arr: Array) -> void:
 	_refresh_friends_button_badge()
+	if inbox_overlay and inbox_overlay.visible:
+		_render_inbox_modal()
 	if friends_overlay and friends_overlay.visible:
 		var am: Variant = _am()
 		var incoming_arr: Array = am.get("incoming_friend_requests") if (am != null and "incoming_friend_requests" in am and am.get("incoming_friend_requests") is Array) else []

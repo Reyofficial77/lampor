@@ -51,11 +51,92 @@ func _run_checks() -> void:
 		if not fr_list_box.visible or fr_add_box.visible:
 			errors.append("MainMenu friends modal failed switching back to Daftar Teman tab")
 
+	var main_content_node: Node = mm.get("main_content") as Node
+	var menu_buttons_node: Node = main_content_node.get_node_or_null("MenuButtons") if main_content_node != null else null
+	if menu_buttons_node == null:
+		errors.append("MainMenu MenuButtons missing")
+	else:
+		for mb_child: Node in menu_buttons_node.get_children():
+			if mb_child is Button:
+				var mb_upper: String = (mb_child as Button).text.to_upper()
+				if mb_upper.contains("HAK CIPTA") or mb_upper.contains("CREDITS"):
+					errors.append("MainMenu MenuButtons still contains forbidden credits button: " + (mb_child as Button).text)
+
+	var ver_lbl: Label = mm.get("version_label") as Label
+	if ver_lbl == null or ver_lbl.get_parent() != mm or not is_equal_approx(ver_lbl.anchor_left, 1.0) or not is_equal_approx(ver_lbl.anchor_top, 1.0) or not is_equal_approx(ver_lbl.anchor_right, 1.0) or not is_equal_approx(ver_lbl.anchor_bottom, 1.0):
+		errors.append("MainMenu version_label missing, wrong parent, or not anchored bottom-right")
+
+	var icon_rail: Control = mm.get("right_icon_rail") as Control
+	var rail_friends_btn: Button = mm.get("friends_button") as Button
+	var rail_inbox_btn: Button = mm.get("inbox_button") as Button
+	var rail_fix_btn: Button = mm.get("fix_notes_button") as Button
+	var rail_guide_btn: Button = mm.get("guide_button") as Button
+	if icon_rail == null or not is_equal_approx(icon_rail.anchor_left, 1.0) or not is_equal_approx(icon_rail.anchor_right, 1.0) or not is_equal_approx(icon_rail.anchor_top, 0.5) or not is_equal_approx(icon_rail.anchor_bottom, 0.5):
+		errors.append("MainMenu right_icon_rail missing or not anchored center-right")
+	elif icon_rail.get_child_count() != 4:
+		errors.append("MainMenu right_icon_rail child count expected 4, got " + str(icon_rail.get_child_count()))
+	else:
+		var expected_rail_btns: Array = [rail_friends_btn, rail_inbox_btn, rail_fix_btn, rail_guide_btn]
+		for r_btn_var: Variant in expected_rail_btns:
+			var r_btn: Button = r_btn_var as Button
+			if r_btn == null or r_btn.get_parent() != icon_rail or r_btn.text != "" or not (r_btn.get_node_or_null("IconDraw") is Control):
+				errors.append("MainMenu right_icon_rail button invalid, has non-empty text, or missing IconDraw")
+
+	var inb_ov: Control = mm.get("inbox_overlay") as Control
+	var inb_panel: Control = mm.get("inbox_panel") as Control
+	if inb_ov == null or inb_panel == null:
+		errors.append("MainMenu inbox_overlay or inbox_panel missing")
+	else:
+		mm.call("_open_inbox_modal")
+		if not inb_ov.visible:
+			errors.append("MainMenu _open_inbox_modal did not make inbox_overlay visible")
+		inb_ov.visible = false
+
+	var tr_bar: Control = mm.get("top_right_bar") as Control
+	var acc_btn: Button = mm.get("account_btn") as Button
+	var exit_btn: Button = mm.get("exit_button") as Button
+	if tr_bar == null or acc_btn == null or exit_btn == null:
+		errors.append("MainMenu top_right_bar, account_btn, or exit_button missing")
+	else:
+		if exit_btn.get_parent() != tr_bar or acc_btn.get_parent() != tr_bar or exit_btn.get_index() != acc_btn.get_index() + 1 or exit_btn.text != "" or not (exit_btn.get_node_or_null("IconDraw") is Control):
+			errors.append("MainMenu exit_button must be immediately right of account_btn in top_right_bar with empty text and IconDraw")
+
+	if float(mm.call("_compute_menu_column_width", Vector2(390.0, 844.0), true)) > 300.0:
+		errors.append("MainMenu _compute_menu_column_width exceeds 300.0 on 390x844 mobile portrait")
+
+	var acc_close_btn: Button = mm.get("account_close_btn") as Button
+	if acc_close_btn == null or acc_close_btn.text != "" or not (acc_close_btn.get_node_or_null("IconDraw") is Control):
+		errors.append("MainMenu account_close_btn must be icon-only X button (empty text + IconDraw)")
+	for ov_name: String in ["friends_overlay", "inbox_overlay", "settings_overlay", "shop_overlay", "fix_notes_overlay"]:
+		var ov_ctrl: Control = mm.get(ov_name) as Control
+		var x_btns: Array[Node] = ov_ctrl.find_children("IconDraw", "Control", true, false) if ov_ctrl != null else []
+		if x_btns.is_empty():
+			errors.append("MainMenu modal missing header X IconDraw close button: " + ov_name)
+	var sp_chk: CheckButton = mm.get("friend_join_sp_check") as CheckButton
+	if sp_chk == null or not sp_chk.button_pressed:
+		errors.append("MainMenu friend_join_sp_check missing or not enabled by default")
+
 	var am: Variant = root.get_node_or_null("AccountManager")
+	var sm_menu: Variant = root.get_node_or_null("SettingsManager")
 	var gm: Variant = root.get_node_or_null("GameManager")
 	if am == null or gm == null:
 		errors.append("AccountManager or GameManager missing")
 	else:
+		if sm_menu == null or not bool(sm_menu.get("allow_friend_join_singleplayer")):
+			errors.append("SettingsManager allow_friend_join_singleplayer must default to true")
+		else:
+			sm_menu.call("set_allow_friend_join_singleplayer", false)
+			if bool(sm_menu.get("allow_friend_join_singleplayer")):
+				errors.append("SettingsManager set_allow_friend_join_singleplayer(false) failed")
+			sm_menu.call("set_allow_friend_join_singleplayer", true)
+
+		# Verify session persistence keeps optimistic logged-in state across empty storage load / offline verification
+		am.set("session_token", "persist-test-token")
+		am.set("is_logged_in", true)
+		am.set("is_guest_mode", false)
+		am.set("account_gate_resolved", true)
+		if not bool(am.call("can_access_online_modes")):
+			errors.append("AccountManager can_access_online_modes failed with persisted token")
 		print("[2/7] Memeriksa sinkronisasi realtime (koin 99999 & centang biru)...")
 		am.set("is_logged_in", true)
 		am.set("is_guest_mode", false)
@@ -88,6 +169,12 @@ func _run_checks() -> void:
 		var top_badge: Control = mm.get("top_account_badge") as Control
 		if badge_ctrl == null or not badge_ctrl.visible or top_badge == null or not top_badge.visible:
 			errors.append("MainMenu verified badges not visible for verified user")
+		am.set("incoming_friend_requests", [{"id": "u99", "username": "ReqUser"}])
+		mm.call("_refresh_friends_button_badge")
+		if rail_friends_btn == null or rail_friends_btn.text != "" or not bool(mm.get("_friends_has_pending_dot")):
+			errors.append("MainMenu friends_button pending dot or empty text check failed")
+		am.set("incoming_friend_requests", [])
+		mm.call("_refresh_friends_button_badge")
 	var photo_filters: PackedStringArray = mm.call("_get_profile_photo_filters")
 	if photo_filters.is_empty() or not photo_filters[0].ends_with(";image/*"):
 		errors.append("Profile photo filters must end with ';image/*' for mobile gallery picker")
@@ -210,6 +297,9 @@ func _run_checks() -> void:
 	if hud_node == null:
 		errors.append("VillageMap HUD missing")
 	else:
+		var inv_close_b: Button = hud_node.get("_inv_close_btn") as Button
+		if inv_close_b == null or inv_close_b.text != "" or not (inv_close_b.get_node_or_null("IconDraw") is Control):
+			errors.append("HUD _inv_close_btn must be icon-only X button (empty text + IconDraw)")
 		var mic_btn: Button = hud_node.get("mic_toggle_button") as Button
 		if mic_btn == null:
 			errors.append("HUD top-left mic_toggle_button missing")
@@ -259,6 +349,31 @@ func _run_checks() -> void:
 				errors.append("Online host second toggle_pause did not clear is_pause_menu_open")
 			mp.call("reset_to_singleplayer")
 			gm.set("current_state", 0)
+
+		if sm == null or not ("mic_permission_granted" in sm) or not sm.has_method("set_mic_permission_granted"):
+			errors.append("SettingsManager missing mic_permission_granted or set_mic_permission_granted")
+		elif mp != null and gm != null:
+			sm.call("set_mic_permission_granted", false)
+			mp.set("is_online_session", true)
+			gm.set("current_state", 1)
+			if str(mp.call("request_mic_permission_and_enable")) != "needs_consent" or bool(mp.call("is_mic_enabled")):
+				errors.append("Voice mic permission should require consent before enabling")
+			var mic_perm_ov: Control = hud_node.get("mic_permission_overlay") as Control
+			if mic_perm_ov == null:
+				errors.append("HUD mic_permission_overlay missing")
+			else:
+				hud_node.call("_on_mic_toggle_pressed")
+				if not mic_perm_ov.visible or self.paused:
+					errors.append("HUD _on_mic_toggle_pressed did not show mic_permission_overlay without pausing SceneTree")
+				hud_node.call("_on_mic_permission_allow_pressed")
+				if mic_perm_ov.visible or not bool(sm.get("mic_permission_granted")) or not bool(mp.call("is_mic_enabled")):
+					errors.append("HUD _on_mic_permission_allow_pressed did not close modal, grant permission, and enable mic")
+				mp.call("deny_mic_permission")
+				if bool(sm.get("mic_permission_granted")) or bool(mp.call("is_mic_enabled")):
+					errors.append("deny_mic_permission did not revoke mic_permission_granted and disable mic")
+			mp.call("reset_to_singleplayer")
+			gm.set("current_state", 0)
+			sm.call("set_mic_permission_granted", false)
 
 		var ho: CanvasItem = hud_node.get("post_process_rect") as CanvasItem
 		if ho != null and ho.visible:

@@ -725,7 +725,9 @@ func _capture_world_snapshot(world_root: Node) -> Dictionary:
 func save_active_run() -> bool:
 	var mp: Variant = get_multiplayer_manager(false)
 	if mp != null and mp.is_online_session:
-		return false
+		var is_solo_sp: bool = bool(mp.get("is_friend_joinable_singleplayer")) and mp.has_method("has_remote_peers_joined") and not bool(mp.call("has_remote_peers_joined"))
+		if not is_solo_sp:
+			return false
 	if current_state != GameState.PLAYING or not is_instance_valid(player_character) or not (player_character is PlayerController):
 		return false
 	var player: PlayerController = player_character as PlayerController

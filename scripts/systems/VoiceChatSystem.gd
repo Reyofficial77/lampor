@@ -37,10 +37,20 @@ var _hangover_timer: float = 0.0
 var _peer_players: Dictionary = {}
 var _last_emitted_local_speaking: bool = false
 var _last_emitted_speaker_keys: String = ""
+var _awaiting_os_permission: bool = false
+var last_permission_error: String = ""
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_is_headless = DisplayServer.get_name() == "headless"
+	var tree: SceneTree = get_tree()
+	if tree and tree.has_signal("on_request_permissions_result"):
+		tree.connect("on_request_permissions_result", _on_android_permission_result)
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_IN and _awaiting_os_permission and has_os_mic_permission():
+		_awaiting_os_permission = false
+		_enable_after_user_consent()
 
 static func _linear_to_ulaw(pcm: int) -> int:
 	var sample_val: int = pcm
@@ -90,9 +100,112 @@ static func decode_ulaw_b64_to_pcm(b64: String) -> PackedFloat32Array:
 		out[i] = _ulaw_to_linear(buf[i])
 	return out
 
+func has_os_mic_permission() -> bool:
+	if OS.get_name().to_lower() == "android":
+		var granted_list: PackedStringArray = OS.get_granted_permissions()
+		for perm: String in granted_list:
+			if perm == "android.permission.RECORD_AUDIO" or perm.ends_with("RECORD_AUDIO"):
+				return true
+		return false
+	return true
+
+func has_mic_permission() -> bool:
+	return SettingsManager.mic_permission_granted and has_os_mic_permission()
+
+func get_available_input_devices() -> PackedStringArray:
+	if _is_headless:
+		return PackedStringArray()
+	return AudioServer.get_input_device_list()
+
+func get_active_input_device_name() -> String:
+	if _is_headless:
+		return "Default"
+	var active: String = AudioServer.input_device.strip_edges()
+	var devices: PackedStringArray = get_available_input_devices()
+	if not active.is_empty() and (devices.is_empty() or devices.has(active)):
+		return active
+	var saved_dev: String = SettingsManager.mic_input_device.strip_edges()
+	if not saved_dev.is_empty() and devices.has(saved_dev):
+		return saved_dev
+	if not devices.is_empty():
+		return devices[0]
+	return "Default"
+
+func request_mic_permission_and_enable() -> String:
+	if not SettingsManager.mic_permission_granted:
+		SignalBus.voice_mic_permission_requested.emit()
+		return "needs_consent"
+	return _enable_after_user_consent()
+
+func confirm_mic_permission_grant() -> String:
+	SettingsManager.set_mic_permission_granted(true)
+	return _enable_after_user_consent()
+
+func deny_mic_permission() -> void:
+	SettingsManager.set_mic_permission_granted(false)
+	_awaiting_os_permission = false
+	set_mic_enabled(false)
+	SignalBus.voice_mic_permission_status.emit(false, "Izin mikrofon ditolak.")
+
+func _enable_after_user_consent() -> String:
+	last_permission_error = ""
+	if _is_headless:
+		set_mic_enabled(true)
+		return "enabled"
+
+	var os_name: String = OS.get_name().to_lower()
+	if os_name == "android":
+		if not has_os_mic_permission():
+			_awaiting_os_permission = true
+			OS.request_permission("android.permission.RECORD_AUDIO")
+			return "pending_os"
+	elif OS.has_feature("web"):
+		JavaScriptBridge.eval("""(function(){
+			try {
+				if (navigator && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+					navigator.mediaDevices.getUserMedia({ audio: true }).then(function(stream){
+						if (stream && stream.getTracks) {
+							stream.getTracks().forEach(function(t){ try { t.stop(); } catch(_e){} });
+						}
+					}).catch(function(_err){});
+				}
+			} catch (e) {}
+		})()""")
+	else:
+		var devices: PackedStringArray = AudioServer.get_input_device_list()
+		if devices.is_empty():
+			last_permission_error = "Mikrofon perangkat tidak terdeteksi."
+			SignalBus.voice_mic_permission_status.emit(false, last_permission_error)
+			return "no_device"
+		var chosen: String = ""
+		var saved_dev: String = SettingsManager.mic_input_device.strip_edges()
+		if not saved_dev.is_empty() and devices.has(saved_dev):
+			chosen = saved_dev
+		elif devices.has("Default"):
+			chosen = "Default"
+		else:
+			chosen = devices[0]
+		AudioServer.input_device = chosen
+
+	set_mic_enabled(true)
+	SignalBus.voice_mic_permission_status.emit(true, "Mikrofon aktif.")
+	return "enabled"
+
+func _on_android_permission_result(permission: String, granted: bool) -> void:
+	if permission.ends_with("RECORD_AUDIO"):
+		_awaiting_os_permission = false
+		if granted:
+			_enable_after_user_consent()
+		else:
+			SignalBus.voice_mic_permission_status.emit(false, "Izin mikrofon Android ditolak. Aktifkan di Pengaturan Perangkat.")
+
 func set_mic_enabled(enabled: bool) -> bool:
 	if enabled == mic_enabled:
 		return mic_enabled
+	if enabled and not has_mic_permission():
+		if not SettingsManager.mic_permission_granted:
+			SignalBus.voice_mic_permission_requested.emit()
+		return false
 	if _is_headless:
 		mic_enabled = enabled
 		if not mic_enabled:
@@ -102,8 +215,6 @@ func set_mic_enabled(enabled: bool) -> bool:
 		return mic_enabled
 
 	if enabled:
-		if OS.get_name().to_lower() == "android":
-			OS.request_permission("android.permission.RECORD_AUDIO")
 		_ensure_capture_pipeline()
 		if _capture_effect != null:
 			_capture_effect.clear_buffer()

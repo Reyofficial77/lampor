@@ -6,7 +6,7 @@ const REMOTE_PLAYER_SCRIPT = preload("res://scripts/player/RemotePlayer.gd")
 const VOICE_CHAT_SCRIPT = preload("res://scripts/systems/VoiceChatSystem.gd")
 
 const LOBBY_POLL_INTERVAL: float = 1.0
-const LOBBY_VOICE_POLL_INTERVAL: float = 0.30
+const LOBBY_VOICE_POLL_INTERVAL: float = 0.22
 const GAME_POLL_INTERVAL: float = 0.22
 const GAME_POLL_INTERVAL_LOW: float = 0.35
 const GAME_POLL_INTERVAL_MOBILE_LOW: float = 0.45
@@ -65,7 +65,8 @@ func _process(delta: float) -> void:
 	var eff_q: String = SettingsManager.get_effective_graphics_quality()
 	var is_mobile: bool = OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios") or DisplayServer.is_touchscreen_available()
 	var game_interval: float = GAME_POLL_INTERVAL_MOBILE_LOW if (is_mobile and eff_q == "low") else (GAME_POLL_INTERVAL_LOW if eff_q == "low" else GAME_POLL_INTERVAL)
-	var lobby_interval: float = LOBBY_VOICE_POLL_INTERVAL if is_mic_enabled() else LOBBY_POLL_INTERVAL
+	var voice_active: bool = is_mic_enabled() or not _pending_voice_events.is_empty() or (voice_chat != null and not (voice_chat.get("active_speakers") as Dictionary).is_empty())
+	var lobby_interval: float = LOBBY_VOICE_POLL_INTERVAL if voice_active else LOBBY_POLL_INTERVAL
 	var interval: float = game_interval if status_str == "playing" else lobby_interval
 	_poll_elapsed += delta
 	if _poll_elapsed >= interval:
@@ -284,6 +285,8 @@ func _on_voice_chunk_ready(b64_data: String, sample_rate: int, rms: float) -> vo
 			"rms": rms
 		}
 	})
+	if _poll_elapsed >= 0.18 and not _sync_in_flight:
+		_poll_elapsed = 1.0
 
 func _on_voice_speaking_state_changed(local_spk: bool, active_spk: Dictionary) -> void:
 	SignalBus.voice_activity_updated.emit(local_spk, active_spk)
@@ -529,9 +532,9 @@ func _sync_tick() -> void:
 				if lobby_chat_history.size() > MAX_CHAT_HISTORY:
 					lobby_chat_history.remove_at(0)
 			elif ev_type == "voice":
-				var sender_uid: String = str(ev_dict.get("senderUserId", ev_dict.get("sender_user_id", ev_dict.get("userId", "")))).strip_edges()
+				var sender_uid: String = str(ev_dict.get("senderUserId", ev_dict.get("sender_user_id", ev_dict.get("senderId", ev_dict.get("userId", ""))))).strip_edges()
 				var my_uid_str: String = str(am.user_id).strip_edges() if am != null else ""
-				if not sender_uid.is_empty() and sender_uid != my_uid_str and voice_chat != null:
+				if not sender_uid.is_empty() and sender_uid.to_lower() != my_uid_str.to_lower() and voice_chat != null:
 					voice_chat.call("decode_and_route_peer_audio", sender_uid, ev_payload, remote_players)
 			SignalBus.multiplayer_event_received.emit(ev_type, ev_payload, sender_name)
 

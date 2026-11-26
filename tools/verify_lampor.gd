@@ -32,11 +32,24 @@ func _run_checks() -> void:
 		errors.append("profile_username_input missing or editable")
 	var fr_ov: Control = mm.get("friends_overlay") as Control
 	var fr_panel: Control = mm.get("friends_panel") as Control
+	var fr_tab_list: Button = mm.get("friends_tab_list_btn") as Button
+	var fr_tab_add: Button = mm.get("friends_tab_add_btn") as Button
+	var fr_list_box: Control = mm.get("friends_list_tab_box") as Control
+	var fr_add_box: Control = mm.get("friends_add_tab_box") as Control
 	var fr_req_list: Control = mm.get("friends_requests_list") as Control
 	var fr_list: Control = mm.get("friends_my_list") as Control
 	var dir_list: Control = mm.get("friends_directory_list") as Control
-	if fr_ov == null or fr_panel == null or fr_req_list == null or fr_list == null or dir_list == null:
-		errors.append("MainMenu friends_modal or friends_requests_list controls missing")
+	if fr_ov == null or fr_panel == null or fr_tab_list == null or fr_tab_add == null or fr_list_box == null or fr_add_box == null or fr_req_list == null or fr_list == null or dir_list == null:
+		errors.append("MainMenu friends_modal or friends tabs controls missing")
+	else:
+		if not fr_list_box.visible or fr_add_box.visible:
+			errors.append("MainMenu friends modal did not default to Daftar Teman tab")
+		mm.call("_select_friends_tab", "add")
+		if fr_list_box.visible or not fr_add_box.visible:
+			errors.append("MainMenu friends modal failed switching to Tambah Teman tab")
+		mm.call("_select_friends_tab", "list")
+		if not fr_list_box.visible or fr_add_box.visible:
+			errors.append("MainMenu friends modal failed switching back to Daftar Teman tab")
 
 	var am: Variant = root.get_node_or_null("AccountManager")
 	var gm: Variant = root.get_node_or_null("GameManager")
@@ -204,6 +217,8 @@ func _run_checks() -> void:
 		if vcs == null:
 			errors.append("VoiceChatSystem.gd failed to load")
 		else:
+			if float(vcs.get("VOICE_RMS_THRESHOLD")) > 0.005 or str(vcs.get("CAPTURE_SINK_BUS_NAME")) != "VoiceMicSink":
+				errors.append("VoiceChatSystem capture pipeline threshold or sink bus misconfigured")
 			var pcm_in := PackedFloat32Array()
 			for si: int in range(160):
 				pcm_in.append(sin(float(si) * 0.25) * 0.6)
@@ -211,6 +226,39 @@ func _run_checks() -> void:
 			var pcm_out: PackedFloat32Array = vcs.call("decode_ulaw_b64_to_pcm", b64)
 			if b64.is_empty() or pcm_out.size() != pcm_in.size() or absf(pcm_out[2]) < 0.05:
 				errors.append("VoiceChatSystem mu-law roundtrip invalid")
+			var vcs_inst: Node = (vcs as Script).new() as Node
+			vm.add_child(vcs_inst)
+			vcs_inst.call("decode_and_route_peer_audio", "u2", {"d": b64}, {})
+			if not bool(vcs_inst.call("is_peer_speaking", "u2")):
+				errors.append("VoiceChatSystem decode_and_route_peer_audio did not mark peer speaking")
+
+		if gm != null and mp != null:
+			mp.set("is_online_session", true)
+			mp.set("is_room_owner", true)
+			gm.set("current_state", 1)
+			gm.set("death_sequence_active", false)
+			gm.set("victory_sequence_active", false)
+			gm.set("time_accumulator", 0.0)
+			var start_min: int = int(gm.get("current_minute"))
+			hud_node.call("toggle_pause")
+			var pm_ctrl: Control = hud_node.get("pause_menu") as Control
+			var p_char: Node = gm.get("player_character") as Node
+			if pm_ctrl == null or not pm_ctrl.visible:
+				errors.append("Online host toggle_pause did not show pause_menu")
+			if self.paused:
+				errors.append("Online host toggle_pause froze SceneTree instead of keeping time running")
+			if p_char != null and not bool(p_char.get("is_pause_menu_open")):
+				errors.append("Online host toggle_pause did not freeze local player input via is_pause_menu_open")
+			gm.call("_process", 1.0)
+			if float(gm.get("time_accumulator")) <= 0.0 and int(gm.get("current_minute")) == start_min:
+				errors.append("Online host time stopped advancing while pause_menu was open")
+			hud_node.call("toggle_pause")
+			if pm_ctrl != null and pm_ctrl.visible:
+				errors.append("Online host second toggle_pause did not close pause_menu")
+			if p_char != null and bool(p_char.get("is_pause_menu_open")):
+				errors.append("Online host second toggle_pause did not clear is_pause_menu_open")
+			mp.call("reset_to_singleplayer")
+			gm.set("current_state", 0)
 
 		var ho: CanvasItem = hud_node.get("post_process_rect") as CanvasItem
 		if ho != null and ho.visible:

@@ -119,6 +119,7 @@ var _mp_last_sig: String = ""
 var _last_sandbox_hint_active: bool = false
 var _last_admin_hint_active: bool = false
 var pause_admin_button: Button = null
+var pause_online_note_label: Label = null
 var low_fear_tint: ColorRect = null
 var _pause_settings_box: VBoxContainer = null
 var _pause_language_option: OptionButton = null
@@ -431,7 +432,7 @@ func _set_children_mouse_ignore(node: Node) -> void:
 		_set_children_mouse_ignore(child)
 
 func _on_inventory_slot_input(event: InputEvent, slot_index: int) -> void:
-	if get_tree().paused or GameManager.current_state != GameManager.GameState.PLAYING:
+	if _is_gameplay_paused_or_menu_open() or GameManager.current_state != GameManager.GameState.PLAYING:
 		return
 	var pressed: bool = false
 	if event is InputEventScreenTouch:
@@ -654,6 +655,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		else:
 			toggle_pause()
 
+func _is_online_session_active() -> bool:
+	var mp: Variant = _mp()
+	return mp != null and bool(mp.get("is_online_session"))
+
+func _is_gameplay_paused_or_menu_open() -> bool:
+	return get_tree().paused or (pause_menu != null and pause_menu.visible) or (barricade_dialog != null and barricade_dialog.visible)
+
 func toggle_pause() -> void:
 	if is_cutscene_active() or is_fate_card_overlay_open():
 		return
@@ -671,9 +679,14 @@ func toggle_pause() -> void:
 		return
 	if exit_confirm_overlay and exit_confirm_overlay.visible:
 		return
-	var is_paused: bool = not get_tree().paused
-	get_tree().paused = is_paused
+	var in_online: bool = _is_online_session_active()
+	var is_paused: bool = not pause_menu.visible
+	# Di mode online, SceneTree tetap berjalan agar jam permainan, tungku, Lampor, dan voice chat
+	# tidak berhenti meskipun host atau pemain membuka menu jeda.
+	get_tree().paused = is_paused and (not in_online)
 	pause_menu.visible = is_paused
+	if is_instance_valid(pause_online_note_label):
+		pause_online_note_label.visible = is_paused and in_online
 	if desktop_hint_panel:
 		desktop_hint_panel.visible = not is_paused
 	if touch_root:
@@ -681,8 +694,10 @@ func toggle_pause() -> void:
 	var player: PlayerController = GameManager.player_character as PlayerController
 	if player:
 		player.release_all_held_inputs()
+		player.is_pause_menu_open = is_paused
 	if is_paused:
-		GameManager.save_active_run()
+		if not in_online:
+			GameManager.save_active_run()
 		joystick_vector = Vector2.ZERO
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		if is_instance_valid(pause_admin_button):
@@ -719,6 +734,17 @@ func _style_pause_and_dialogs() -> void:
 	var pause_title: Label = pause_menu.get_node_or_null("Center/Panel/VBox/Title") as Label
 	if pause_title:
 		HorrorTheme.style_label(pause_title, "headline-md", HorrorTheme.ON_SURFACE, 19)
+	if pause_vbox and pause_online_note_label == null:
+		pause_online_note_label = Label.new()
+		pause_online_note_label.name = "PauseOnlineNoteLabel"
+		pause_online_note_label.text = LocScript.pick("Mode Online: Waktu permainan tetap berjalan.", "Online Mode: Game time keeps running.")
+		pause_online_note_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		pause_online_note_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		HorrorTheme.style_label(pause_online_note_label, "label-sm", HorrorTheme.RELIC_BRASS, 11)
+		pause_online_note_label.visible = false
+		pause_vbox.add_child(pause_online_note_label)
+		if pause_title and pause_title.get_parent() == pause_vbox:
+			pause_vbox.move_child(pause_online_note_label, pause_title.get_index() + 1)
 	if resume_button:
 		resume_button.text = "LANJUTKAN [ESC]"
 		resume_button.custom_minimum_size.y = 44.0
@@ -1052,6 +1078,9 @@ func _confirm_exit_to_menu() -> void:
 	if exit_confirm_overlay:
 		exit_confirm_overlay.visible = false
 	barricade_dialog.visible = false
+	var player: PlayerController = GameManager.player_character as PlayerController
+	if player:
+		player.is_pause_menu_open = false
 	get_tree().paused = false
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	GameManager.current_state = GameManager.GameState.MENU
@@ -1071,9 +1100,10 @@ func _on_barricade_warning(door_node: Node, player_node: Node) -> void:
 	if player:
 		player.set_virtual_move(Vector2.ZERO)
 		player.set_virtual_sprint(false)
+		player.is_pause_menu_open = true
 	joystick_vector = Vector2.ZERO
-	# Game dijeda selama dialog terbuka supaya pemain tidak bisa jalan/diserang
-	get_tree().paused = true
+	# Di singleplayer game dijeda penuh; di mode online waktu room tetap berjalan.
+	get_tree().paused = not _is_online_session_active()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 func _on_confirm_barricade() -> void:
@@ -1095,6 +1125,9 @@ func _close_barricade_dialog() -> void:
 	barricade_dialog.visible = false
 	if not pause_menu.visible:
 		get_tree().paused = false
+		var player: PlayerController = GameManager.player_character as PlayerController
+		if player:
+			player.is_pause_menu_open = false
 		if touch_root:
 			touch_root.visible = GameManager.current_state == GameManager.GameState.PLAYING
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _is_touch_device() else Input.MOUSE_MODE_CAPTURED
@@ -2088,7 +2121,7 @@ func _input(event: InputEvent) -> void:
 	_pause_drag_scrolling = false
 	_pause_drag_moved = false
 	_pause_drag_button = null
-	if not touch_controls_enabled or get_tree().paused or GameManager.current_state != GameManager.GameState.PLAYING:
+	if not touch_controls_enabled or _is_gameplay_paused_or_menu_open() or GameManager.current_state != GameManager.GameState.PLAYING:
 		return
 	if event is InputEventScreenTouch:
 		var touch: InputEventScreenTouch = event as InputEventScreenTouch
@@ -2281,7 +2314,7 @@ func _is_over_touch_button(screen_position: Vector2) -> bool:
 	return false
 
 func _on_touch_run_down() -> void:
-	if get_tree().paused:
+	if _is_gameplay_paused_or_menu_open():
 		return
 	var player: PlayerController = GameManager.player_character as PlayerController
 	if player:
@@ -2293,21 +2326,21 @@ func _on_touch_run_up() -> void:
 		player.set_virtual_sprint(false)
 
 func _on_touch_interact() -> void:
-	if get_tree().paused:
+	if _is_gameplay_paused_or_menu_open():
 		return
 	var player: PlayerController = GameManager.player_character as PlayerController
 	if player:
 		player.touch_interact()
 
 func _on_touch_flashlight() -> void:
-	if get_tree().paused:
+	if _is_gameplay_paused_or_menu_open():
 		return
 	var player: PlayerController = GameManager.player_character as PlayerController
 	if player:
 		player.toggle_flashlight()
 
 func _on_touch_use() -> void:
-	if get_tree().paused:
+	if _is_gameplay_paused_or_menu_open():
 		return
 	var player: PlayerController = GameManager.player_character as PlayerController
 	if player:
@@ -2329,7 +2362,7 @@ func _process(delta: float) -> void:
 		active_cutscene_elapsed += delta
 	var player: PlayerController = GameManager.player_character as PlayerController
 	if player and player.virtual_sprint_pressed:
-		if get_tree().paused or touch_root == null or not touch_root.visible or not is_instance_valid(touch_run_button) or not touch_run_button.button_pressed:
+		if _is_gameplay_paused_or_menu_open() or touch_root == null or not touch_root.visible or not is_instance_valid(touch_run_button) or not touch_run_button.button_pressed:
 			player.set_virtual_sprint(false)
 	if noise_bar.value > 0:
 		noise_bar.value = move_toward(noise_bar.value, 0.0, delta * 1.5)
@@ -2710,13 +2743,13 @@ func _play_lampor_descent_cutscene() -> void:
 			player._sync_flashlight_state(true)
 		if is_instance_valid(crosshair):
 			crosshair.visible = true
-		if touch_root and _is_touch_device() and not get_tree().paused:
+		if touch_root and _is_touch_device() and not _is_gameplay_paused_or_menu_open():
 			touch_root.visible = true
-		if desktop_hint_panel and not _is_touch_device() and not get_tree().paused:
+		if desktop_hint_panel and not _is_touch_device() and not _is_gameplay_paused_or_menu_open():
 			desktop_hint_panel.visible = true
 		if hud_bag_button:
 			hud_bag_button.visible = true
-		if not get_tree().paused:
+		if not _is_gameplay_paused_or_menu_open():
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _is_touch_device() else Input.MOUSE_MODE_CAPTURED
 		var mp_cb: Variant = _mp()
 		if (mp_cb == null or not mp_cb.is_online_session or mp_cb.is_room_owner) and is_instance_valid(lampor) and lampor.current_state != LamporStateMachine.State.CHASE and lampor.current_state != LamporStateMachine.State.BANISHED:
@@ -3574,7 +3607,7 @@ func _on_fate_overlay_opened() -> void:
 
 func _on_fate_overlay_closed(_chosen_card: Dictionary) -> void:
 	_refresh_fate_cards_strip()
-	if not get_tree().paused and not is_cutscene_active() and GameManager.current_state == GameManager.GameState.PLAYING:
+	if not _is_gameplay_paused_or_menu_open() and not is_cutscene_active() and GameManager.current_state == GameManager.GameState.PLAYING:
 		if touch_root and _is_touch_device():
 			touch_root.visible = true
 		if desktop_hint_panel and not _is_touch_device():

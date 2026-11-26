@@ -118,13 +118,13 @@ func _ensure_initialized() -> void:
 	voice_player_3d.name = "VoicePlayer3D"
 	voice_player_3d.position = Vector3(0.0, 1.65, 0.0)
 	voice_player_3d.unit_size = 14.0
-	voice_player_3d.max_distance = 55.0
+	voice_player_3d.max_distance = 120.0
 	voice_player_3d.bus = &"Master"
 	add_child(voice_player_3d)
 	if DisplayServer.get_name() != "headless":
 		voice_generator = AudioStreamGenerator.new()
 		voice_generator.mix_rate = 8000.0
-		voice_generator.buffer_length = 0.65
+		voice_generator.buffer_length = 1.5
 		voice_player_3d.stream = voice_generator
 		voice_player_3d.play()
 

@@ -227,6 +227,11 @@ var admin_panel_btn: Button
 var friends_overlay: ColorRect
 var friends_panel: PanelContainer
 var friends_scroll: ScrollContainer
+var friends_tab_list_btn: Button
+var friends_tab_add_btn: Button
+var friends_list_tab_box: VBoxContainer
+var friends_add_tab_box: VBoxContainer
+var friends_list_refresh_btn: Button
 var friends_search_row: BoxContainer
 var friends_search_input: LineEdit
 var friends_search_btn: Button
@@ -237,10 +242,13 @@ var friends_content_box: VBoxContainer
 var friends_status_label: Label
 var friends_requests_list: VBoxContainer = null
 var friends_my_list: VBoxContainer
+var friends_outgoing_header: Label
+var friends_outgoing_list: VBoxContainer
 var friends_directory_header: Label
 var friends_directory_list: VBoxContainer
 var friends_button: Button = null
 var profile_status_badge_label: Label
+var _friends_active_tab: String = "list"
 var _friends_refresh_in_flight: bool = false
 var _friends_auto_refresh_accum: float = 0.0
 var _friends_search_query: String = ""
@@ -4560,9 +4568,99 @@ func _build_friends_modal() -> void:
 	friends_content_box.add_theme_constant_override("separation", 10)
 	body.add_child(friends_content_box)
 
+	var friends_tabs_row := HBoxContainer.new()
+	friends_tabs_row.add_theme_constant_override("separation", 8)
+	friends_tabs_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	friends_content_box.add_child(friends_tabs_row)
+
+	friends_tab_list_btn = _make_button(LocScript.pick("DAFTAR TEMAN", "MY FRIENDS"), true)
+	friends_tab_list_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	friends_tab_list_btn.custom_minimum_size = Vector2(0.0, 38.0)
+	friends_tab_list_btn.pressed.connect(func() -> void: _select_friends_tab("list"))
+	friends_tabs_row.add_child(friends_tab_list_btn)
+
+	friends_tab_add_btn = _make_button(LocScript.pick("TAMBAH TEMAN", "ADD FRIENDS"), false, "secondary")
+	friends_tab_add_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	friends_tab_add_btn.custom_minimum_size = Vector2(0.0, 38.0)
+	friends_tab_add_btn.pressed.connect(func() -> void: _select_friends_tab("add"))
+	friends_tabs_row.add_child(friends_tab_add_btn)
+
+	friends_status_label = _make_label("", 12, HorrorTheme.ON_SURFACE_VARIANT, HORIZONTAL_ALIGNMENT_LEFT, "label-sm")
+	friends_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	friends_status_label.visible = false
+	friends_content_box.add_child(friends_status_label)
+
+	friends_scroll = ScrollContainer.new()
+	friends_scroll.custom_minimum_size = Vector2(0.0, 330.0)
+	friends_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	friends_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	HorrorTheme.style_scroll_container(friends_scroll)
+	friends_content_box.add_child(friends_scroll)
+
+	var margin := MarginContainer.new()
+	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.mouse_filter = Control.MOUSE_FILTER_PASS
+	margin.add_theme_constant_override("margin_right", 8)
+	friends_scroll.add_child(margin)
+
+	var stack := VBoxContainer.new()
+	stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	stack.mouse_filter = Control.MOUSE_FILTER_PASS
+	stack.add_theme_constant_override("separation", 12)
+	margin.add_child(stack)
+
+	# Tab 1: Daftar Teman + Permintaan Pertemanan Masuk
+	friends_list_tab_box = VBoxContainer.new()
+	friends_list_tab_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	friends_list_tab_box.mouse_filter = Control.MOUSE_FILTER_PASS
+	friends_list_tab_box.add_theme_constant_override("separation", 12)
+	stack.add_child(friends_list_tab_box)
+
+	var req_toolbar := HBoxContainer.new()
+	req_toolbar.add_theme_constant_override("separation", 8)
+	req_toolbar.mouse_filter = Control.MOUSE_FILTER_PASS
+	friends_list_tab_box.add_child(req_toolbar)
+
+	var req_header := _make_label(LocScript.pick("PERMINTAAN PERTEMANAN", "FRIEND REQUESTS"), 13, HorrorTheme.RELIC_BRASS, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
+	req_header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	req_header.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	req_toolbar.add_child(req_header)
+
+	friends_list_refresh_btn = _make_button(LocScript.pick("SEGARKAN", "REFRESH"), false, "secondary")
+	friends_list_refresh_btn.custom_minimum_size = Vector2(96.0, 34.0)
+	friends_list_refresh_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
+	friends_list_refresh_btn.pressed.connect(func() -> void: _refresh_friends_data(false))
+	req_toolbar.add_child(friends_list_refresh_btn)
+
+	friends_requests_list = VBoxContainer.new()
+	friends_requests_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	friends_requests_list.mouse_filter = Control.MOUSE_FILTER_PASS
+	friends_requests_list.add_theme_constant_override("separation", 8)
+	friends_list_tab_box.add_child(friends_requests_list)
+
+	friends_list_tab_box.add_child(HorrorTheme.make_hairline_divider())
+
+	var my_header := _make_label(LocScript.pick("DAFTAR TEMAN", "MY FRIENDS"), 13, HorrorTheme.PRIMARY, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
+	my_header.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	friends_list_tab_box.add_child(my_header)
+
+	friends_my_list = VBoxContainer.new()
+	friends_my_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	friends_my_list.mouse_filter = Control.MOUSE_FILTER_PASS
+	friends_my_list.add_theme_constant_override("separation", 8)
+	friends_list_tab_box.add_child(friends_my_list)
+
+	# Tab 2: Tambah Teman (Search Bar + Permintaan Terkirim + Pemain Teratas)
+	friends_add_tab_box = VBoxContainer.new()
+	friends_add_tab_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	friends_add_tab_box.mouse_filter = Control.MOUSE_FILTER_PASS
+	friends_add_tab_box.add_theme_constant_override("separation", 12)
+	friends_add_tab_box.visible = false
+	stack.add_child(friends_add_tab_box)
+
 	friends_search_row = BoxContainer.new()
 	friends_search_row.add_theme_constant_override("separation", 6)
-	friends_content_box.add_child(friends_search_row)
+	friends_add_tab_box.add_child(friends_search_row)
 
 	friends_search_input = LineEdit.new()
 	friends_search_input.placeholder_text = LocScript.pick("Cari username pemain...", "Search player username...")
@@ -4595,67 +4693,60 @@ func _build_friends_modal() -> void:
 	friends_refresh_btn.pressed.connect(func() -> void: _refresh_friends_data(false))
 	search_btns.add_child(friends_refresh_btn)
 
-	friends_status_label = _make_label("", 12, HorrorTheme.ON_SURFACE_VARIANT, HORIZONTAL_ALIGNMENT_LEFT, "label-sm")
-	friends_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	friends_status_label.visible = false
-	friends_content_box.add_child(friends_status_label)
+	friends_outgoing_header = _make_label(LocScript.pick("PERMINTAAN TERKIRIM", "SENT REQUESTS"), 13, HorrorTheme.RELIC_BRASS, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
+	friends_outgoing_header.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	friends_outgoing_header.visible = false
+	friends_add_tab_box.add_child(friends_outgoing_header)
 
-	friends_scroll = ScrollContainer.new()
-	friends_scroll.custom_minimum_size = Vector2(0.0, 320.0)
-	friends_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	friends_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	HorrorTheme.style_scroll_container(friends_scroll)
-	friends_content_box.add_child(friends_scroll)
-
-	var margin := MarginContainer.new()
-	margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	margin.mouse_filter = Control.MOUSE_FILTER_PASS
-	margin.add_theme_constant_override("margin_right", 8)
-	friends_scroll.add_child(margin)
-
-	var stack := VBoxContainer.new()
-	stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	stack.mouse_filter = Control.MOUSE_FILTER_PASS
-	stack.add_theme_constant_override("separation", 12)
-	margin.add_child(stack)
-
-	var req_header := _make_label(LocScript.pick("PERMINTAAN PERTEMANAN", "FRIEND REQUESTS"), 13, HorrorTheme.RELIC_BRASS, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
-	req_header.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	stack.add_child(req_header)
-
-	friends_requests_list = VBoxContainer.new()
-	friends_requests_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	friends_requests_list.mouse_filter = Control.MOUSE_FILTER_PASS
-	friends_requests_list.add_theme_constant_override("separation", 8)
-	stack.add_child(friends_requests_list)
-
-	stack.add_child(HorrorTheme.make_hairline_divider())
-
-	var my_header := _make_label(LocScript.pick("DAFTAR TEMAN", "MY FRIENDS"), 13, HorrorTheme.PRIMARY, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
-	my_header.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	stack.add_child(my_header)
-
-	friends_my_list = VBoxContainer.new()
-	friends_my_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	friends_my_list.mouse_filter = Control.MOUSE_FILTER_PASS
-	friends_my_list.add_theme_constant_override("separation", 8)
-	stack.add_child(friends_my_list)
-
-	stack.add_child(HorrorTheme.make_hairline_divider())
+	friends_outgoing_list = VBoxContainer.new()
+	friends_outgoing_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	friends_outgoing_list.mouse_filter = Control.MOUSE_FILTER_PASS
+	friends_outgoing_list.add_theme_constant_override("separation", 8)
+	friends_outgoing_list.visible = false
+	friends_add_tab_box.add_child(friends_outgoing_list)
 
 	friends_directory_header = _make_label(LocScript.pick("PEMAIN TERATAS · MAKS 10", "TOP PLAYERS · MAX 10"), 13, HorrorTheme.PRIMARY, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
 	friends_directory_header.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	stack.add_child(friends_directory_header)
+	friends_add_tab_box.add_child(friends_directory_header)
 
 	friends_directory_list = VBoxContainer.new()
 	friends_directory_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	friends_directory_list.mouse_filter = Control.MOUSE_FILTER_PASS
 	friends_directory_list.add_theme_constant_override("separation", 8)
-	stack.add_child(friends_directory_list)
+	friends_add_tab_box.add_child(friends_directory_list)
 
 	var close_btn := _make_button(LocScript.pick("TUTUP", "CLOSE"), false, "ghost")
 	close_btn.pressed.connect(func() -> void: friends_overlay.visible = false)
 	body.add_child(close_btn)
+	_refresh_friends_tab_buttons()
+
+func _select_friends_tab(tab_id: String) -> void:
+	_friends_active_tab = "add" if tab_id == "add" else "list"
+	if is_instance_valid(friends_list_tab_box):
+		friends_list_tab_box.visible = (_friends_active_tab == "list")
+	if is_instance_valid(friends_add_tab_box):
+		friends_add_tab_box.visible = (_friends_active_tab == "add")
+	if is_instance_valid(friends_scroll):
+		friends_scroll.scroll_vertical = 0
+	_refresh_friends_tab_buttons()
+
+func _refresh_friends_tab_buttons() -> void:
+	var am: Variant = _am()
+	var inc_count: int = 0
+	var out_count: int = 0
+	if am != null and am.can_access_online_modes():
+		if "incoming_friend_requests" in am and am.get("incoming_friend_requests") is Array:
+			inc_count = (am.get("incoming_friend_requests") as Array).size()
+		if "outgoing_friend_requests" in am and am.get("outgoing_friend_requests") is Array:
+			out_count = (am.get("outgoing_friend_requests") as Array).size()
+	if is_instance_valid(friends_tab_list_btn):
+		var list_txt: String = LocScript.pick("DAFTAR TEMAN", "MY FRIENDS")
+		friends_tab_list_btn.text = "%s (%d)" % [list_txt, inc_count] if inc_count > 0 else list_txt
+		HorrorTheme.style_button(friends_tab_list_btn, "primary" if _friends_active_tab == "list" else "secondary", 12, true)
+	if is_instance_valid(friends_tab_add_btn):
+		var add_txt: String = LocScript.pick("TAMBAH TEMAN", "ADD FRIENDS")
+		friends_tab_add_btn.text = "%s (%d)" % [add_txt, out_count] if out_count > 0 else add_txt
+		HorrorTheme.style_button(friends_tab_add_btn, "primary" if _friends_active_tab == "add" else "secondary", 12, true)
 
 func _open_friends_modal() -> void:
 	_friends_search_query = ""
@@ -4664,6 +4755,7 @@ func _open_friends_modal() -> void:
 	_friends_last_sig = ""
 	_friends_auto_refresh_accum = 0.0
 	_set_friends_status("", HorrorTheme.ON_SURFACE_VARIANT)
+	_select_friends_tab("list")
 	_sync_friends_modal_auth_state()
 	_open_modal(friends_overlay, friends_panel)
 	var am: Variant = _am()
@@ -4736,6 +4828,8 @@ func _refresh_friends_data(silent: bool = false) -> void:
 		_friends_loading = true
 		if friends_refresh_btn:
 			friends_refresh_btn.disabled = true
+		if friends_list_refresh_btn:
+			friends_list_refresh_btn.disabled = true
 		_render_friends_modal(am.friends_list if "friends_list" in am else [], am.players_directory if "players_directory" in am else [])
 
 	var res: Dictionary = await am.fetch_friends_and_directory(_friends_search_query)
@@ -4745,6 +4839,8 @@ func _refresh_friends_data(silent: bool = false) -> void:
 		return
 	if friends_refresh_btn:
 		friends_refresh_btn.disabled = false
+	if friends_list_refresh_btn:
+		friends_list_refresh_btn.disabled = false
 	_refresh_friends_button_badge()
 	if not bool(res.get("ok", false)):
 		if not silent:
@@ -4888,10 +4984,15 @@ func _render_friends_modal(friends_arr: Array, dir_arr: Array) -> void:
 	if is_instance_valid(friends_requests_list):
 		for ch: Node in friends_requests_list.get_children():
 			ch.queue_free()
+	if is_instance_valid(friends_outgoing_list):
+		for ch: Node in friends_outgoing_list.get_children():
+			ch.queue_free()
 	for ch: Node in friends_my_list.get_children():
 		ch.queue_free()
 	for ch: Node in friends_directory_list.get_children():
 		ch.queue_free()
+
+	_refresh_friends_tab_buttons()
 
 	if friends_directory_header:
 		if _friends_search_query.is_empty():
@@ -4903,6 +5004,11 @@ func _render_friends_modal(friends_arr: Array, dir_arr: Array) -> void:
 	var incoming_arr: Array = am.get("incoming_friend_requests") if (am != null and "incoming_friend_requests" in am and am.get("incoming_friend_requests") is Array) else []
 	var outgoing_arr: Array = am.get("outgoing_friend_requests") if (am != null and "outgoing_friend_requests" in am and am.get("outgoing_friend_requests") is Array) else []
 
+	if is_instance_valid(friends_outgoing_header):
+		friends_outgoing_header.visible = not outgoing_arr.is_empty()
+	if is_instance_valid(friends_outgoing_list):
+		friends_outgoing_list.visible = not outgoing_arr.is_empty()
+
 	if _friends_loading and friends_arr.is_empty() and dir_arr.is_empty() and incoming_arr.is_empty() and outgoing_arr.is_empty():
 		var load_lbl := _make_label(LocScript.pick("Memuat daftar teman dan pemain...", "Loading friends and players..."), 12, HorrorTheme.ON_SURFACE_VARIANT, HORIZONTAL_ALIGNMENT_CENTER, "body-md")
 		load_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -4910,7 +5016,7 @@ func _render_friends_modal(friends_arr: Array, dir_arr: Array) -> void:
 		return
 
 	if is_instance_valid(friends_requests_list):
-		if incoming_arr.is_empty() and outgoing_arr.is_empty():
+		if incoming_arr.is_empty():
 			var empty_req := _make_label(
 				LocScript.pick("Belum ada permintaan pertemanan masuk.", "No incoming friend requests."),
 				12, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "body-md"
@@ -4968,48 +5074,49 @@ func _render_friends_modal(friends_arr: Array, dir_arr: Array) -> void:
 				decline_btn.pressed.connect(_on_decline_friend_request_pressed.bind(req_uid, req_uname, false))
 				req_btns.add_child(decline_btn)
 
-			for or_var: Variant in outgoing_arr:
-				if not (or_var is Dictionary):
-					continue
-				var out_d: Dictionary = or_var as Dictionary
-				var out_uid: String = str(out_d.get("id", ""))
-				var out_uname: String = str(out_d.get("username", ""))
-				var out_card := PanelContainer.new()
-				out_card.mouse_filter = Control.MOUSE_FILTER_PASS
-				out_card.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOW, HorrorTheme.BORDER_SUBTLE, 2, 10, 8))
-				friends_requests_list.add_child(out_card)
+	if is_instance_valid(friends_outgoing_list):
+		for or_var: Variant in outgoing_arr:
+			if not (or_var is Dictionary):
+				continue
+			var out_d: Dictionary = or_var as Dictionary
+			var out_uid: String = str(out_d.get("id", ""))
+			var out_uname: String = str(out_d.get("username", ""))
+			var out_card := PanelContainer.new()
+			out_card.mouse_filter = Control.MOUSE_FILTER_PASS
+			out_card.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOW, HorrorTheme.BORDER_SUBTLE, 2, 10, 8))
+			friends_outgoing_list.add_child(out_card)
 
-				var out_row := HBoxContainer.new()
-				out_row.mouse_filter = Control.MOUSE_FILTER_PASS
-				out_row.add_theme_constant_override("separation", 8)
-				out_card.add_child(out_row)
+			var out_row := HBoxContainer.new()
+			out_row.mouse_filter = Control.MOUSE_FILTER_PASS
+			out_row.add_theme_constant_override("separation", 8)
+			out_card.add_child(out_row)
 
-				var out_info := VBoxContainer.new()
-				out_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				out_info.mouse_filter = Control.MOUSE_FILTER_IGNORE
-				out_info.add_theme_constant_override("separation", 3)
-				out_row.add_child(out_info)
+			var out_info := VBoxContainer.new()
+			out_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			out_info.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			out_info.add_theme_constant_override("separation", 3)
+			out_row.add_child(out_info)
 
-				out_info.add_child(_build_player_identity_row(out_d))
-				var out_tag := _make_label(
-					LocScript.pick("[MENUNGGU KONFIRMASI]", "[AWAITING CONFIRMATION]"),
-					11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm"
-				)
-				out_tag.mouse_filter = Control.MOUSE_FILTER_IGNORE
-				out_info.add_child(out_tag)
+			out_info.add_child(_build_player_identity_row(out_d))
+			var out_tag := _make_label(
+				LocScript.pick("[MENUNGGU KONFIRMASI]", "[AWAITING CONFIRMATION]"),
+				11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm"
+			)
+			out_tag.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			out_info.add_child(out_tag)
 
-				var cancel_btn := _make_button(LocScript.pick("BATAL", "CANCEL"), false, "ghost")
-				cancel_btn.custom_minimum_size = Vector2(76.0, 34.0)
-				cancel_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
-				cancel_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-				cancel_btn.pressed.connect(_on_decline_friend_request_pressed.bind(out_uid, out_uname, true))
-				out_row.add_child(cancel_btn)
+			var cancel_btn := _make_button(LocScript.pick("BATAL", "CANCEL"), false, "ghost")
+			cancel_btn.custom_minimum_size = Vector2(76.0, 34.0)
+			cancel_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
+			cancel_btn.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			cancel_btn.pressed.connect(_on_decline_friend_request_pressed.bind(out_uid, out_uname, true))
+			out_row.add_child(cancel_btn)
 
 	if friends_arr.is_empty():
 		var empty_f := _make_label(
 			LocScript.pick(
-				"Belum ada teman. Cari username pemain di atas atau tekan TAMBAHKAN dari daftar 10 pemain teratas di bawah.",
-				"No friends yet. Search by username above or press ADD on the top 10 players below."
+				"Belum ada teman. Buka tab TAMBAH TEMAN untuk mencari username dan menambahkan teman.",
+				"No friends yet. Open the ADD FRIENDS tab to search usernames and add friends."
 			),
 			12, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "body-md"
 		)

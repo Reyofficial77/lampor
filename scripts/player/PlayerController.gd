@@ -79,6 +79,7 @@ const BASE_FLASHLIGHT_RANGE: float = 34.0
 var is_hiding: bool = false
 var hiding_spot: Node = null
 var is_inventory_open: bool = false
+var is_pause_menu_open: bool = false
 var hide_yaw_center: float = 0.0
 const HIDE_LOOK_YAW: float = 55.0
 const HIDE_LOOK_PITCH: float = 40.0
@@ -252,7 +253,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if GameManager.current_state != GameManager.GameState.PLAYING:
 		return
 
-	if is_inventory_open or (get_viewport().gui_get_focus_owner() is LineEdit):
+	if is_inventory_open or is_pause_menu_open or (get_viewport().gui_get_focus_owner() is LineEdit):
 		return
 
 	if is_hiding:
@@ -321,7 +322,7 @@ func _physics_process(delta: float) -> void:
 		_sync_hand_prop_visibility()
 		_sync_flashlight_state(true)
 
-	if is_hiding or is_inventory_open or (get_viewport().gui_get_focus_owner() is LineEdit):
+	if is_hiding or is_inventory_open or is_pause_menu_open or (get_viewport().gui_get_focus_owner() is LineEdit):
 		release_held_sprint()
 		current_noise_level = 0.0
 		velocity = Vector3.ZERO
@@ -473,7 +474,7 @@ func set_virtual_sprint(pressed: bool) -> void:
 	virtual_sprint_pressed = pressed and not is_caught
 
 func apply_touch_look(relative: Vector2) -> void:
-	if is_caught or GameManager.current_state != GameManager.GameState.PLAYING or is_hiding:
+	if is_caught or is_pause_menu_open or GameManager.current_state != GameManager.GameState.PLAYING or is_hiding:
 		return
 	rotate_y(-relative.x * camera_sensitivity)
 	head.rotate_x(-relative.y * camera_sensitivity)
@@ -482,20 +483,24 @@ func apply_touch_look(relative: Vector2) -> void:
 	look_sway_target.y = clampf(look_sway_target.y - relative.y * 0.12, -8.0, 8.0)
 
 func touch_interact() -> void:
+	if is_pause_menu_open:
+		return
 	_perform_interact_or_use()
 
 func touch_use_item() -> void:
+	if is_pause_menu_open:
+		return
 	_perform_interact_or_use()
 
 func touch_select_slot(slot_index: int) -> void:
-	if not is_caught and not get_tree().paused and GameManager.current_state == GameManager.GameState.PLAYING:
+	if not is_caught and not is_pause_menu_open and not get_tree().paused and GameManager.current_state == GameManager.GameState.PLAYING:
 		inventory_system.select_slot(slot_index)
 
 func _play_footstep() -> void:
 	AudioManager.play_sound("footstep_dirt", -8.0, randf_range(0.9, 1.1))
 
 func toggle_flashlight(state: Variant = null) -> void:
-	if is_caught or get_tree().paused or GameManager.current_state != GameManager.GameState.PLAYING:
+	if is_caught or is_pause_menu_open or get_tree().paused or GameManager.current_state != GameManager.GameState.PLAYING:
 		return
 	if equipped_item_id != "flashlight":
 		if state != null and not bool(state):

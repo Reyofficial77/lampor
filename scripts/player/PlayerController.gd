@@ -30,8 +30,10 @@ var virtual_sprint_pressed: bool = false
 var is_caught: bool = false
 const ENERGY_DRINK_DURATION: float = 3.0
 const ENERGY_DRINK_COOLDOWN: float = 6.0
+const KENTONGAN_COOLDOWN: float = 10.0
 var energy_drink_timer: float = 0.0
 var energy_drink_cooldown: float = 0.0
+var kentongan_cooldown: float = 0.0
 var _sprint_from_event: bool = false
 var _stamina_dialog_cooldown: float = 0.0
 var _low_battery_warned: bool = false
@@ -340,6 +342,8 @@ func _physics_process(delta: float) -> void:
 
 	if energy_drink_cooldown > 0.0:
 		energy_drink_cooldown = maxf(0.0, energy_drink_cooldown - delta)
+	if kentongan_cooldown > 0.0:
+		kentongan_cooldown = maxf(0.0, kentongan_cooldown - delta)
 	if energy_drink_timer > 0.0:
 		energy_drink_timer = maxf(0.0, energy_drink_timer - delta)
 		current_stamina = max_stamina
@@ -732,8 +736,23 @@ func _try_use_equipped_item() -> bool:
 			interaction_ray._update_prompt()
 		return true
 	elif item.get("id") == "kentongan":
+		var lampors: Array[Node] = get_tree().get_nodes_in_group("lampor")
+		for lampor_node: Node in lampors:
+			if lampor_node.has_method("is_repelled") and bool(lampor_node.call("is_repelled")):
+				var rem: float = float(lampor_node.call("get_repel_remaining")) if lampor_node.has_method("get_repel_remaining") else 0.0
+				SignalBus.dialog_requested.emit(LocScript.pick(
+					"Efek kentongan masih aktif (%.1f detik)! Tidak dapat di-spam." % rem,
+					"Kentongan effect is still active (%.1fs)! Cannot spam." % rem
+				), 1.8)
+				return true
+		if kentongan_cooldown > 0.0:
+			SignalBus.dialog_requested.emit(LocScript.pick(
+				"Tunggu %.1f detik sebelum memukul Kentongan lagi." % kentongan_cooldown,
+				"Wait %.1fs before striking Kentongan again." % kentongan_cooldown
+			), 1.8)
+			return true
 		var repelled_any: bool = false
-		for lampor_node: Node in get_tree().get_nodes_in_group("lampor"):
+		for lampor_node: Node in lampors:
 			if lampor_node.has_method("repel_from_kentongan"):
 				if bool(lampor_node.call("repel_from_kentongan", 5.0)):
 					repelled_any = true
@@ -743,6 +762,7 @@ func _try_use_equipped_item() -> bool:
 				"Lampor hasn't descended into the village yet. Save your kentongan!"
 			), 2.5)
 			return true
+		kentongan_cooldown = KENTONGAN_COOLDOWN
 		inventory_system.consume_equipped_item()
 		trigger_action_animation("kentongan_hit", 0.55)
 		AudioManager.play_sound("kentongan", 2.0)
@@ -1952,6 +1972,7 @@ func revive_from_extra_life() -> void:
 	virtual_sprint_pressed = false
 	energy_drink_timer = 0.0
 	energy_drink_cooldown = 0.0
+	kentongan_cooldown = 0.0
 	move_blend = 0.0
 	sprint_blend = 0.0
 	velocity = Vector3.ZERO

@@ -95,13 +95,50 @@ func _run_checks() -> void:
 		inb_ov.visible = false
 
 	var tr_bar: Control = mm.get("top_right_bar") as Control
-	var acc_btn: Button = mm.get("account_btn") as Button
+	var acc_chip: PanelContainer = mm.get("top_account_chip") as PanelContainer
+	var acc_avatar: TextureRect = mm.get("top_account_avatar_rect") as TextureRect
+	var acc_lbl: Label = mm.get("top_account_label") as Label
 	var exit_btn: Button = mm.get("exit_button") as Button
-	if tr_bar == null or acc_btn == null or exit_btn == null:
-		errors.append("MainMenu top_right_bar, account_btn, or exit_button missing")
+	if mm.get("admin_panel_btn") != null or mm.get("account_btn") != null:
+		errors.append("MainMenu deprecated admin_panel_btn or account_btn must be null")
+	if tr_bar == null or acc_chip == null or acc_avatar == null or acc_lbl == null or exit_btn == null:
+		errors.append("MainMenu top_right_bar, top_account_chip, top_account_avatar_rect, top_account_label, or exit_button missing")
 	else:
-		if exit_btn.get_parent() != tr_bar or acc_btn.get_parent() != tr_bar or exit_btn.get_index() != acc_btn.get_index() + 1 or exit_btn.text != "" or not (exit_btn.get_node_or_null("IconDraw") is Control):
-			errors.append("MainMenu exit_button must be immediately right of account_btn in top_right_bar with empty text and IconDraw")
+		if exit_btn.get_parent() != tr_bar or acc_chip.get_parent() != tr_bar or exit_btn.get_index() != acc_chip.get_index() + 1 or exit_btn.text != "" or not (exit_btn.get_node_or_null("IconDraw") is Control):
+			errors.append("MainMenu exit_button must be immediately right of top_account_chip in top_right_bar with empty text and IconDraw")
+		if acc_avatar.texture == null:
+			errors.append("MainMenu top_account_avatar_rect has null texture")
+		var forbidden_chip_tokens: Array[String] = ["AKUN:", "ACCOUNT:", "[ONLINE]", "[OFFLINE]", "[TAMU]", "[GUEST]"]
+		for tok: String in forbidden_chip_tokens:
+			if acc_lbl.text.contains(tok):
+				errors.append("MainMenu top_account_label contains forbidden token: " + tok)
+		var gm_top: Variant = root.get_node_or_null("GameManager")
+		var am_top: Variant = gm_top.call("get_account_manager") if gm_top != null and gm_top.has_method("get_account_manager") else null
+		if am_top != null:
+			var orig_top_logged_in: bool = bool(am_top.get("is_logged_in"))
+			var orig_top_guest: bool = bool(am_top.get("is_guest_mode"))
+			var orig_top_token: String = str(am_top.get("session_token"))
+			var orig_top_uname: String = str(am_top.get("username"))
+			var orig_top_disp: String = str(am_top.get("display_name"))
+			am_top.set("is_logged_in", true)
+			am_top.set("is_guest_mode", false)
+			am_top.set("session_token", "tok")
+			am_top.set("username", "lordreyid")
+			am_top.set("display_name", "Lord Rey")
+			mm.call("_refresh_account_ui")
+			if acc_lbl.text != "Lord Rey":
+				errors.append("MainMenu top_account_label expected 'Lord Rey' for mock logged-in user, got: " + acc_lbl.text)
+			if acc_avatar.texture == null:
+				errors.append("MainMenu top_account_avatar_rect null after mock login refresh")
+			for tok: String in forbidden_chip_tokens:
+				if acc_lbl.text.contains(tok):
+					errors.append("MainMenu top_account_label contains forbidden token after login: " + tok)
+			am_top.set("is_logged_in", orig_top_logged_in)
+			am_top.set("is_guest_mode", orig_top_guest)
+			am_top.set("session_token", orig_top_token)
+			am_top.set("username", orig_top_uname)
+			am_top.set("display_name", orig_top_disp)
+			mm.call("_refresh_account_ui")
 
 	if float(mm.call("_compute_menu_column_width", Vector2(390.0, 844.0), true)) > 300.0:
 		errors.append("MainMenu _compute_menu_column_width exceeds 300.0 on 390x844 mobile portrait")
@@ -109,11 +146,74 @@ func _run_checks() -> void:
 	var acc_close_btn: Button = mm.get("account_close_btn") as Button
 	if acc_close_btn == null or acc_close_btn.text != "" or not (acc_close_btn.get_node_or_null("IconDraw") is Control):
 		errors.append("MainMenu account_close_btn must be icon-only X button (empty text + IconDraw)")
-	for ov_name: String in ["friends_overlay", "inbox_overlay", "settings_overlay", "guide_overlay", "shop_overlay", "fix_notes_overlay"]:
+	for ov_name: String in ["friends_overlay", "inbox_overlay", "settings_overlay", "guide_overlay", "shop_overlay", "fix_notes_overlay", "player_profile_overlay"]:
 		var ov_ctrl: Control = mm.get(ov_name) as Control
 		var x_btns: Array[Node] = ov_ctrl.find_children("IconDraw", "Control", true, false) if ov_ctrl != null else []
 		if x_btns.is_empty():
 			errors.append("MainMenu modal missing header X IconDraw close button: " + ov_name)
+
+	var pp_ov: ColorRect = mm.get("player_profile_overlay") as ColorRect
+	var pp_avatar_rect: TextureRect = mm.get("player_profile_avatar_rect") as TextureRect
+	var pp_disp_lbl: Label = mm.get("player_profile_display_label") as Label
+	var pp_uname_lbl: Label = mm.get("player_profile_username_label") as Label
+	var pp_bio_lbl: Label = mm.get("player_profile_bio_label") as Label
+	if pp_ov == null or pp_avatar_rect == null or pp_disp_lbl == null or pp_uname_lbl == null or pp_bio_lbl == null:
+		errors.append("MainMenu player_profile_overlay or its profile labels/avatar_rect missing")
+	elif fr_list != null and dir_list != null:
+		var mock_friends: Array = [{
+			"id": "u_fr_1",
+			"username": "temandesa",
+			"displayName": "Teman Desa",
+			"avatarUrl": "preset:keris",
+			"bio": "Penjaga obor desa",
+			"totalWins": 4,
+			"isVerified": false,
+			"isOnline": true
+		}]
+		var mock_dir: Array = [{
+			"id": "u_dir_1",
+			"username": "penjagadesa",
+			"displayName": "Penjaga Desa",
+			"avatarUrl": "preset:keris",
+			"bio": "Penjaga obor desa",
+			"totalWins": 7,
+			"isVerified": true,
+			"isOnline": true
+		}]
+		mm.call("_render_friends_modal", mock_friends, mock_dir)
+		await process_frame
+		var fr_thumbs: Array[Node] = fr_list.find_children("*", "TextureRect", true, false)
+		var dir_thumbs: Array[Node] = dir_list.find_children("*", "TextureRect", true, false)
+		var fr_has_tex: bool = false
+		for ft_node: Node in fr_thumbs:
+			var ft_rect: TextureRect = ft_node as TextureRect
+			if ft_rect != null and ft_rect.texture != null:
+				fr_has_tex = true
+				break
+		var dir_has_tex: bool = false
+		for dt_node: Node in dir_thumbs:
+			var dt_rect: TextureRect = dt_node as TextureRect
+			if dt_rect != null and dt_rect.texture != null:
+				dir_has_tex = true
+				break
+		if not fr_has_tex:
+			errors.append("MainMenu friends_my_list missing TextureRect avatar thumbnail with non-null texture")
+		if not dir_has_tex:
+			errors.append("MainMenu friends_directory_list missing TextureRect avatar thumbnail with non-null texture")
+		mm.call("_open_player_profile_modal", mock_dir[0])
+		if not pp_ov.visible:
+			errors.append("MainMenu _open_player_profile_modal did not make player_profile_overlay visible")
+		if pp_disp_lbl.text != "Penjaga Desa":
+			errors.append("MainMenu player_profile_display_label expected 'Penjaga Desa', got: " + pp_disp_lbl.text)
+		if not pp_uname_lbl.text.contains("@penjagadesa"):
+			errors.append("MainMenu player_profile_username_label missing @penjagadesa, got: " + pp_uname_lbl.text)
+		if pp_bio_lbl.text != "Penjaga obor desa":
+			errors.append("MainMenu player_profile_bio_label expected 'Penjaga obor desa', got: " + pp_bio_lbl.text)
+		if pp_avatar_rect.texture == null:
+			errors.append("MainMenu player_profile_avatar_rect texture is null")
+		pp_ov.visible = false
+		mm.call("_render_friends_modal", [], [])
+		await process_frame
 
 	var settings_ov: Control = mm.get("settings_overlay") as Control
 	var guide_ov: Control = mm.get("guide_overlay") as Control
@@ -244,6 +344,49 @@ func _run_checks() -> void:
 			if not bool(sm_menu.get("dialog_voice_enabled")) or (dv_chk != null and not dv_chk.button_pressed):
 				errors.append("SettingsManager failed to restore dialog_voice_enabled to true")
 
+			var orig_vo_lang: String = str(sm_menu.get("language"))
+			var orig_vo_model: String = str(sm_menu.get("character_model"))
+			sm_menu.call("set_language", "en_US")
+			for gender_tag: String in ["male", "female"]:
+				sm_menu.call("set_character_model", gender_tag)
+				var cands: Array = aud_mgr.call("_voice_candidate_paths", "vo_sanity_mid_01") as Array
+				var expected_prefix: String = "res://assets/audio/voice/en/%s/" % gender_tag
+				var found_en_cand: bool = false
+				for cand_var: Variant in cands:
+					var cand_path: String = str(cand_var)
+					if cand_path.begins_with(expected_prefix) and FileAccess.file_exists(cand_path):
+						found_en_cand = true
+						break
+				if not found_en_cand:
+					errors.append("AudioManager _voice_candidate_paths missing existing EN clip for vo_sanity_mid_01 (%s)" % gender_tag)
+			var manifest_raw: String = FileAccess.get_file_as_string("res://assets/audio/voice/voice_manifest.json")
+			var manifest_parsed: Variant = JSON.parse_string(manifest_raw)
+			if not (manifest_parsed is Dictionary) or not ((manifest_parsed as Dictionary).get("clips") is Array):
+				errors.append("voice_manifest.json missing or failed to parse clips array")
+			else:
+				var clips_arr: Array = (manifest_parsed as Dictionary).get("clips") as Array
+				if clips_arr.is_empty():
+					errors.append("voice_manifest.json clips array is empty")
+				for clip_var: Variant in clips_arr:
+					if not (clip_var is Dictionary):
+						continue
+					var clip_d: Dictionary = clip_var as Dictionary
+					var clip_id: String = str(clip_d.get("id", ""))
+					var speaker: String = str(clip_d.get("speaker", "Narrator"))
+					var stem: String = str(clip_d.get("filename", "")).strip_edges().get_basename()
+					if stem.is_empty():
+						errors.append("voice_manifest.json clip missing filename: " + clip_id)
+						continue
+					var role_dirs: Array = ["male", "female"] if speaker.begins_with("Player") else ["narrator"]
+					for r_dir_var: Variant in role_dirs:
+						var r_dir: String = str(r_dir_var)
+						var wav_p: String = "res://assets/audio/voice/en/%s/%s.wav" % [r_dir, stem]
+						var mp3_p: String = "res://assets/audio/voice/en/%s/%s.mp3" % [r_dir, stem]
+						if not FileAccess.file_exists(wav_p) and not FileAccess.file_exists(mp3_p):
+							errors.append("Missing EN voice file for %s (%s): %s(.wav/.mp3)" % [clip_id, speaker, wav_p.get_basename()])
+			sm_menu.call("set_language", orig_vo_lang)
+			sm_menu.call("set_character_model", orig_vo_model)
+
 		# Verify session persistence keeps optimistic logged-in state across empty storage load / offline verification
 		am.set("session_token", "persist-test-token")
 		am.set("is_logged_in", true)
@@ -296,8 +439,8 @@ func _run_checks() -> void:
 			errors.append("MainMenu inbox_list, SignalBus, or inbox fetch/read methods missing")
 		else:
 			am.set("inbox_messages", [
-				{"id": "m1", "scope": "global", "title": "Info Server", "bodyMarkdown": "# Halo\nPesan **penting** ke semua\n- Butir satu", "senderUsername": "admin_lampor", "isRead": false, "createdAt": "2026-11-27T05:00:00Z"},
-				{"id": "m2", "scope": "user", "targetUsername": "PemainTes", "title": "Pesan Pribadi", "bodyMarkdown": "Halo *khusus* kamu!", "senderUsername": "admin_lampor", "isRead": false, "createdAt": "2026-11-27T05:01:00Z"}
+				{"id": "m1", "scope": "global", "title": "Info Server @username", "bodyMarkdown": "# Halo @username\nPesan **penting** untuk @USERNAME & info@username.com\n- Butir satu", "senderUsername": "admin_lampor", "isRead": false, "createdAt": "2026-11-27T05:00:00Z"},
+				{"id": "m2", "scope": "user", "targetUsername": "TestUser_99", "title": "Pesan Pribadi", "bodyMarkdown": "Halo *khusus* @username!", "senderUsername": "admin_lampor", "isRead": false, "createdAt": "2026-11-27T05:01:00Z"}
 			])
 			am.set("unread_inbox_count", 2)
 			sb_mm.emit_signal("inbox_messages_updated", am.get("inbox_messages"), 2)
@@ -305,8 +448,23 @@ func _run_checks() -> void:
 			if not bool(mm.get("_inbox_has_unread_dot")):
 				errors.append("MainMenu _inbox_has_unread_dot did not become true when unread_inbox_count=2")
 			var rtl_nodes: Array[Node] = inb_list.find_children("*", "RichTextLabel", true, false)
+			var inb_lbl_nodes: Array[Node] = inb_list.find_children("*", "Label", true, false)
 			var found_penting: bool = false
 			var found_khusus: bool = false
+			var found_title_uname: bool = false
+			var found_body_uname: bool = false
+			var found_email_preserved: bool = false
+			var found_raw_placeholder: bool = false
+			var rx_raw_ph := RegEx.new()
+			rx_raw_ph.compile("(?i)(^|[^a-zA-Z0-9_])@username(?![a-zA-Z0-9_])")
+			for lbl_var: Node in inb_lbl_nodes:
+				var lbl_ctrl: Label = lbl_var as Label
+				if lbl_ctrl == null:
+					continue
+				if lbl_ctrl.text == "Info Server TestUser_99":
+					found_title_uname = true
+				if rx_raw_ph.search(lbl_ctrl.text) != null:
+					found_raw_placeholder = true
 			for rtl_var: Node in rtl_nodes:
 				var rtl_ctrl: RichTextLabel = rtl_var as RichTextLabel
 				if rtl_ctrl == null:
@@ -316,8 +474,20 @@ func _run_checks() -> void:
 					found_penting = true
 				if parsed_txt.contains("khusus"):
 					found_khusus = true
-			if not found_penting or not found_khusus:
-				errors.append("MainMenu inbox_list RichTextLabel missing expected markdown text (penting=%s, khusus=%s)" % [str(found_penting), str(found_khusus)])
+				if parsed_txt.contains("TestUser_99"):
+					found_body_uname = true
+				if parsed_txt.contains("info@username.com"):
+					found_email_preserved = true
+				if rx_raw_ph.search(parsed_txt) != null:
+					found_raw_placeholder = true
+			if not found_penting or not found_khusus or not found_title_uname or not found_body_uname or not found_email_preserved or found_raw_placeholder:
+				errors.append("MainMenu inbox @username formatting failed (penting=%s, khusus=%s, title=%s, body=%s, email=%s, raw=%s)" % [str(found_penting), str(found_khusus), str(found_title_uname), str(found_body_uname), str(found_email_preserved), str(found_raw_placeholder)])
+			var prev_guest_inb: bool = bool(am.get("is_guest_mode"))
+			am.set("is_guest_mode", true)
+			var guest_fmt: String = str(mm.call("_format_inbox_player_text", "Halo @username!"))
+			am.set("is_guest_mode", prev_guest_inb)
+			if guest_fmt != "Halo Pemain!" and guest_fmt != "Halo Player!":
+				errors.append("MainMenu _format_inbox_player_text guest fallback failed: " + guest_fmt)
 			am.set("inbox_messages", [])
 			am.set("unread_inbox_count", 0)
 			mm.call("_refresh_friends_button_badge")
@@ -629,6 +799,80 @@ func _run_checks() -> void:
 					errors.append("VoiceChatSystem _on_android_permission_result(false) did not disable mic or record error")
 			mp.call("reset_to_singleplayer")
 			gm.set("current_state", 0)
+
+		if mp != null:
+			mp.set("is_online_session", true)
+			mp.set("current_room", {"mode": "multiplayer", "name": "Desa", "roomCode": "ABC123", "hostUserId": "u1"})
+			mp.set("room_players", [{"userId": "u1", "username": "lordreyid", "displayName": "Lord Rey", "isHost": true, "isVerified": true, "playerState": {"sanity": 97}}])
+			hud_node.call("_refresh_online_room_overlay", true)
+			var roster_vbox: VBoxContainer = hud_node.get("mp_roster_vbox") as VBoxContainer
+			if roster_vbox == null:
+				errors.append("HUD mp_roster_vbox missing")
+			else:
+				var roster_lbls: Array[Node] = roster_vbox.find_children("*", "Label", true, false)
+				var found_lord_rey: bool = false
+				for r_node: Node in roster_lbls:
+					var r_lbl: Label = r_node as Label
+					if r_lbl != null and r_lbl.text.contains("Lord Rey"):
+						found_lord_rey = true
+						if (r_lbl.size_flags_horizontal & Control.SIZE_EXPAND_FILL) == 0 or r_lbl.custom_minimum_size.x <= 0.0:
+							errors.append("HUD mp_roster_vbox display name label can collapse to 0px (size_flags=%d, min_x=%.1f)" % [r_lbl.size_flags_horizontal, r_lbl.custom_minimum_size.x])
+						break
+				if not found_lord_rey:
+					errors.append("HUD mp_roster_vbox missing 'Lord Rey' display name label")
+			mp.call("reset_to_singleplayer")
+			hud_node.call("_refresh_online_room_overlay", true)
+
+		var p_char_k: Node = gm.get("player_character") as Node if gm != null else null
+		var lampors_k: Array[Node] = get_nodes_in_group("lampor")
+		if p_char_k == null or lampors_k.is_empty():
+			errors.append("VillageMap player_character or lampor group missing for Kentongan test")
+		else:
+			var inv_k: Node = p_char_k.get("inventory_system") as Node
+			if inv_k == null:
+				errors.append("PlayerController inventory_system missing for Kentongan test")
+			else:
+				var lampor_k: Node = lampors_k[0]
+				var orig_active_slot: int = int(inv_k.get("active_slot"))
+				var orig_slots: Array = (inv_k.get("slots") as Array).duplicate(true)
+				var orig_k_cd: float = float(p_char_k.get("kentongan_cooldown"))
+				var orig_l_state: Variant = lampor_k.get("current_state")
+				var orig_l_repel: float = float(lampor_k.get("repel_timer"))
+				var orig_l_chase_cd: float = float(lampor_k.get("chase_cooldown"))
+				var orig_l_catching: bool = bool(lampor_k.get("is_catching"))
+
+				var k_slots: Array = orig_slots.duplicate(true)
+				k_slots[2] = {"id": "kentongan", "name": "Kentongan Bambu", "type": "consumable", "quantity": 2}
+				inv_k.set("slots", k_slots)
+				inv_k.call("select_slot", 2)
+				p_char_k.set("kentongan_cooldown", 0.0)
+				lampor_k.set("current_state", 5)
+				lampor_k.set("repel_timer", 0.0)
+				lampor_k.set("is_catching", false)
+
+				p_char_k.call("_try_use_equipped_item")
+				var slots_after_1: Array = inv_k.get("slots") as Array
+				var qty_after_1: int = int((slots_after_1[2] as Dictionary).get("quantity", 0)) if slots_after_1[2] is Dictionary else 0
+				if not bool(lampor_k.call("is_repelled")):
+					errors.append("Kentongan use did not repel Lampor from State.CHASE")
+				if qty_after_1 != 1:
+					errors.append("Kentongan first use expected remaining count 1, got " + str(qty_after_1))
+				if float(p_char_k.get("kentongan_cooldown")) <= 0.0:
+					errors.append("Kentongan first use did not start kentongan_cooldown")
+
+				p_char_k.call("_try_use_equipped_item")
+				var slots_after_2: Array = inv_k.get("slots") as Array
+				var qty_after_2: int = int((slots_after_2[2] as Dictionary).get("quantity", 0)) if slots_after_2[2] is Dictionary else 0
+				if qty_after_2 != 1:
+					errors.append("Kentongan second immediate use consumed another Kentongan (anti-spam failed, count=%d)" % qty_after_2)
+
+				lampor_k.set("current_state", orig_l_state)
+				lampor_k.set("repel_timer", orig_l_repel)
+				lampor_k.set("chase_cooldown", orig_l_chase_cd)
+				lampor_k.set("is_catching", orig_l_catching)
+				p_char_k.set("kentongan_cooldown", orig_k_cd)
+				inv_k.set("slots", orig_slots)
+				inv_k.call("select_slot", orig_active_slot)
 
 		var p_dv_chk: CheckButton = hud_node.get("pause_dialog_voice_check") as CheckButton
 		var p_open_kb: Button = hud_node.get("pause_open_keybinds_button") as Button

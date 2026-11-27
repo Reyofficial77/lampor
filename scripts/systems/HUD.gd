@@ -2028,7 +2028,7 @@ func _apply_online_overlay_layout() -> void:
 	if view_size.x <= 0.0:
 		view_size = Vector2(1280.0, 720.0)
 	var touch: bool = _is_touch_device()
-	var panel_w: float = clampf(view_size.x * 0.24, 198.0, 236.0) if touch else 258.0
+	var panel_w: float = clampf(view_size.x * 0.26, 212.0, 240.0) if touch else 286.0
 	var top_y: float = 104.0 if touch else 14.0
 	mp_overlay_panel.anchor_left = 1.0
 	mp_overlay_panel.anchor_right = 1.0
@@ -2070,6 +2070,8 @@ func _refresh_online_room_overlay(force: bool = false) -> void:
 			var p: Dictionary = p_var as Dictionary
 			var uid: String = str(p.get("userId", p.get("id", "")))
 			var uname: String = ProfanityFilterScript.censor(str(p.get("username", "Pemain")))
+			var disp_p: String = ProfanityFilterScript.censor(str(p.get("displayName", p.get("display_name", ""))).strip_edges())
+			var shown_p: String = disp_p if not disp_p.is_empty() else uname
 			var is_h: bool = bool(p.get("isHost", false)) or (not host_id.is_empty() and uid.to_lower() == host_id)
 			var is_v: bool = bool(p.get("isVerified", false))
 			var ps: Variant = p.get("playerState", {})
@@ -2077,7 +2079,7 @@ func _refresh_online_room_overlay(force: bool = false) -> void:
 			var is_spk: bool = bool(ps.get("speaking", false)) if ps is Dictionary else false
 			if not is_spk and mp.has_method("is_peer_speaking") and bool(mp.call("is_peer_speaking", uid)):
 				is_spk = true
-			sig_parts.append("%s:%s:%s:%s:%s:%d" % [uid, uname, "H" if is_h else "P", "V" if is_v else "N", "S" if is_spk else "Q", san])
+			sig_parts.append("%s:%s:%s:%s:%s:%d" % [uid, shown_p, "H" if is_h else "P", "V" if is_v else "N", "S" if is_spk else "Q", san])
 	var sig: String = "|".join(sig_parts)
 	if not force and sig == _mp_last_sig:
 		return
@@ -2101,6 +2103,8 @@ func _refresh_online_room_overlay(force: bool = false) -> void:
 			var p: Dictionary = p_var as Dictionary
 			var uid: String = str(p.get("userId", p.get("id", "")))
 			var uname: String = ProfanityFilterScript.censor(str(p.get("username", "Pemain")))
+			var disp_p: String = ProfanityFilterScript.censor(str(p.get("displayName", p.get("display_name", ""))).strip_edges())
+			var shown_p: String = disp_p if not disp_p.is_empty() else uname
 			var is_host: bool = bool(p.get("isHost", false)) or (not host_id.is_empty() and uid.to_lower() == host_id)
 			var is_v_p: bool = bool(p.get("isVerified", false))
 			var ps: Variant = p.get("playerState", {})
@@ -2110,20 +2114,24 @@ func _refresh_online_room_overlay(force: bool = false) -> void:
 				is_spk_p = true
 
 			var row := HBoxContainer.new()
+			row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 			row.add_theme_constant_override("separation", 6)
 			row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			mp_roster_vbox.add_child(row)
 
 			var name_wrap := HBoxContainer.new()
 			name_wrap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			name_wrap.custom_minimum_size.x = 120.0
 			name_wrap.add_theme_constant_override("separation", 4)
 			name_wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			row.add_child(name_wrap)
 
 			var name_lbl := Label.new()
-			name_lbl.text = "%s%s%s" % [uname, " [HOST]" if is_host else "", " [MIC]" if is_spk_p else ""]
-			name_lbl.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+			name_lbl.text = "%s%s%s" % [shown_p, " [HOST]" if is_host else "", " [MIC]" if is_spk_p else ""]
+			name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			name_lbl.custom_minimum_size.x = 72.0
 			name_lbl.clip_text = true
+			name_lbl.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 			name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			HorrorTheme.style_label(name_lbl, "label-sm", HorrorTheme.RELIC_BRASS if is_host else HorrorTheme.ON_SURFACE, 10)
 			name_wrap.add_child(name_lbl)
@@ -2132,6 +2140,7 @@ func _refresh_online_room_overlay(force: bool = false) -> void:
 
 			var san_lbl := Label.new()
 			san_lbl.text = "WARAS %d%%" % san
+			san_lbl.size_flags_horizontal = Control.SIZE_SHRINK_END
 			san_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			var san_col: Color = HorrorTheme.SUCCESS_SAGE if san >= 60 else (HorrorTheme.RELIC_BRASS if san >= 30 else HorrorTheme.ACCENT)
 			HorrorTheme.style_label(san_lbl, "mono-sm", san_col, 10)

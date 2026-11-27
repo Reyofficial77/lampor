@@ -650,8 +650,16 @@ func _start_catch() -> void:
 	SignalBus.player_death_requested.emit(LocScript.pick("Kamu ditarik ke dalam keranda Lampor!", "You were dragged into Lampor's coffin!"))
 
 
+func is_repelled() -> bool:
+	return current_state == State.REPELLED or repel_timer > 0.0
+
+func get_repel_remaining() -> float:
+	return maxf(0.0, repel_timer)
+
 func repel_from_kentongan(duration: float = REPEL_DURATION) -> bool:
 	if current_state == State.DORMANT_SKY or current_state == State.DESCENDING or current_state == State.BANISHED or is_catching:
+		return false
+	if current_state == State.REPELLED or repel_timer > 0.0:
 		return false
 	var effective_duration: float = duration * GameManager.get_fate_modifier("lampor_repel_mult", 1.0)
 	repel_timer = maxf(repel_timer, effective_duration)

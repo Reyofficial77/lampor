@@ -20,13 +20,14 @@ var subtitle_label: Label
 var title_rule: ColorRect
 var stats_label: Label
 var account_chip_panel: PanelContainer
+var account_chip_avatar_rect: TextureRect
 var account_chip_label: Label
 var account_chip_badge: Control
 var top_right_bar: HBoxContainer
 var top_account_chip: PanelContainer
+var top_account_avatar_rect: TextureRect
 var top_account_label: Label
 var top_account_badge: Control
-var account_btn: Button
 var version_label: Label
 var copyright_label: Label
 var exit_button: Button
@@ -87,6 +88,7 @@ var _rx_links: RegEx
 var _rx_bold: RegEx
 var _rx_strike: RegEx
 var _rx_italic: RegEx
+var _rx_msg_username: RegEx
 var update_restart_overlay: ColorRect
 var update_restart_panel: PanelContainer
 var update_restart_status: Label
@@ -227,7 +229,22 @@ var _launching_online_game: bool = false
 var _last_chat_count: int = -1
 var _last_lobby_roster_sig: String = ""
 
-var admin_panel_btn: Button
+var _avatar_tex_cache: Dictionary = {}
+
+# Profil Pemain Lain (Player Profile Modal)
+var player_profile_overlay: ColorRect
+var player_profile_panel: PanelContainer
+var player_profile_avatar_rect: TextureRect
+var player_profile_display_label: Label
+var player_profile_username_label: Label
+var player_profile_verified_badge: Control
+var player_profile_verified_label: Label
+var player_profile_status_label: Label
+var player_profile_wins_label: Label
+var player_profile_bio_label: Label
+var player_profile_action_btn: Button
+var _viewing_profile_key: String = ""
+var _viewing_profile_data: Dictionary = {}
 
 # Daftar Teman & Pemain (Friends Modal)
 var friends_overlay: ColorRect
@@ -412,21 +429,40 @@ func _build_menu() -> void:
 	account_chip_panel = PanelContainer.new()
 	account_chip_panel.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	account_chip_panel.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	account_chip_panel.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOWEST, HorrorTheme.OUTLINE_VARIANT, 2, 10, 5))
+	account_chip_panel.tooltip_text = LocScript.pick("Lihat & Edit Profil", "View & Edit Profile")
+	account_chip_panel.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOWEST, HorrorTheme.OUTLINE_VARIANT, 4, 8, 4))
 	account_chip_panel.gui_input.connect(_on_account_chip_gui_input)
 	main_content.add_child(account_chip_panel)
 
 	var chip_hbox := HBoxContainer.new()
-	chip_hbox.add_theme_constant_override("separation", 5)
+	chip_hbox.add_theme_constant_override("separation", 7)
 	chip_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	account_chip_panel.add_child(chip_hbox)
 
-	account_chip_label = _make_label("", 11, HorrorTheme.ON_SURFACE_VARIANT, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm")
+	var chip_avatar_frame := PanelContainer.new()
+	chip_avatar_frame.custom_minimum_size = Vector2(22.0, 22.0)
+	chip_avatar_frame.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	chip_avatar_frame.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	chip_avatar_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	chip_avatar_frame.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOWEST, HorrorTheme.OUTLINE_VARIANT, 3, 1, 1))
+	chip_hbox.add_child(chip_avatar_frame)
+
+	account_chip_avatar_rect = TextureRect.new()
+	account_chip_avatar_rect.custom_minimum_size = Vector2(20.0, 20.0)
+	account_chip_avatar_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	account_chip_avatar_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	account_chip_avatar_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	chip_avatar_frame.add_child(account_chip_avatar_rect)
+
+	account_chip_label = _make_label("", 12, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "title-md")
 	account_chip_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	account_chip_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	chip_hbox.add_child(account_chip_label)
 
 	account_chip_badge = VerifiedBadgeScript.create_control(14.0)
 	account_chip_badge.visible = false
+	account_chip_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	account_chip_badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	chip_hbox.add_child(account_chip_badge)
 
 	var menu_buttons := VBoxContainer.new()
@@ -502,51 +538,57 @@ func _build_menu() -> void:
 	top_right_bar.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	add_child(top_right_bar)
 
-	top_account_chip = PanelContainer.new()
-	top_account_chip.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	top_account_chip.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	top_account_chip.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOWEST, HorrorTheme.OUTLINE_VARIANT, 2, 10, 6))
-	top_account_chip.gui_input.connect(_on_account_chip_gui_input)
-	top_right_bar.add_child(top_account_chip)
-
-	var top_chip_hbox := HBoxContainer.new()
-	top_chip_hbox.add_theme_constant_override("separation", 5)
-	top_chip_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	top_account_chip.add_child(top_chip_hbox)
-
-	top_account_label = _make_label("", 11, HorrorTheme.ON_SURFACE_VARIANT, HORIZONTAL_ALIGNMENT_CENTER, "mono-sm")
-	top_account_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	top_chip_hbox.add_child(top_account_label)
-
-	top_account_badge = VerifiedBadgeScript.create_control(14.0)
-	top_account_badge.visible = false
-	top_chip_hbox.add_child(top_account_badge)
-
-	admin_panel_btn = Button.new()
-	admin_panel_btn.text = "ADMIN [ALT+F2]"
-	admin_panel_btn.visible = GameManager.is_logged_in_admin()
-	admin_panel_btn.custom_minimum_size = Vector2(0.0, 36.0)
-	HorrorTheme.style_button(admin_panel_btn, "primary", 11, true)
-	admin_panel_btn.pressed.connect(func() -> void: GameManager.toggle_admin_panel())
-	top_right_bar.add_child(admin_panel_btn)
-
 	update_button = Button.new()
 	update_button.text = LocScript.pick("UPDATE TERSEDIA", "UPDATE AVAILABLE")
 	update_button.visible = false
-	update_button.custom_minimum_size = Vector2(0.0, 36.0)
+	update_button.custom_minimum_size = Vector2(0.0, 38.0)
 	HorrorTheme.style_button(update_button, "primary", 11, true)
 	update_button.pressed.connect(_on_update_button_pressed)
 	top_right_bar.add_child(update_button)
 
-	account_btn = Button.new()
-	account_btn.text = LocScript.pick("AKUN / MASUK", "ACCOUNT / SIGN IN")
-	account_btn.custom_minimum_size = Vector2(0.0, 36.0)
-	HorrorTheme.style_button(account_btn, "secondary", 11, true)
-	account_btn.pressed.connect(func() -> void: _open_account_modal(0))
-	top_right_bar.add_child(account_btn)
+	top_account_chip = PanelContainer.new()
+	top_account_chip.custom_minimum_size = Vector2(0.0, 38.0)
+	top_account_chip.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	top_account_chip.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	top_account_chip.tooltip_text = LocScript.pick("Lihat & Edit Profil", "View & Edit Profile")
+	top_account_chip.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOWEST, HorrorTheme.OUTLINE_VARIANT, 4, 8, 4))
+	top_account_chip.gui_input.connect(_on_account_chip_gui_input)
+	top_right_bar.add_child(top_account_chip)
+
+	var top_chip_hbox := HBoxContainer.new()
+	top_chip_hbox.add_theme_constant_override("separation", 8)
+	top_chip_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	top_chip_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	top_account_chip.add_child(top_chip_hbox)
+
+	var top_avatar_frame := PanelContainer.new()
+	top_avatar_frame.custom_minimum_size = Vector2(28.0, 28.0)
+	top_avatar_frame.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	top_avatar_frame.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	top_avatar_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	top_avatar_frame.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOWEST, HorrorTheme.OUTLINE_VARIANT, 3, 1, 1))
+	top_chip_hbox.add_child(top_avatar_frame)
+
+	top_account_avatar_rect = TextureRect.new()
+	top_account_avatar_rect.custom_minimum_size = Vector2(26.0, 26.0)
+	top_account_avatar_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	top_account_avatar_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	top_account_avatar_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	top_avatar_frame.add_child(top_account_avatar_rect)
+
+	top_account_label = _make_label("", 12, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "title-md")
+	top_account_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	top_account_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	top_chip_hbox.add_child(top_account_label)
+
+	top_account_badge = VerifiedBadgeScript.create_control(14.0)
+	top_account_badge.visible = false
+	top_account_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	top_account_badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	top_chip_hbox.add_child(top_account_badge)
 
 	exit_button = _make_icon_rail_button("exit_red", LocScript.pick("Keluar", "Quit"), true)
-	exit_button.custom_minimum_size = Vector2(36.0, 36.0)
+	exit_button.custom_minimum_size = Vector2(38.0, 38.0)
 	exit_button.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	exit_button.pressed.connect(func() -> void: get_tree().quit())
 	top_right_bar.add_child(exit_button)
@@ -578,6 +620,7 @@ func _build_menu() -> void:
 	_build_room_lobby_modal()
 	_build_friends_modal()
 	_build_inbox_modal()
+	_build_player_profile_modal()
 	_refresh_account_ui()
 
 func _open_modal(overlay: ColorRect, panel: PanelContainer) -> void:
@@ -1309,6 +1352,10 @@ func _rebuild_for_language_change() -> void:
 	_pending_join_room_id = ""
 	_pending_online_mode_after_auth = ""
 	_last_lobby_roster_sig = ""
+	_viewing_profile_key = ""
+	_viewing_profile_data = {}
+	player_profile_overlay = null
+	player_profile_panel = null
 	for child: Node in get_children():
 		remove_child(child)
 		child.queue_free()
@@ -2547,12 +2594,10 @@ func _apply_layout() -> void:
 		top_right_bar.offset_bottom = tr_margin + 40.0
 	if top_account_chip:
 		top_account_chip.visible = not narrow
-	if account_btn:
-		account_btn.custom_minimum_size.y = 34.0 if narrow or short_screen else 36.0
-		account_btn.add_theme_font_size_override("font_size", 10 if narrow else 11)
-	if admin_panel_btn:
-		admin_panel_btn.custom_minimum_size.y = 34.0 if narrow or short_screen else 36.0
-		admin_panel_btn.add_theme_font_size_override("font_size", 10 if narrow else 11)
+		top_account_chip.custom_minimum_size.y = 34.0 if short_screen else 38.0
+	if update_button:
+		update_button.custom_minimum_size.y = 34.0 if narrow or short_screen else 38.0
+		update_button.add_theme_font_size_override("font_size", 10 if narrow else 11)
 	if mp_quick_join_row:
 		mp_quick_join_row.vertical = narrow
 	if friends_search_row:
@@ -2600,7 +2645,7 @@ func _apply_layout() -> void:
 			panel.custom_minimum_size = Vector2(maxf(290.0, minf(640.0, view_size.x - 28.0)), panel.custom_minimum_size.y)
 		elif panel == create_room_panel:
 			panel.custom_minimum_size = Vector2(maxf(290.0, minf(560.0, view_size.x - 28.0)), panel.custom_minimum_size.y)
-		elif panel == account_panel or panel == mode_select_panel or panel == inbox_panel:
+		elif panel == account_panel or panel == mode_select_panel or panel == inbox_panel or panel == player_profile_panel:
 			panel.custom_minimum_size = Vector2(maxf(280.0, minf(520.0, view_size.x - 28.0)), panel.custom_minimum_size.y)
 		elif panel == room_password_panel:
 			panel.custom_minimum_size = Vector2(maxf(280.0, minf(440.0, view_size.x - 28.0)), panel.custom_minimum_size.y)
@@ -2755,9 +2800,14 @@ func _run_initial_account_gate() -> void:
 		_refresh_account_ui()
 		return
 	if account_chip_label:
-		account_chip_label.text = LocScript.pick("AKUN: MEMERIKSA SESI...", "ACCOUNT: CHECKING SESSION...")
+		account_chip_label.text = LocScript.pick("Memeriksa...", "Checking...")
 	if top_account_label:
-		top_account_label.text = LocScript.pick("MEMERIKSA...", "CHECKING...")
+		top_account_label.text = LocScript.pick("Memeriksa...", "Checking...")
+	var checking_tex: Texture2D = _get_cached_avatar_texture("", "")
+	if is_instance_valid(account_chip_avatar_rect):
+		account_chip_avatar_rect.texture = checking_tex
+	if is_instance_valid(top_account_avatar_rect):
+		top_account_avatar_rect.texture = checking_tex
 	var verified: bool = await am.verify_saved_session()
 	if not is_instance_valid(self) or not is_inside_tree():
 		return
@@ -3188,26 +3238,34 @@ func _refresh_account_ui() -> void:
 		shown_name = uname_disp
 	var chip_text: String = ""
 	var chip_color: Color = HorrorTheme.TEXT_MUTED
+	var card_tex: Texture2D
 	if logged_in:
-		chip_text = LocScript.pick("AKUN: %s [ONLINE]" % shown_name, "ACCOUNT: %s [ONLINE]" % shown_name)
-		chip_color = HorrorTheme.SUCCESS_SAGE
+		var avatar_raw: String = str(am.get("avatar_url")) if "avatar_url" in am else ""
+		var uname_raw: String = str(am.get("username")) if "username" in am else ""
+		chip_text = shown_name
+		chip_color = HorrorTheme.ON_SURFACE
+		card_tex = _get_cached_avatar_texture(avatar_raw, uname_raw)
 	elif is_guest:
-		chip_text = LocScript.pick("TAMU [OFFLINE]", "GUEST [OFFLINE]")
+		chip_text = LocScript.pick("Tamu", "Guest")
 		chip_color = HorrorTheme.RELIC_BRASS
+		card_tex = _get_cached_avatar_texture("", "Guest")
 	else:
-		chip_text = LocScript.pick("BELUM MASUK [OFFLINE]", "NOT SIGNED IN [OFFLINE]")
+		chip_text = LocScript.pick("Masuk", "Sign In")
 		chip_color = HorrorTheme.PRIMARY
+		card_tex = _get_cached_avatar_texture("", "")
 	if account_chip_label:
 		account_chip_label.text = chip_text
 		account_chip_label.add_theme_color_override("font_color", chip_color)
+	if is_instance_valid(account_chip_avatar_rect):
+		account_chip_avatar_rect.texture = card_tex
 	if top_account_label:
 		top_account_label.text = chip_text
 		top_account_label.add_theme_color_override("font_color", chip_color)
+	if is_instance_valid(top_account_avatar_rect):
+		top_account_avatar_rect.texture = card_tex
 	if profile_status_badge_label:
 		profile_status_badge_label.text = "[ONLINE]" if logged_in else (LocScript.pick("[TAMU]", "[GUEST]") if is_guest else "[OFFLINE]")
 		profile_status_badge_label.add_theme_color_override("font_color", HorrorTheme.SUCCESS_SAGE if logged_in else Color("9e8886"))
-	if is_instance_valid(admin_panel_btn):
-		admin_panel_btn.visible = GameManager.is_logged_in_admin()
 	var is_v: bool = logged_in and am != null and bool(am.get("is_verified"))
 	if account_chip_badge:
 		account_chip_badge.visible = is_v
@@ -3217,8 +3275,6 @@ func _refresh_account_ui() -> void:
 		profile_verified_badge.visible = is_v
 	if profile_verified_label:
 		profile_verified_label.visible = is_v
-	if account_btn:
-		account_btn.text = LocScript.pick("AKUN / PROFIL", "ACCOUNT / PROFILE") if logged_in else LocScript.pick("AKUN / MASUK", "ACCOUNT / SIGN IN")
 	if account_auth_section:
 		account_auth_section.visible = not logged_in
 	if account_profile_section:
@@ -3598,6 +3654,68 @@ func _build_profile_avatar_texture(avatar_str: String, uname: String) -> Texture
 				if load_err == OK and not img.is_empty():
 					return ImageTexture.create_from_image(img)
 	return _generate_preset_avatar_texture(cleaned, uname)
+
+func _get_cached_avatar_texture(avatar_str: String, uname: String) -> Texture2D:
+	var clean_avatar: String = avatar_str.strip_edges()
+	var clean_uname: String = uname.strip_edges()
+	var cache_key: String = "%s|%s" % [clean_uname, clean_avatar]
+	if _avatar_tex_cache.has(cache_key):
+		var cached_tex: Variant = _avatar_tex_cache[cache_key]
+		if cached_tex is Texture2D:
+			return cached_tex as Texture2D
+	var tex: Texture2D = _build_profile_avatar_texture(clean_avatar, clean_uname)
+	if _avatar_tex_cache.size() >= 64:
+		var keys: Array = _avatar_tex_cache.keys()
+		if not keys.is_empty():
+			_avatar_tex_cache.erase(keys[0])
+	_avatar_tex_cache[cache_key] = tex
+	return tex
+
+func _make_avatar_thumb(avatar_str: String, uname: String, px: float = 38.0) -> PanelContainer:
+	var frame := PanelContainer.new()
+	frame.custom_minimum_size = Vector2(px, px)
+	frame.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	frame.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	frame.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOWEST, HorrorTheme.OUTLINE_VARIANT, 3, 2, 2))
+	var tex_rect := TextureRect.new()
+	var inner_px: float = maxf(12.0, px - 4.0)
+	tex_rect.custom_minimum_size = Vector2(inner_px, inner_px)
+	tex_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	tex_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	tex_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	tex_rect.texture = _get_cached_avatar_texture(avatar_str, uname)
+	frame.add_child(tex_rect)
+	return frame
+
+func _attach_profile_click_handler(ctrl: Control, card_data: Dictionary) -> void:
+	if not is_instance_valid(ctrl):
+		return
+	var snapshot: Dictionary = card_data.duplicate(true)
+	ctrl.mouse_filter = Control.MOUSE_FILTER_STOP
+	ctrl.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	ctrl.tooltip_text = LocScript.pick("Lihat Profil Pemain", "View Player Profile")
+	ctrl.gui_input.connect(func(event: InputEvent) -> void:
+		if event is InputEventMouseButton:
+			var mb := event as InputEventMouseButton
+			if mb.button_index == MOUSE_BUTTON_LEFT:
+				if mb.pressed:
+					ctrl.set_meta("_profile_press_pos", mb.global_position)
+				elif ctrl.has_meta("_profile_press_pos"):
+					var p0: Vector2 = ctrl.get_meta("_profile_press_pos")
+					ctrl.remove_meta("_profile_press_pos")
+					if p0.distance_to(mb.global_position) <= 10.0 and not _drag_moved:
+						_open_player_profile_modal(snapshot)
+		elif event is InputEventScreenTouch:
+			var st := event as InputEventScreenTouch
+			if st.pressed:
+				ctrl.set_meta("_profile_touch_pos", st.position)
+			elif ctrl.has_meta("_profile_touch_pos"):
+				var t0: Vector2 = ctrl.get_meta("_profile_touch_pos")
+				ctrl.remove_meta("_profile_touch_pos")
+				if t0.distance_to(st.position) <= 12.0:
+					_open_player_profile_modal(snapshot)
+	)
 
 func _generate_preset_avatar_texture(preset_id: String, uname: String) -> Texture2D:
 	var sz: int = 96
@@ -4607,12 +4725,14 @@ func _refresh_lobby_ui(room: Dictionary, players: Array) -> void:
 		var p_s: Dictionary = p_var as Dictionary
 		var uid_s: String = str(p_s.get("userId", p_s.get("id", "")))
 		var uname_s: String = str(p_s.get("username", "Player"))
+		var disp_s: String = str(p_s.get("displayName", ""))
+		var av_s: String = str(p_s.get("avatarUrl", p_s.get("avatar_url", "")))
 		var host_s: bool = bool(p_s.get("isHost", uid_s == host_uid))
 		var ready_s: bool = bool(p_s.get("isReady", false))
 		var verified_s: bool = bool(p_s.get("isVerified", false))
 		if uid_s == my_uid:
 			my_ready = ready_s
-		sig_parts.append("%s|%s|%s|%s|%s" % [uid_s, uname_s, "1" if host_s else "0", "1" if ready_s else "0", "1" if verified_s else "0"])
+		sig_parts.append("%s|%s|%s|%d|%s|%s|%s" % [uid_s, uname_s, disp_s, av_s.hash(), "1" if host_s else "0", "1" if ready_s else "0", "1" if verified_s else "0"])
 	var roster_sig: String = ";".join(sig_parts)
 
 	if is_instance_valid(lobby_players_box) and roster_sig != _last_lobby_roster_sig:
@@ -4624,7 +4744,13 @@ func _refresh_lobby_ui(room: Dictionary, players: Array) -> void:
 				continue
 			var p: Dictionary = p_var as Dictionary
 			var uid: String = str(p.get("userId", p.get("id", "")))
-			var uname: String = ProfanityFilterScript.censor(str(p.get("username", "Player")))
+			var raw_uname: String = str(p.get("username", "Player"))
+			var uname: String = ProfanityFilterScript.censor(raw_uname)
+			var disp: String = ProfanityFilterScript.censor(str(p.get("displayName", "")).strip_edges())
+			var shown_p_name: String = disp if (not disp.is_empty() and disp.to_lower() != uname.to_lower()) else uname
+			var p_avatar: String = str(p.get("avatarUrl", p.get("avatar_url", "")))
+			if uid == my_uid and p_avatar.is_empty() and am != null and "avatar_url" in am:
+				p_avatar = str(am.get("avatar_url"))
 			var is_host: bool = bool(p.get("isHost", uid == host_uid))
 			var is_ready: bool = bool(p.get("isReady", false))
 			var is_p_verified: bool = bool(p.get("isVerified", false))
@@ -4639,20 +4765,34 @@ func _refresh_lobby_ui(room: Dictionary, players: Array) -> void:
 			p_row.mouse_filter = Control.MOUSE_FILTER_PASS
 			slot_card.add_child(p_row)
 
+			var p_hit := HBoxContainer.new()
+			p_hit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			p_hit.add_theme_constant_override("separation", 10)
+			p_hit.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			p_row.add_child(p_hit)
+
+			p_hit.add_child(_make_avatar_thumb(p_avatar, raw_uname, 34.0))
+
 			var name_box := HBoxContainer.new()
 			name_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			name_box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			name_box.add_theme_constant_override("separation", 5)
 			name_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			p_row.add_child(name_box)
+			p_hit.add_child(name_box)
 
 			var you_tag: String = LocScript.pick(" (Anda)", " (You)") if uid == my_uid else ""
 			var host_tag: String = "  [HOST]" if is_host else ""
-			var p_name_lbl := _make_label("%s%s%s" % [uname, you_tag, host_tag], 13, HorrorTheme.RELIC_BRASS if is_host else HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "body-md")
+			var p_name_lbl := _make_label("%s%s%s" % [shown_p_name, you_tag, host_tag], 13, HorrorTheme.RELIC_BRASS if is_host else HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "body-md")
 			p_name_lbl.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 			p_name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			name_box.add_child(p_name_lbl)
 			if is_p_verified:
-				name_box.add_child(VerifiedBadgeScript.create_control(14.0))
+				var p_badge := VerifiedBadgeScript.create_control(14.0)
+				p_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				name_box.add_child(p_badge)
+
+			if uid != my_uid and (not uid.is_empty() or not raw_uname.is_empty()):
+				_attach_profile_click_handler(p_hit, p)
 
 			var ready_lbl := _make_label(
 				LocScript.pick("[SIAP]", "[READY]") if is_ready else LocScript.pick("[MENUNGGU]", "[WAITING]"),
@@ -5209,6 +5349,32 @@ func _format_inbox_timestamp(raw_ts: String) -> String:
 		return cleaned.substr(0, t_idx) + " " + cleaned.substr(t_idx + 1, 5)
 	return cleaned
 
+func _format_inbox_player_text(raw_text: String) -> String:
+	if raw_text.is_empty() or not raw_text.to_lower().contains("@username"):
+		return raw_text
+	if _rx_msg_username == null:
+		_rx_msg_username = RegEx.new()
+		_rx_msg_username.compile("(?i)(^|[^a-zA-Z0-9_])@username(?![a-zA-Z0-9_])")
+	var matches: Array[RegExMatch] = _rx_msg_username.search_all(raw_text)
+	if matches.is_empty():
+		return raw_text
+	var am: Variant = _am()
+	var recipient_name: String = ""
+	if am != null and not bool(am.get("is_guest_mode")) and "username" in am:
+		recipient_name = str(am.get("username")).strip_edges()
+	if recipient_name.is_empty():
+		recipient_name = LocScript.pick("Pemain", "Player")
+	var out: String = ""
+	var cursor: int = 0
+	for m: RegExMatch in matches:
+		var m_start: int = m.get_start(0)
+		var m_end: int = m.get_end(0)
+		var prefix: String = m.get_string(1)
+		out += raw_text.substr(cursor, m_start - cursor) + prefix + recipient_name
+		cursor = m_end
+	out += raw_text.substr(cursor)
+	return out
+
 func _render_inbox_modal() -> void:
 	if not is_instance_valid(inbox_list):
 		return
@@ -5217,7 +5383,8 @@ func _render_inbox_modal() -> void:
 
 	var has_items: bool = false
 	var mp: Variant = _mp()
-	var ann_text: String = str(mp.get("server_announcement")).strip_edges() if (mp != null and "server_announcement" in mp) else ""
+	var raw_ann: String = str(mp.get("server_announcement")).strip_edges() if (mp != null and "server_announcement" in mp) else ""
+	var ann_text: String = _format_inbox_player_text(raw_ann)
 	if not ann_text.is_empty():
 		has_items = true
 		var ann_card := PanelContainer.new()
@@ -5328,8 +5495,8 @@ func _render_inbox_modal() -> void:
 			continue
 		var msg: Dictionary = msg_var as Dictionary
 		var scope: String = str(msg.get("scope", "global")).strip_edges().to_lower()
-		var title_str: String = str(msg.get("title", "")).strip_edges()
-		var body_md: String = str(msg.get("bodyMarkdown", msg.get("body_markdown", ""))).strip_edges()
+		var title_str: String = _format_inbox_player_text(str(msg.get("title", "")).strip_edges())
+		var body_md: String = _format_inbox_player_text(str(msg.get("bodyMarkdown", msg.get("body_markdown", ""))).strip_edges())
 		var sender_str: String = str(msg.get("senderUsername", msg.get("sender_username", ""))).strip_edges()
 		var created_str: String = _format_inbox_timestamp(str(msg.get("createdAt", msg.get("created_at", ""))))
 		var is_read: bool = bool(msg.get("isRead", msg.get("is_read", false)))
@@ -5477,11 +5644,11 @@ func _compute_friends_signature(friends_arr: Array, dir_arr: Array, q: String, i
 	for ir_var: Variant in incoming_arr:
 		if ir_var is Dictionary:
 			var ir: Dictionary = ir_var as Dictionary
-			parts.append("IR|%s|%s|%s" % [str(ir.get("id", "")), "1" if bool(ir.get("isOnline", false)) else "0", "1" if bool(ir.get("isVerified", false)) else "0"])
+			parts.append("IR|%s|%s|%d|%s|%s" % [str(ir.get("id", "")), str(ir.get("displayName", "")), str(ir.get("avatarUrl", "")).hash(), "1" if bool(ir.get("isOnline", false)) else "0", "1" if bool(ir.get("isVerified", false)) else "0"])
 	for or_var: Variant in outgoing_arr:
 		if or_var is Dictionary:
 			var out_d: Dictionary = or_var as Dictionary
-			parts.append("OR|%s|%s" % [str(out_d.get("id", "")), "1" if bool(out_d.get("isOnline", false)) else "0"])
+			parts.append("OR|%s|%s|%d|%s" % [str(out_d.get("id", "")), str(out_d.get("displayName", "")), str(out_d.get("avatarUrl", "")).hash(), "1" if bool(out_d.get("isOnline", false)) else "0"])
 	for f_var: Variant in friends_arr:
 		if f_var is Dictionary:
 			var f: Dictionary = f_var as Dictionary
@@ -5497,14 +5664,16 @@ func _compute_friends_signature(friends_arr: Array, dir_arr: Array, q: String, i
 					int(ard.get("playerCount", 0)),
 					int(ard.get("maxPlayers", 4))
 				]
-			parts.append("F|%s|%s|%s|%s" % [str(f.get("id", "")), "1" if bool(f.get("isOnline", false)) else "0", "1" if bool(f.get("isVerified", false)) else "0", ar_sig])
+			parts.append("F|%s|%s|%d|%s|%s|%s" % [str(f.get("id", "")), str(f.get("displayName", "")), str(f.get("avatarUrl", "")).hash(), "1" if bool(f.get("isOnline", false)) else "0", "1" if bool(f.get("isVerified", false)) else "0", ar_sig])
 	for d_var: Variant in dir_arr:
 		if d_var is Dictionary:
 			var d: Dictionary = d_var as Dictionary
 			var dar: Variant = d.get("activeRoom", null)
 			var dar_sig: String = str((dar as Dictionary).get("roomCode", "")) + ":" + str((dar as Dictionary).get("currentAct", 1)) if dar is Dictionary else ""
-			parts.append("D|%s|%s|%s|%s|%s|%d|%s" % [
+			parts.append("D|%s|%s|%d|%s|%s|%s|%s|%d|%s" % [
 				str(d.get("id", "")),
+				str(d.get("displayName", "")),
+				str(d.get("avatarUrl", "")).hash(),
 				"1" if bool(d.get("isOnline", false)) else "0",
 				"1" if bool(d.get("isFriend", false)) else "0",
 				str(d.get("friendshipStatus", "")),
@@ -5530,7 +5699,9 @@ func _build_player_identity_row(card_data: Dictionary, rank_prefix: String = "")
 	name_row.add_child(name_lbl)
 
 	if bool(card_data.get("isVerified", false)):
-		name_row.add_child(VerifiedBadgeScript.create_control(14.0))
+		var badge_ctrl: Control = VerifiedBadgeScript.create_control(14.0)
+		badge_ctrl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		name_row.add_child(badge_ctrl)
 
 	var is_online: bool = bool(card_data.get("isOnline", false))
 	var status_lbl := _make_label(
@@ -5647,11 +5818,19 @@ func _render_friends_modal(friends_arr: Array, dir_arr: Array) -> void:
 				req_row.add_theme_constant_override("separation", 8)
 				req_card.add_child(req_row)
 
+				var req_hit := HBoxContainer.new()
+				req_hit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				req_hit.add_theme_constant_override("separation", 10)
+				req_row.add_child(req_hit)
+
+				req_hit.add_child(_make_avatar_thumb(str(req.get("avatarUrl", req.get("avatar_url", ""))), req_uname, 38.0))
+
 				var req_info := VBoxContainer.new()
 				req_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				req_info.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 				req_info.mouse_filter = Control.MOUSE_FILTER_IGNORE
 				req_info.add_theme_constant_override("separation", 3)
-				req_row.add_child(req_info)
+				req_hit.add_child(req_info)
 
 				req_info.add_child(_build_player_identity_row(req))
 				var req_meta := _make_label(
@@ -5660,6 +5839,7 @@ func _render_friends_modal(friends_arr: Array, dir_arr: Array) -> void:
 				)
 				req_meta.mouse_filter = Control.MOUSE_FILTER_IGNORE
 				req_info.add_child(req_meta)
+				_attach_profile_click_handler(req_hit, req)
 
 				var req_btns := HBoxContainer.new()
 				req_btns.add_theme_constant_override("separation", 6)
@@ -5697,11 +5877,19 @@ func _render_friends_modal(friends_arr: Array, dir_arr: Array) -> void:
 			out_row.add_theme_constant_override("separation", 8)
 			out_card.add_child(out_row)
 
+			var out_hit := HBoxContainer.new()
+			out_hit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			out_hit.add_theme_constant_override("separation", 10)
+			out_row.add_child(out_hit)
+
+			out_hit.add_child(_make_avatar_thumb(str(out_d.get("avatarUrl", out_d.get("avatar_url", ""))), out_uname, 38.0))
+
 			var out_info := VBoxContainer.new()
 			out_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			out_info.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			out_info.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			out_info.add_theme_constant_override("separation", 3)
-			out_row.add_child(out_info)
+			out_hit.add_child(out_info)
 
 			out_info.add_child(_build_player_identity_row(out_d))
 			var out_tag := _make_label(
@@ -5710,6 +5898,7 @@ func _render_friends_modal(friends_arr: Array, dir_arr: Array) -> void:
 			)
 			out_tag.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			out_info.add_child(out_tag)
+			_attach_profile_click_handler(out_hit, out_d)
 
 			var cancel_btn := _make_button(LocScript.pick("BATAL", "CANCEL"), false, "ghost")
 			cancel_btn.custom_minimum_size = Vector2(76.0, 34.0)
@@ -5735,6 +5924,7 @@ func _render_friends_modal(friends_arr: Array, dir_arr: Array) -> void:
 				continue
 			var f: Dictionary = f_var as Dictionary
 			var fid: String = str(f.get("id", ""))
+			var f_uname: String = str(f.get("username", ""))
 			var card := PanelContainer.new()
 			card.mouse_filter = Control.MOUSE_FILTER_PASS
 			card.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOW, HorrorTheme.BORDER_SUBTLE, 2, 10, 8))
@@ -5745,11 +5935,19 @@ func _render_friends_modal(friends_arr: Array, dir_arr: Array) -> void:
 			row.add_theme_constant_override("separation", 8)
 			card.add_child(row)
 
+			var f_hit := HBoxContainer.new()
+			f_hit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			f_hit.add_theme_constant_override("separation", 10)
+			row.add_child(f_hit)
+
+			f_hit.add_child(_make_avatar_thumb(str(f.get("avatarUrl", f.get("avatar_url", ""))), f_uname, 38.0))
+
 			var info := VBoxContainer.new()
 			info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			info.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 			info.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			info.add_theme_constant_override("separation", 3)
-			row.add_child(info)
+			f_hit.add_child(info)
 
 			info.add_child(_build_player_identity_row(f))
 
@@ -5766,6 +5964,7 @@ func _render_friends_modal(friends_arr: Array, dir_arr: Array) -> void:
 				)
 				wins_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 				info.add_child(wins_lbl)
+			_attach_profile_click_handler(f_hit, f)
 
 			var btns := HBoxContainer.new()
 			btns.add_theme_constant_override("separation", 6)
@@ -5825,11 +6024,19 @@ func _render_friends_modal(friends_arr: Array, dir_arr: Array) -> void:
 		row.add_theme_constant_override("separation", 8)
 		card.add_child(row)
 
+		var d_hit := HBoxContainer.new()
+		d_hit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		d_hit.add_theme_constant_override("separation", 10)
+		row.add_child(d_hit)
+
+		d_hit.add_child(_make_avatar_thumb(str(d.get("avatarUrl", d.get("avatar_url", ""))), uname, 38.0))
+
 		var info := VBoxContainer.new()
 		info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		info.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		info.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		info.add_theme_constant_override("separation", 3)
-		row.add_child(info)
+		d_hit.add_child(info)
 
 		var rank_prefix: String = ("#%d " % [idx + 1]) if _friends_search_query.is_empty() else ""
 		info.add_child(_build_player_identity_row(d, rank_prefix))
@@ -5840,6 +6047,7 @@ func _render_friends_modal(friends_arr: Array, dir_arr: Array) -> void:
 		)
 		meta_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		info.add_child(meta_lbl)
+		_attach_profile_click_handler(d_hit, d)
 
 		var action_row := HBoxContainer.new()
 		action_row.add_theme_constant_override("separation", 6)
@@ -5951,3 +6159,233 @@ func _on_remove_friend_pressed(friend_user_id: String) -> void:
 		await _refresh_friends_data(false)
 	else:
 		_set_friends_status(_extract_error(res, "Gagal menghapus teman.", "Failed to remove friend."), HorrorTheme.ERROR)
+
+# ---------- Profil Pemain Lain (Player Profile Viewer) ----------
+
+func _build_player_profile_modal() -> void:
+	var modal: Dictionary = _create_modal(LocScript.pick("PROFIL PEMAIN", "PLAYER PROFILE"))
+	player_profile_overlay = modal["overlay"] as ColorRect
+	player_profile_panel = modal["panel"] as PanelContainer
+	var body: VBoxContainer = modal["body"] as VBoxContainer
+
+	var header_card := PanelContainer.new()
+	header_card.mouse_filter = Control.MOUSE_FILTER_PASS
+	header_card.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOW, HorrorTheme.BORDER_SUBTLE, 2, 14, 12))
+	body.add_child(header_card)
+
+	var header_hbox := HBoxContainer.new()
+	header_hbox.add_theme_constant_override("separation", 14)
+	header_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	header_card.add_child(header_hbox)
+
+	var avatar_frame := PanelContainer.new()
+	avatar_frame.custom_minimum_size = Vector2(92.0, 92.0)
+	avatar_frame.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	avatar_frame.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	avatar_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	avatar_frame.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOWEST, HorrorTheme.BORDER_INTERACTIVE, 4, 3, 3))
+	header_hbox.add_child(avatar_frame)
+
+	player_profile_avatar_rect = TextureRect.new()
+	player_profile_avatar_rect.custom_minimum_size = Vector2(84.0, 84.0)
+	player_profile_avatar_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	player_profile_avatar_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	player_profile_avatar_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	avatar_frame.add_child(player_profile_avatar_rect)
+
+	var info_col := VBoxContainer.new()
+	info_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	info_col.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	info_col.add_theme_constant_override("separation", 4)
+	info_col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	header_hbox.add_child(info_col)
+
+	var disp_row := HBoxContainer.new()
+	disp_row.add_theme_constant_override("separation", 6)
+	disp_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	info_col.add_child(disp_row)
+
+	player_profile_display_label = _make_label("", 17, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "title-lg")
+	player_profile_display_label.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	player_profile_display_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	disp_row.add_child(player_profile_display_label)
+
+	player_profile_verified_badge = VerifiedBadgeScript.create_control(16.0)
+	player_profile_verified_badge.visible = false
+	player_profile_verified_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	player_profile_verified_badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	disp_row.add_child(player_profile_verified_badge)
+
+	player_profile_verified_label = _make_label(
+		LocScript.pick("Terverifikasi", "Verified"),
+		11, Color(0.114, 0.608, 0.941, 1.0), HORIZONTAL_ALIGNMENT_LEFT, "label-sm"
+	)
+	player_profile_verified_label.visible = false
+	player_profile_verified_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	player_profile_verified_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	disp_row.add_child(player_profile_verified_label)
+
+	var sub_row := HBoxContainer.new()
+	sub_row.add_theme_constant_override("separation", 8)
+	sub_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	info_col.add_child(sub_row)
+
+	player_profile_username_label = _make_label("", 12, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm")
+	player_profile_username_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	sub_row.add_child(player_profile_username_label)
+
+	player_profile_status_label = _make_label("[OFFLINE]", 11, Color("9e8886"), HORIZONTAL_ALIGNMENT_LEFT, "mono-sm")
+	player_profile_status_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	sub_row.add_child(player_profile_status_label)
+
+	player_profile_wins_label = _make_label("", 12, HorrorTheme.RELIC_BRASS, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm")
+	player_profile_wins_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	info_col.add_child(player_profile_wins_label)
+
+	var bio_hdr := _make_label("Bio", 12, HorrorTheme.PRIMARY, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
+	bio_hdr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	body.add_child(bio_hdr)
+
+	var bio_panel := PanelContainer.new()
+	bio_panel.custom_minimum_size = Vector2(0.0, 74.0)
+	bio_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bio_panel.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOWEST, HorrorTheme.BORDER_SUBTLE, 2, 12, 10))
+	body.add_child(bio_panel)
+
+	player_profile_bio_label = _make_label("", 13, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "body-md")
+	player_profile_bio_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+	player_profile_bio_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	player_profile_bio_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	player_profile_bio_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bio_panel.add_child(player_profile_bio_label)
+
+	player_profile_action_btn = _make_button(LocScript.pick("TAMBAHKAN TEMAN", "ADD FRIEND"), true)
+	player_profile_action_btn.visible = false
+	player_profile_action_btn.pressed.connect(_on_player_profile_action_pressed)
+	body.add_child(player_profile_action_btn)
+
+func _resolve_friendship_status(profile: Dictionary) -> String:
+	var f_status: String = str(profile.get("friendshipStatus", "")).strip_edges().to_lower()
+	if not f_status.is_empty():
+		return f_status
+	if bool(profile.get("isSelf", false)):
+		return "self"
+	if bool(profile.get("isFriend", false)):
+		return "friends"
+	if bool(profile.get("hasIncomingRequest", false)):
+		return "incoming_pending"
+	if bool(profile.get("hasOutgoingRequest", false)):
+		return "outgoing_pending"
+	var am: Variant = _am()
+	if am != null:
+		var uid: String = str(profile.get("id", profile.get("userId", ""))).strip_edges()
+		var uname_low: String = str(profile.get("username", "")).strip_edges().to_lower()
+		var my_uid: String = str(am.get("user_id")).strip_edges() if "user_id" in am else ""
+		var my_uname_low: String = str(am.get("username")).strip_edges().to_lower() if "username" in am else ""
+		if (not uid.is_empty() and uid == my_uid) or (not uname_low.is_empty() and uname_low == my_uname_low):
+			return "self"
+		var lists_map: Array = [
+			["friends_list", "friends"],
+			["incoming_friend_requests", "incoming_pending"],
+			["outgoing_friend_requests", "outgoing_pending"]
+		]
+		for pair: Array in lists_map:
+			var prop_name: String = str(pair[0])
+			var status_val: String = str(pair[1])
+			var arr_val: Variant = am.get(prop_name) if prop_name in am else null
+			if arr_val is Array:
+				for item_var: Variant in (arr_val as Array):
+					if item_var is Dictionary:
+						var item: Dictionary = item_var as Dictionary
+						var item_id: String = str(item.get("id", item.get("userId", ""))).strip_edges()
+						var item_uname: String = str(item.get("username", "")).strip_edges().to_lower()
+						if (not uid.is_empty() and item_id == uid) or (not uname_low.is_empty() and item_uname == uname_low):
+							return status_val
+	return "none"
+
+func _apply_player_profile_data(profile: Dictionary) -> void:
+	var raw_uname: String = str(profile.get("username", "")).strip_edges()
+	var uname: String = ProfanityFilterScript.censor(raw_uname)
+	var raw_disp: String = str(profile.get("displayName", profile.get("display_name", ""))).strip_edges()
+	var disp: String = ProfanityFilterScript.censor(raw_disp)
+	var shown_disp: String = disp if not disp.is_empty() else (uname if not uname.is_empty() else LocScript.pick("Pemain", "Player"))
+	var avatar_str: String = str(profile.get("avatarUrl", profile.get("avatar_url", ""))).strip_edges()
+	var is_v: bool = bool(profile.get("isVerified", profile.get("is_verified", false)))
+	var is_online: bool = bool(profile.get("isOnline", profile.get("is_online", false)))
+	var wins: int = maxi(0, int(profile.get("totalWins", profile.get("total_wins", 0))))
+	var censored_bio: String = ProfanityFilterScript.censor(str(profile.get("bio", "")).strip_edges())
+
+	if is_instance_valid(player_profile_avatar_rect):
+		player_profile_avatar_rect.texture = _get_cached_avatar_texture(avatar_str, raw_uname)
+	if is_instance_valid(player_profile_display_label):
+		player_profile_display_label.text = shown_disp
+	if is_instance_valid(player_profile_username_label):
+		player_profile_username_label.text = "@%s" % uname if not uname.is_empty() else ""
+	if is_instance_valid(player_profile_verified_badge):
+		player_profile_verified_badge.visible = is_v
+	if is_instance_valid(player_profile_verified_label):
+		player_profile_verified_label.visible = is_v
+	if is_instance_valid(player_profile_status_label):
+		player_profile_status_label.text = "[ONLINE]" if is_online else "[OFFLINE]"
+		player_profile_status_label.add_theme_color_override("font_color", HorrorTheme.SUCCESS_SAGE if is_online else Color("9e8886"))
+	if is_instance_valid(player_profile_wins_label):
+		player_profile_wins_label.text = LocScript.pick("Total Kemenangan: %d" % wins, "Total Wins: %d" % wins)
+	if is_instance_valid(player_profile_bio_label):
+		if censored_bio.is_empty():
+			player_profile_bio_label.text = LocScript.pick("Belum ada bio.", "No bio yet.")
+			player_profile_bio_label.add_theme_color_override("font_color", HorrorTheme.TEXT_MUTED)
+		else:
+			player_profile_bio_label.text = censored_bio
+			player_profile_bio_label.add_theme_color_override("font_color", HorrorTheme.ON_SURFACE)
+
+	var f_status: String = _resolve_friendship_status(profile)
+	_viewing_profile_data = profile.duplicate(true)
+	_viewing_profile_data["_resolved_status"] = f_status
+	if is_instance_valid(player_profile_action_btn):
+		var am: Variant = _am()
+		var can_online: bool = am != null and am.can_access_online_modes()
+		if can_online and f_status == "incoming_pending":
+			player_profile_action_btn.text = LocScript.pick("TERIMA PERTEMANAN", "ACCEPT FRIEND")
+			player_profile_action_btn.disabled = false
+			player_profile_action_btn.visible = true
+		elif can_online and f_status == "none" and not raw_uname.is_empty():
+			player_profile_action_btn.text = LocScript.pick("TAMBAHKAN TEMAN", "ADD FRIEND")
+			player_profile_action_btn.disabled = false
+			player_profile_action_btn.visible = true
+		else:
+			player_profile_action_btn.visible = false
+
+func _open_player_profile_modal(card_data: Dictionary) -> void:
+	var uid: String = str(card_data.get("id", card_data.get("userId", ""))).strip_edges()
+	var uname: String = str(card_data.get("username", "")).strip_edges()
+	var key: String = uid if not uid.is_empty() else uname
+	_viewing_profile_key = key
+	_apply_player_profile_data(card_data)
+	_open_modal(player_profile_overlay, player_profile_panel)
+	var am: Variant = _am()
+	if DisplayServer.get_name() != "headless" and am != null and am.can_access_online_modes() and am.has_method("fetch_player_profile"):
+		var res: Dictionary = await am.call("fetch_player_profile", uid, uname)
+		if not is_instance_valid(self) or not is_inside_tree():
+			return
+		if player_profile_overlay == null or not player_profile_overlay.visible or _viewing_profile_key != key:
+			return
+		if bool(res.get("ok", false)) and res.get("profile") is Dictionary and not (res.get("profile") as Dictionary).is_empty():
+			_apply_player_profile_data(res.get("profile") as Dictionary)
+
+func _on_player_profile_action_pressed() -> void:
+	var am: Variant = _am()
+	if am == null or not am.can_access_online_modes():
+		return
+	var f_status: String = str(_viewing_profile_data.get("_resolved_status", "none"))
+	var uid: String = str(_viewing_profile_data.get("id", _viewing_profile_data.get("userId", ""))).strip_edges()
+	var uname: String = str(_viewing_profile_data.get("username", "")).strip_edges()
+	if is_instance_valid(player_profile_action_btn):
+		player_profile_action_btn.disabled = true
+	if f_status == "incoming_pending" and not uid.is_empty():
+		await _on_accept_friend_request_pressed(uid, uname)
+		if is_instance_valid(player_profile_overlay) and player_profile_overlay.visible:
+			player_profile_overlay.visible = false
+	elif f_status == "none" and not uname.is_empty():
+		await _on_add_friend_pressed(uname)
+		if is_instance_valid(player_profile_overlay) and player_profile_overlay.visible:
+			player_profile_overlay.visible = false

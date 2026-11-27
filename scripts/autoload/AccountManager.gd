@@ -661,6 +661,36 @@ func remove_friend(friend_user_id: String) -> Dictionary:
 		"message": str(res.get("message", ""))
 	}
 
+func fetch_player_profile(target_user_id: String = "", target_username: String = "") -> Dictionary:
+	if not can_access_online_modes():
+		return {
+			"ok": false,
+			"status": 401,
+			"message": LocScript.pick("Masuk ke akun LAMPOR untuk melihat profil pemain.", "Sign in to a LAMPOR account to view player profiles.")
+		}
+	var clean_uid: String = target_user_id.strip_edges()
+	var clean_uname: String = target_username.strip_edges()
+	var q: String = ""
+	if not clean_uid.is_empty():
+		q = "userId=" + clean_uid.uri_encode()
+	elif not clean_uname.is_empty():
+		q = "username=" + clean_uname.uri_encode()
+	else:
+		return {"ok": false, "status": 400, "message": "Target tidak valid."}
+	var res: Dictionary = await api_request("GET", "/api/friends/profile?" + q, null, true)
+	var data: Dictionary = res.get("data", {}) if res.get("data") is Dictionary else {}
+	if bool(res.get("ok", false)):
+		return {
+			"ok": true,
+			"profile": data.get("profile", {})
+		}
+	return {
+		"ok": false,
+		"status": int(res.get("status", 0)),
+		"data": data,
+		"message": str(res.get("message", LocScript.pick("Gagal memuat profil pemain.", "Failed to load player profile.")))
+	}
+
 func update_profile(new_display_name: String, new_bio: String, new_avatar_url: String, _raw_avatar_filename: String = "") -> Dictionary:
 	if not can_access_online_modes():
 		var auth_msg: String = LocScript.pick("Masuk ke akun LAMPOR untuk mengedit profil.", "Sign in to a LAMPOR account to edit your profile.")

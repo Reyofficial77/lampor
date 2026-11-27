@@ -50,7 +50,6 @@ signal multiplayer_disconnected(reason: String)
 signal sandbox_panel_toggled(is_open: bool)
 signal friends_updated(friends: Array, directory: Array)
 signal voice_mic_toggled(enabled: bool)
-signal voice_mic_permission_requested()
 signal voice_mic_permission_status(granted: bool, message: String)
 signal voice_activity_updated(local_speaking: bool, active_speakers: Dictionary)
 

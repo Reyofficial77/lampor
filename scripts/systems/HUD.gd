@@ -141,13 +141,6 @@ var mic_toggle_button: Button = null
 var _mission_mic_row: HBoxContainer = null
 var _mic_icon_ctrl: Control = null
 var _mic_text_lbl: Label = null
-var mic_permission_overlay: ColorRect = null
-var mic_permission_panel: PanelContainer = null
-var mic_permission_device_lbl: Label = null
-var mic_permission_allow_btn: Button = null
-var mic_permission_deny_btn: Button = null
-var _mic_perm_title_lbl: Label = null
-var _mic_perm_desc_lbl: Label = null
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -189,8 +182,6 @@ func _ready() -> void:
 		SignalBus.account_state_changed.connect(_refresh_host_and_admin_controls)
 	if SignalBus.has_signal("voice_mic_toggled"):
 		SignalBus.voice_mic_toggled.connect(func(_enabled: bool) -> void: _refresh_mic_button_visuals())
-	if SignalBus.has_signal("voice_mic_permission_requested"):
-		SignalBus.voice_mic_permission_requested.connect(_open_mic_permission_modal)
 	if SignalBus.has_signal("voice_mic_permission_status"):
 		SignalBus.voice_mic_permission_status.connect(_on_mic_permission_status)
 	if SignalBus.has_signal("voice_activity_updated"):
@@ -210,7 +201,6 @@ func _ready() -> void:
 	_build_dialog_label()
 	_build_mission_card()
 	_build_exit_confirm()
-	_build_mic_permission_modal()
 	_build_desktop_hints()
 	_build_online_room_overlay()
 	_build_inventory_overlay()
@@ -515,9 +505,7 @@ func _on_mic_toggle_pressed() -> void:
 			mp.call("set_mic_enabled", false)
 	elif mp.has_method("request_mic_permission_and_enable"):
 		var status: String = str(mp.call("request_mic_permission_and_enable"))
-		if status == "needs_consent":
-			_open_mic_permission_modal()
-		elif status == "pending_os":
+		if status == "pending_os":
 			SignalBus.dialog_requested.emit(LocScript.pick("Meminta izin mikrofon perangkat...", "Requesting device microphone permission..."), 2.8)
 	elif mp.has_method("toggle_mic"):
 		mp.call("toggle_mic")
@@ -641,7 +629,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		return
 	if get_tree().paused or GameManager.current_state != GameManager.GameState.PLAYING:
 		return
-	if (pause_menu and pause_menu.visible) or (barricade_dialog and barricade_dialog.visible) or (inventory_overlay and inventory_overlay.visible) or (exit_confirm_overlay and exit_confirm_overlay.visible) or (mic_permission_overlay != null and mic_permission_overlay.visible):
+	if (pause_menu and pause_menu.visible) or (barricade_dialog and barricade_dialog.visible) or (inventory_overlay and inventory_overlay.visible) or (exit_confirm_overlay and exit_confirm_overlay.visible):
 		return
 	var focus_owner: Control = get_viewport().gui_get_focus_owner()
 	if focus_owner is LineEdit or focus_owner is TextEdit:
@@ -658,16 +646,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	var legacy_inv_key: bool = event is InputEventKey and (event as InputEventKey).pressed and not (event as InputEventKey).echo and ((event as InputEventKey).keycode == KEY_B or (event as InputEventKey).keycode == KEY_I) and not _is_key_bound_to_gameplay(event as InputEventKey)
 	if event.is_action_pressed("toggle_inventory") or legacy_inv_key:
-		if not pause_menu.visible and not barricade_dialog.visible and not (mic_permission_overlay != null and mic_permission_overlay.visible) and GameManager.current_state == GameManager.GameState.PLAYING:
+		if not pause_menu.visible and not barricade_dialog.visible and GameManager.current_state == GameManager.GameState.PLAYING:
 			toggle_inventory()
 			return
 
 	if event.is_action_pressed("pause"):
 		if not _pause_listening_keybind_action.is_empty():
 			_cancel_pause_keybind_listening()
-			return
-		if mic_permission_overlay != null and mic_permission_overlay.visible:
-			_close_mic_permission_modal()
 			return
 		if exit_confirm_overlay and exit_confirm_overlay.visible:
 			exit_confirm_overlay.visible = false
@@ -690,7 +675,7 @@ func _is_online_session_active() -> bool:
 	return _should_show_coop_hud()
 
 func _is_gameplay_paused_or_menu_open() -> bool:
-	return get_tree().paused or (pause_menu != null and pause_menu.visible) or (barricade_dialog != null and barricade_dialog.visible) or (mic_permission_overlay != null and mic_permission_overlay.visible)
+	return get_tree().paused or (pause_menu != null and pause_menu.visible) or (barricade_dialog != null and barricade_dialog.visible)
 
 func toggle_pause() -> void:
 	if is_cutscene_active() or is_fate_card_overlay_open():
@@ -708,8 +693,6 @@ func toggle_pause() -> void:
 	if barricade_dialog.visible:
 		return
 	if exit_confirm_overlay and exit_confirm_overlay.visible:
-		return
-	if mic_permission_overlay != null and mic_permission_overlay.visible:
 		return
 	var in_online: bool = _is_online_session_active()
 	var is_paused: bool = not pause_menu.visible
@@ -1131,8 +1114,6 @@ func _confirm_exit_to_menu() -> void:
 		fate_card_overlay.force_close()
 	if exit_confirm_overlay:
 		exit_confirm_overlay.visible = false
-	if mic_permission_overlay:
-		mic_permission_overlay.visible = false
 	barricade_dialog.visible = false
 	var player: PlayerController = GameManager.player_character as PlayerController
 	if player:
@@ -1373,144 +1354,6 @@ func _build_exit_confirm() -> void:
 	confirm.pressed.connect(_on_main_menu_pressed)
 	buttons.add_child(confirm)
 
-func _build_mic_permission_modal() -> void:
-	mic_permission_overlay = ColorRect.new()
-	mic_permission_overlay.name = "MicPermissionOverlay"
-	mic_permission_overlay.color = Color(HorrorTheme.SCRIM_DARK.r, HorrorTheme.SCRIM_DARK.g, HorrorTheme.SCRIM_DARK.b, 0.82)
-	mic_permission_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	mic_permission_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
-	mic_permission_overlay.z_index = 22
-	mic_permission_overlay.visible = false
-	add_child(mic_permission_overlay)
-
-	var center := CenterContainer.new()
-	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	center.mouse_filter = Control.MOUSE_FILTER_PASS
-	mic_permission_overlay.add_child(center)
-
-	mic_permission_panel = PanelContainer.new()
-	mic_permission_panel.name = "MicPermissionPanel"
-	mic_permission_panel.custom_minimum_size = Vector2(460.0, 0.0)
-	mic_permission_panel.add_theme_stylebox_override("panel", HorrorTheme.make_minimal_panel_style(Color(0.086, 0.045, 0.043, 0.96), HorrorTheme.BORDER_INTERACTIVE, 2, 26, 24))
-	center.add_child(mic_permission_panel)
-
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 12)
-	mic_permission_panel.add_child(box)
-
-	_mic_perm_title_lbl = Label.new()
-	_mic_perm_title_lbl.text = LocScript.pick("IZIN AKSES MIKROFON", "MICROPHONE ACCESS PERMISSION")
-	_mic_perm_title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	_mic_perm_title_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	HorrorTheme.style_label(_mic_perm_title_lbl, "headline-md", HorrorTheme.PRIMARY, 18)
-	box.add_child(_mic_perm_title_lbl)
-
-	box.add_child(HorrorTheme.make_hairline_divider())
-
-	_mic_perm_desc_lbl = Label.new()
-	_mic_perm_desc_lbl.text = LocScript.pick(
-		"Lampor membutuhkan akses mikrofon perangkat (desktop, mobile, atau web) untuk mengirim suaramu di voice chat online.",
-		"Lampor requires device microphone access (desktop, mobile, or web) to transmit your voice in online voice chat."
-	)
-	_mic_perm_desc_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	_mic_perm_desc_lbl.custom_minimum_size.x = 380.0
-	_mic_perm_desc_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	HorrorTheme.style_label(_mic_perm_desc_lbl, "body-md", HorrorTheme.ON_SURFACE_VARIANT, 14)
-	box.add_child(_mic_perm_desc_lbl)
-
-	mic_permission_device_lbl = Label.new()
-	mic_permission_device_lbl.text = LocScript.pick("Perangkat: Default", "Device: Default")
-	mic_permission_device_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	mic_permission_device_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	HorrorTheme.style_label(mic_permission_device_lbl, "mono-sm", HorrorTheme.RELIC_BRASS, 12)
-	box.add_child(mic_permission_device_lbl)
-
-	var buttons := HBoxContainer.new()
-	buttons.add_theme_constant_override("separation", 10)
-	box.add_child(buttons)
-
-	mic_permission_deny_btn = _make_exit_button(LocScript.pick("TOLAK", "DENY"), false)
-	mic_permission_deny_btn.pressed.connect(_on_mic_permission_deny_pressed)
-	buttons.add_child(mic_permission_deny_btn)
-
-	mic_permission_allow_btn = _make_exit_button(LocScript.pick("IZINKAN MIKROFON", "ALLOW MICROPHONE"), true)
-	mic_permission_allow_btn.pressed.connect(_on_mic_permission_allow_pressed)
-	buttons.add_child(mic_permission_allow_btn)
-
-func _open_mic_permission_modal() -> void:
-	if not is_instance_valid(mic_permission_overlay):
-		return
-	var mp: Variant = _mp()
-	var dev_name: String = "Default"
-	if mp != null and mp.has_method("get_active_mic_device_name"):
-		dev_name = str(mp.call("get_active_mic_device_name"))
-	if _mic_perm_title_lbl:
-		_mic_perm_title_lbl.text = LocScript.pick("IZIN AKSES MIKROFON", "MICROPHONE ACCESS PERMISSION")
-	if _mic_perm_desc_lbl:
-		_mic_perm_desc_lbl.text = LocScript.pick(
-			"Lampor membutuhkan akses mikrofon perangkat (desktop, mobile, atau web) untuk mengirim suaramu di voice chat online.",
-			"Lampor requires device microphone access (desktop, mobile, or web) to transmit your voice in online voice chat."
-		)
-	if mic_permission_device_lbl:
-		mic_permission_device_lbl.text = LocScript.pick("Perangkat: %s" % dev_name, "Device: %s" % dev_name)
-	if mic_permission_allow_btn:
-		mic_permission_allow_btn.text = LocScript.pick("IZINKAN MIKROFON", "ALLOW MICROPHONE")
-	if mic_permission_deny_btn:
-		mic_permission_deny_btn.text = LocScript.pick("TOLAK", "DENY")
-
-	var was_open: bool = mic_permission_overlay.visible
-	_apply_overlay_layouts()
-	mic_permission_overlay.visible = true
-	if not was_open and is_instance_valid(mic_permission_panel):
-		HorrorTheme.animate_surface_enter(mic_permission_panel)
-
-	if _is_online_session_active():
-		get_tree().paused = false
-	var player: PlayerController = GameManager.player_character as PlayerController
-	if player:
-		player.release_all_held_inputs()
-		player.is_pause_menu_open = true
-	joystick_vector = Vector2.ZERO
-	if touch_root:
-		touch_root.visible = false
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	if mic_permission_allow_btn:
-		mic_permission_allow_btn.call_deferred("grab_focus")
-
-func _close_mic_permission_modal() -> void:
-	if is_instance_valid(mic_permission_overlay):
-		mic_permission_overlay.visible = false
-	var pause_open: bool = pause_menu != null and pause_menu.visible
-	var bar_open: bool = barricade_dialog != null and barricade_dialog.visible
-	var exit_open: bool = exit_confirm_overlay != null and exit_confirm_overlay.visible
-	var inv_open: bool = inventory_overlay != null and inventory_overlay.visible
-	if not pause_open and not bar_open:
-		var player: PlayerController = GameManager.player_character as PlayerController
-		if player:
-			player.is_pause_menu_open = false
-		if not exit_open and not inv_open:
-			if touch_root:
-				touch_root.visible = GameManager.current_state == GameManager.GameState.PLAYING
-			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _is_touch_device() else Input.MOUSE_MODE_CAPTURED
-			return
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-
-func _on_mic_permission_allow_pressed() -> void:
-	_close_mic_permission_modal()
-	var mp: Variant = _mp()
-	if mp != null and mp.has_method("confirm_mic_permission_grant"):
-		var status: String = str(mp.call("confirm_mic_permission_grant"))
-		if status == "pending_os":
-			SignalBus.dialog_requested.emit(LocScript.pick("Meminta izin mikrofon perangkat...", "Requesting device microphone permission..."), 2.8)
-	_refresh_mic_button_visuals()
-
-func _on_mic_permission_deny_pressed() -> void:
-	_close_mic_permission_modal()
-	var mp: Variant = _mp()
-	if mp != null and mp.has_method("deny_mic_permission"):
-		mp.call("deny_mic_permission")
-	_refresh_mic_button_visuals()
-
 func _on_mic_permission_status(granted: bool, message: String) -> void:
 	_refresh_mic_button_visuals()
 	if not granted and not message.strip_edges().is_empty():
@@ -1561,11 +1404,6 @@ func _apply_overlay_layouts() -> void:
 		mission_body.add_theme_font_size_override("font_size", 12 if compact else 17)
 	if exit_panel:
 		exit_panel.custom_minimum_size.x = minf(440.0, view_size.x - 32.0)
-	if mic_permission_panel:
-		var mic_w: float = minf(460.0, view_size.x - 32.0)
-		mic_permission_panel.custom_minimum_size.x = mic_w
-		if _mic_perm_desc_lbl:
-			_mic_perm_desc_lbl.custom_minimum_size.x = maxf(200.0, mic_w - 56.0)
 	if barricade_dialog:
 		var bar_w: float = minf(520.0, view_size.x - 28.0)
 		barricade_dialog.offset_left = -bar_w * 0.5
@@ -2208,17 +2046,6 @@ func _refresh_localized_hud_texts() -> void:
 		_exit_confirm_cancel.text = LocScript.pick("BATAL", "CANCEL")
 	if _exit_confirm_ok:
 		_exit_confirm_ok.text = LocScript.pick("KE MENU UTAMA", "MAIN MENU")
-	if _mic_perm_title_lbl:
-		_mic_perm_title_lbl.text = LocScript.pick("IZIN AKSES MIKROFON", "MICROPHONE ACCESS PERMISSION")
-	if _mic_perm_desc_lbl:
-		_mic_perm_desc_lbl.text = LocScript.pick(
-			"Lampor membutuhkan akses mikrofon perangkat (desktop, mobile, atau web) untuk mengirim suaramu di voice chat online.",
-			"Lampor requires device microphone access (desktop, mobile, or web) to transmit your voice in online voice chat."
-		)
-	if mic_permission_allow_btn:
-		mic_permission_allow_btn.text = LocScript.pick("IZINKAN MIKROFON", "ALLOW MICROPHONE")
-	if mic_permission_deny_btn:
-		mic_permission_deny_btn.text = LocScript.pick("TOLAK", "DENY")
 
 	if _inv_title_lbl:
 		_inv_title_lbl.text = LocScript.pick("TAS BEKAL & INVENTARIS", "BACKPACK & INVENTORY")
@@ -2701,8 +2528,6 @@ func _begin_cutscene_ui(cutscene_type: String, overlay_name: String, title_text:
 		pause_settings_container.visible = false
 	if exit_confirm_overlay:
 		exit_confirm_overlay.visible = false
-	if mic_permission_overlay:
-		mic_permission_overlay.visible = false
 	if barricade_dialog:
 		barricade_dialog.visible = false
 	if is_instance_valid(fate_card_overlay) and fate_card_overlay.is_open():
@@ -3635,7 +3460,7 @@ func toggle_inventory() -> void:
 		return
 	if is_fate_card_overlay_open():
 		return
-	if pause_menu.visible or barricade_dialog.visible or (mic_permission_overlay != null and mic_permission_overlay.visible):
+	if pause_menu.visible or barricade_dialog.visible:
 		return
 	if GameManager.death_sequence_active or GameManager.current_state != GameManager.GameState.PLAYING:
 		return
@@ -3828,7 +3653,6 @@ func _try_offer_fate_card(act_num: int) -> void:
 		or (pause_menu and pause_menu.visible) \
 		or (barricade_dialog and barricade_dialog.visible) \
 		or (exit_confirm_overlay and exit_confirm_overlay.visible) \
-		or (mic_permission_overlay != null and mic_permission_overlay.visible) \
 		or (inventory_overlay and inventory_overlay.visible)
 	if modal_blocking:
 		_schedule_fate_card_offer(act_num, 0.35)

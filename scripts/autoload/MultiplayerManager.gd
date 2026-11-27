@@ -273,15 +273,6 @@ func request_mic_permission_and_enable() -> String:
 		return "unavailable"
 	return str(voice_chat.call("request_mic_permission_and_enable"))
 
-func confirm_mic_permission_grant() -> String:
-	if voice_chat == null:
-		return "unavailable"
-	return str(voice_chat.call("confirm_mic_permission_grant"))
-
-func deny_mic_permission() -> void:
-	if voice_chat != null:
-		voice_chat.call("deny_mic_permission")
-
 func get_active_mic_device_name() -> String:
 	if voice_chat == null:
 		return "Default"

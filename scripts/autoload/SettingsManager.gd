@@ -19,7 +19,6 @@ const DEFAULT_MOBILE_BUTTON_SCALE: float = 1.0
 const DEFAULT_MOBILE_JOYSTICK_SCALE: float = 1.0
 const DEFAULT_LANGUAGE: String = "id"
 const DEFAULT_CHARACTER_MODEL: String = "male"
-const DEFAULT_MIC_PERMISSION_GRANTED: bool = false
 const DEFAULT_ALLOW_FRIEND_JOIN_SINGLEPLAYER: bool = true
 const CHARACTER_MODEL_PATHS: Dictionary = {
 	"male": "res://assets/models/player/adult_male.glb",
@@ -73,7 +72,6 @@ var mobile_joystick_position: Vector2 = Vector2(-1.0, -1.0)
 var mobile_button_positions: Array = []
 var language: String = DEFAULT_LANGUAGE
 var character_model: String = DEFAULT_CHARACTER_MODEL
-var mic_permission_granted: bool = DEFAULT_MIC_PERMISSION_GRANTED
 var mic_input_device: String = "Default"
 var allow_friend_join_singleplayer: bool = DEFAULT_ALLOW_FRIEND_JOIN_SINGLEPLAYER
 var server_base_url: String = DEFAULT_SERVER_URL
@@ -140,7 +138,6 @@ func _apply_config_values(config: ConfigFile) -> void:
 		mobile_button_positions = loaded_button_positions.duplicate(true)
 	language = LocScript.normalize_language(str(config.get_value("general", "language", DEFAULT_LANGUAGE)))
 	character_model = normalize_character_model(str(config.get_value("general", "character_model", DEFAULT_CHARACTER_MODEL)))
-	mic_permission_granted = bool(config.get_value("audio", "mic_permission_granted", DEFAULT_MIC_PERMISSION_GRANTED))
 	mic_input_device = str(config.get_value("audio", "mic_input_device", "Default"))
 	allow_friend_join_singleplayer = bool(config.get_value("multiplayer", "allow_friend_join_singleplayer", DEFAULT_ALLOW_FRIEND_JOIN_SINGLEPLAYER))
 	server_base_url = DEFAULT_SERVER_URL
@@ -166,7 +163,6 @@ func _save_settings() -> void:
 	config.set_value("mobile", "joystick_scale", mobile_joystick_scale)
 	config.set_value("mobile", "joystick_position", mobile_joystick_position)
 	config.set_value("mobile", "button_positions", mobile_button_positions)
-	config.set_value("audio", "mic_permission_granted", mic_permission_granted)
 	config.set_value("audio", "mic_input_device", mic_input_device)
 	config.set_value("multiplayer", "allow_friend_join_singleplayer", allow_friend_join_singleplayer)
 	for action: String in REBINDABLE_ACTIONS:
@@ -269,10 +265,6 @@ func set_character_model(model_id: String) -> void:
 	character_model = normalize_character_model(model_id)
 	_save_settings()
 	character_model_changed.emit(character_model)
-
-func set_mic_permission_granted(granted: bool) -> void:
-	mic_permission_granted = granted
-	_save_settings()
 
 func set_mic_input_device(device_name: String) -> void:
 	var cleaned: String = device_name.strip_edges()

@@ -470,6 +470,7 @@ func _run_checks() -> void:
 		if mic_btn == null:
 			errors.append("HUD top-left mic_toggle_button missing")
 		var vcs: Variant = load("res://scripts/systems/VoiceChatSystem.gd")
+		var vcs_inst: Node = null
 		if vcs == null:
 			errors.append("VoiceChatSystem.gd failed to load")
 		else:
@@ -482,7 +483,7 @@ func _run_checks() -> void:
 			var pcm_out: PackedFloat32Array = vcs.call("decode_ulaw_b64_to_pcm", b64)
 			if b64.is_empty() or pcm_out.size() != pcm_in.size() or absf(pcm_out[2]) < 0.05:
 				errors.append("VoiceChatSystem mu-law roundtrip invalid")
-			var vcs_inst: Node = (vcs as Script).new() as Node
+			vcs_inst = (vcs as Script).new() as Node
 			vm.add_child(vcs_inst)
 			vcs_inst.call("decode_and_route_peer_audio", "u2", {"d": b64}, {})
 			if not bool(vcs_inst.call("is_peer_speaking", "u2")):
@@ -516,30 +517,41 @@ func _run_checks() -> void:
 			mp.call("reset_to_singleplayer")
 			gm.set("current_state", 0)
 
-		if sm == null or not ("mic_permission_granted" in sm) or not sm.has_method("set_mic_permission_granted"):
-			errors.append("SettingsManager missing mic_permission_granted or set_mic_permission_granted")
+		if sm == null:
+			errors.append("SettingsManager missing during voice verification")
 		elif mp != null and gm != null:
-			sm.call("set_mic_permission_granted", false)
+			var sb_node: Node = root.get_node_or_null("SignalBus")
+			if "mic_permission_granted" in sm:
+				errors.append("SettingsManager should not retain fake mic_permission_granted gate")
+			if sb_node == null or sb_node.has_signal("voice_mic_permission_requested"):
+				errors.append("SignalBus missing or still exposes fake voice_mic_permission_requested signal")
+			if sb_node == null or not sb_node.has_signal("voice_mic_permission_status"):
+				errors.append("SignalBus missing voice_mic_permission_status signal")
+			if hud_node.get("mic_permission_overlay") != null or hud_node.has_method("_open_mic_permission_modal") or hud_node.has_method("_build_mic_permission_modal"):
+				errors.append("HUD must not define custom mic_permission_overlay or fake consent modal")
 			mp.set("is_online_session", true)
 			gm.set("current_state", 1)
-			if str(mp.call("request_mic_permission_and_enable")) != "needs_consent" or bool(mp.call("is_mic_enabled")):
-				errors.append("Voice mic permission should require consent before enabling")
-			var mic_perm_ov: Control = hud_node.get("mic_permission_overlay") as Control
-			if mic_perm_ov == null:
-				errors.append("HUD mic_permission_overlay missing")
-			else:
-				hud_node.call("_on_mic_toggle_pressed")
-				if not mic_perm_ov.visible or self.paused:
-					errors.append("HUD _on_mic_toggle_pressed did not show mic_permission_overlay without pausing SceneTree")
-				hud_node.call("_on_mic_permission_allow_pressed")
-				if mic_perm_ov.visible or not bool(sm.get("mic_permission_granted")) or not bool(mp.call("is_mic_enabled")):
-					errors.append("HUD _on_mic_permission_allow_pressed did not close modal, grant permission, and enable mic")
-				mp.call("deny_mic_permission")
-				if bool(sm.get("mic_permission_granted")) or bool(mp.call("is_mic_enabled")):
-					errors.append("deny_mic_permission did not revoke mic_permission_granted and disable mic")
+			var mic_req_status: String = str(mp.call("request_mic_permission_and_enable"))
+			if mic_req_status == "needs_consent" or not bool(mp.call("is_mic_enabled")):
+				errors.append("Native mic request must enable directly in headless mode instead of needs_consent")
+			hud_node.call("_on_mic_toggle_pressed")
+			if bool(mp.call("is_mic_enabled")) or self.paused:
+				errors.append("HUD _on_mic_toggle_pressed did not disable mic without pausing SceneTree")
+			hud_node.call("_on_mic_toggle_pressed")
+			if not bool(mp.call("is_mic_enabled")) or self.paused:
+				errors.append("HUD _on_mic_toggle_pressed did not re-enable mic natively without fake modal")
+			if vcs != null and is_instance_valid(vcs_inst):
+				for expected_m: String in ["_start_web_mic_capture", "_stop_web_mic_capture", "_poll_web_mic_capture", "_on_android_permission_result", "_recreate_mic_player"]:
+					if not vcs_inst.has_method(expected_m):
+						errors.append("VoiceChatSystem missing native capture method: " + expected_m)
+				vcs_inst.call("_on_android_permission_result", "android.permission.RECORD_AUDIO", true)
+				if not bool(vcs_inst.get("_android_runtime_granted")) or not bool(vcs_inst.get("mic_enabled")):
+					errors.append("VoiceChatSystem _on_android_permission_result(true) did not activate mic")
+				vcs_inst.call("_on_android_permission_result", "android.permission.RECORD_AUDIO", false)
+				if bool(vcs_inst.get("_android_runtime_granted")) or bool(vcs_inst.get("mic_enabled")) or str(vcs_inst.get("last_permission_error")).strip_edges().is_empty():
+					errors.append("VoiceChatSystem _on_android_permission_result(false) did not disable mic or record error")
 			mp.call("reset_to_singleplayer")
 			gm.set("current_state", 0)
-			sm.call("set_mic_permission_granted", false)
 
 		var ho: CanvasItem = hud_node.get("post_process_rect") as CanvasItem
 		if ho != null and ho.visible:

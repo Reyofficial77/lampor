@@ -1,5 +1,7 @@
 extends Node
 
+const LocScript = preload("res://scripts/systems/Loc.gd")
+
 signal voice_chunk_ready(b64_data: String, sample_rate: int, rms: float)
 signal speaking_state_changed(local_speaking: bool, active_speakers: Dictionary)
 
@@ -38,6 +40,12 @@ var _peer_players: Dictionary = {}
 var _last_emitted_local_speaking: bool = false
 var _last_emitted_speaker_keys: String = ""
 var _awaiting_os_permission: bool = false
+var _android_runtime_granted: bool = false
+var _web_mic_pending: bool = false
+var _web_poll_accum: float = 0.0
+var _no_frame_elapsed: float = 0.0
+var _tried_fallback_device: bool = false
+var _no_frame_warned: bool = false
 var last_permission_error: String = ""
 
 func _ready() -> void:
@@ -47,10 +55,15 @@ func _ready() -> void:
 	if tree and tree.has_signal("on_request_permissions_result"):
 		tree.connect("on_request_permissions_result", _on_android_permission_result)
 
+func _exit_tree() -> void:
+	if OS.has_feature("web") and not _is_headless:
+		_stop_web_mic_capture()
+
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_FOCUS_IN and _awaiting_os_permission and has_os_mic_permission():
 		_awaiting_os_permission = false
-		_enable_after_user_consent()
+		_android_runtime_granted = true
+		_activate_native_capture(true)
 
 static func _linear_to_ulaw(pcm: int) -> int:
 	var sample_val: int = pcm
@@ -102,15 +115,19 @@ static func decode_ulaw_b64_to_pcm(b64: String) -> PackedFloat32Array:
 
 func has_os_mic_permission() -> bool:
 	if OS.get_name().to_lower() == "android":
+		if _android_runtime_granted:
+			return true
 		var granted_list: PackedStringArray = OS.get_granted_permissions()
 		for perm: String in granted_list:
 			if perm == "android.permission.RECORD_AUDIO" or perm.ends_with("RECORD_AUDIO"):
 				return true
 		return false
+	if OS.has_feature("web") and not _is_headless:
+		return mic_enabled
 	return true
 
 func has_mic_permission() -> bool:
-	return SettingsManager.mic_permission_granted and has_os_mic_permission()
+	return has_os_mic_permission()
 
 func get_available_input_devices() -> PackedStringArray:
 	if _is_headless:
@@ -131,23 +148,32 @@ func get_active_input_device_name() -> String:
 		return devices[0]
 	return "Default"
 
+func _select_best_input_device(is_android: bool, exclude_device: String = "") -> String:
+	var devices: PackedStringArray = AudioServer.get_input_device_list()
+	var filtered: Array[String] = []
+	for dev_name: String in devices:
+		if exclude_device.is_empty() or dev_name != exclude_device:
+			filtered.append(dev_name)
+	if filtered.is_empty():
+		return "Default" if is_android and exclude_device.is_empty() else ""
+	var saved_dev: String = SettingsManager.mic_input_device.strip_edges()
+	if not saved_dev.is_empty() and filtered.has(saved_dev):
+		return saved_dev
+	if exclude_device.is_empty() and filtered.has("Default"):
+		return "Default"
+	return filtered[0]
+
+func _recreate_mic_player() -> void:
+	if _is_headless:
+		return
+	if is_instance_valid(_mic_player):
+		if _mic_player.playing:
+			_mic_player.stop()
+		_mic_player.queue_free()
+		_mic_player = null
+	_ensure_capture_pipeline()
+
 func request_mic_permission_and_enable() -> String:
-	if not SettingsManager.mic_permission_granted:
-		SignalBus.voice_mic_permission_requested.emit()
-		return "needs_consent"
-	return _enable_after_user_consent()
-
-func confirm_mic_permission_grant() -> String:
-	SettingsManager.set_mic_permission_granted(true)
-	return _enable_after_user_consent()
-
-func deny_mic_permission() -> void:
-	SettingsManager.set_mic_permission_granted(false)
-	_awaiting_os_permission = false
-	set_mic_enabled(false)
-	SignalBus.voice_mic_permission_status.emit(false, "Izin mikrofon ditolak.")
-
-func _enable_after_user_consent() -> String:
 	last_permission_error = ""
 	if _is_headless:
 		set_mic_enabled(true)
@@ -156,56 +182,283 @@ func _enable_after_user_consent() -> String:
 	var os_name: String = OS.get_name().to_lower()
 	if os_name == "android":
 		if not has_os_mic_permission():
-			_awaiting_os_permission = true
-			OS.request_permission("android.permission.RECORD_AUDIO")
-			return "pending_os"
-	elif OS.has_feature("web"):
-		JavaScriptBridge.eval("""(function(){
-			try {
-				if (navigator && navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-					navigator.mediaDevices.getUserMedia({ audio: true }).then(function(stream){
-						if (stream && stream.getTracks) {
-							stream.getTracks().forEach(function(t){ try { t.stop(); } catch(_e){} });
-						}
-					}).catch(function(_err){});
-				}
-			} catch (e) {}
-		})()""")
-	else:
-		var devices: PackedStringArray = AudioServer.get_input_device_list()
-		if devices.is_empty():
-			last_permission_error = "Mikrofon perangkat tidak terdeteksi."
-			SignalBus.voice_mic_permission_status.emit(false, last_permission_error)
-			return "no_device"
-		var chosen: String = ""
-		var saved_dev: String = SettingsManager.mic_input_device.strip_edges()
-		if not saved_dev.is_empty() and devices.has(saved_dev):
-			chosen = saved_dev
-		elif devices.has("Default"):
-			chosen = "Default"
-		else:
-			chosen = devices[0]
-		AudioServer.input_device = chosen
+			var already_granted: bool = OS.request_permission("android.permission.RECORD_AUDIO")
+			if already_granted:
+				_android_runtime_granted = true
+			else:
+				_awaiting_os_permission = true
+				return "pending_os"
+		return _activate_native_capture(true)
+	if OS.has_feature("web"):
+		_web_mic_pending = true
+		_start_web_mic_capture()
+		return "pending_os"
+	return _activate_native_capture(false)
 
+func _activate_native_capture(is_android: bool) -> String:
+	last_permission_error = ""
+	if _is_headless:
+		set_mic_enabled(true)
+		return "enabled"
+	var chosen: String = _select_best_input_device(is_android)
+	if chosen.is_empty():
+		last_permission_error = LocScript.pick("Mikrofon perangkat tidak terdeteksi.", "Device microphone not detected.")
+		SignalBus.voice_mic_permission_status.emit(false, last_permission_error)
+		return "no_device"
+	AudioServer.input_device = chosen
+	_recreate_mic_player()
+	_no_frame_elapsed = 0.0
+	_tried_fallback_device = false
+	_no_frame_warned = false
 	set_mic_enabled(true)
-	SignalBus.voice_mic_permission_status.emit(true, "Mikrofon aktif.")
+	SignalBus.voice_mic_permission_status.emit(true, LocScript.pick("Mikrofon aktif.", "Microphone active."))
 	return "enabled"
+
+func _start_web_mic_capture() -> void:
+	if _is_headless or not OS.has_feature("web"):
+		return
+	JavaScriptBridge.eval("""(function(){
+		try {
+			if (!window.__lamporMic) {
+				function linearToUlaw(pcm) {
+					var sign = pcm < 0 ? 128 : 0;
+					if (pcm < 0) pcm = -pcm;
+					if (pcm > 32635) pcm = 32635;
+					pcm += 132;
+					var exp = 7;
+					var mask = 16384;
+					while (exp > 0 && (pcm & mask) === 0) {
+						exp--;
+						mask >>= 1;
+					}
+					var mant = (pcm >> (exp + 3)) & 15;
+					return (~(sign | (exp << 4) | mant)) & 255;
+				}
+				function u8ToB64(u8) {
+					var bin = '';
+					for (var i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+					return btoa(bin);
+				}
+				window.__lamporMic = {
+					state: 'idle',
+					err: '',
+					aborted: false,
+					stream: null,
+					ctx: null,
+					proc: null,
+					src: null,
+					gain: null,
+					chunks: [],
+					pending: [],
+					rAccum: 0,
+					rSum: 0,
+					rCount: 0,
+					rms: 0,
+					speaking: false,
+					hangoverUntil: 0,
+					lastEmit: 0,
+					stop: function() {
+						this.aborted = true;
+						this.state = 'idle';
+						this.speaking = false;
+						this.rms = 0;
+						this.chunks = [];
+						this.pending = [];
+						this.rAccum = 0;
+						this.rSum = 0;
+						this.rCount = 0;
+						try { if (this.proc) this.proc.disconnect(); } catch (_e) {}
+						try { if (this.src) this.src.disconnect(); } catch (_e) {}
+						try { if (this.gain) this.gain.disconnect(); } catch (_e) {}
+						this.proc = null; this.src = null; this.gain = null;
+						if (this.stream && this.stream.getTracks) {
+							this.stream.getTracks().forEach(function(t){ try { t.stop(); } catch (_e) {} });
+						}
+						this.stream = null;
+						if (this.ctx && this.ctx.close) {
+							try { this.ctx.close(); } catch (_e) {}
+						}
+						this.ctx = null;
+					},
+					start: function() {
+						var mgr = this;
+						mgr.stop();
+						mgr.aborted = false;
+						mgr.err = '';
+						if (!navigator || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+							mgr.state = 'error';
+							mgr.err = 'Browser does not support microphone capture (requires HTTPS).';
+							return;
+						}
+						mgr.state = 'pending';
+						navigator.mediaDevices.getUserMedia({
+							audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+						}).then(function(stream) {
+							if (mgr.aborted) {
+								if (stream && stream.getTracks) {
+									stream.getTracks().forEach(function(t){ try { t.stop(); } catch (_e) {} });
+								}
+								return;
+							}
+							var AC = window.AudioContext || window.webkitAudioContext;
+							if (!AC) {
+								mgr.state = 'error';
+								mgr.err = 'AudioContext unavailable.';
+								return;
+							}
+							var ctx = new AC();
+							if (ctx.state === 'suspended' && ctx.resume) ctx.resume();
+							mgr.stream = stream;
+							mgr.ctx = ctx;
+							mgr.src = ctx.createMediaStreamSource(stream);
+							mgr.proc = ctx.createScriptProcessor(2048, 1, 1);
+							mgr.gain = ctx.createGain();
+							mgr.gain.gain.value = 0;
+							mgr.lastEmit = performance.now();
+							mgr.proc.onaudioprocess = function(ev) {
+								if (mgr.state !== 'active') return;
+								var data = ev.inputBuffer.getChannelData(0);
+								var mixRate = Math.max(8000, ctx.sampleRate || 48000);
+								var step = 8000 / mixRate;
+								var sumSq = 0;
+								for (var i = 0; i < data.length; i++) {
+									var s = data[i];
+									if (s > 1) s = 1; else if (s < -1) s = -1;
+									sumSq += s * s;
+									mgr.rSum += s;
+									mgr.rCount += 1;
+									mgr.rAccum += step;
+									if (mgr.rAccum >= 1.0) {
+										var avg = mgr.rSum / Math.max(1, mgr.rCount);
+										var boosted = avg * 2.4;
+										var shaped = boosted / (1.0 + Math.abs(boosted) * 0.25);
+										if (shaped > 1) shaped = 1; else if (shaped < -1) shaped = -1;
+										mgr.pending.push(shaped);
+										mgr.rSum = 0;
+										mgr.rCount = 0;
+										mgr.rAccum -= 1.0;
+									}
+								}
+								var frameRms = Math.sqrt(sumSq / Math.max(1, data.length));
+								mgr.rms = frameRms;
+								var now = performance.now();
+								if (frameRms >= 0.0020) {
+									mgr.hangoverUntil = now + 550;
+									mgr.speaking = true;
+								} else {
+									mgr.speaking = now < mgr.hangoverUntil;
+								}
+								if (now - mgr.lastEmit >= 200 || mgr.pending.length >= 1600) {
+									if (mgr.pending.length > 0 && mgr.speaking) {
+										var len = Math.min(1600, mgr.pending.length);
+										var u8 = new Uint8Array(len);
+										for (var j = 0; j < len; j++) {
+											var pcm = Math.round(mgr.pending[j] * 32767.0);
+											if (pcm > 32767) pcm = 32767; else if (pcm < -32768) pcm = -32768;
+											u8[j] = linearToUlaw(pcm);
+										}
+										if (mgr.chunks.length >= 6) mgr.chunks.shift();
+										mgr.chunks.push({ d: u8ToB64(u8), rms: Math.round(mgr.rms * 1000.0) / 1000.0 });
+									}
+									mgr.pending = [];
+									mgr.lastEmit = now;
+								}
+							};
+							mgr.src.connect(mgr.proc);
+							mgr.proc.connect(mgr.gain);
+							mgr.gain.connect(ctx.destination);
+							mgr.state = 'active';
+						}).catch(function(err) {
+							if (mgr.aborted) return;
+							var n = (err && err.name) ? String(err.name) : '';
+							mgr.state = (n === 'NotAllowedError' || n === 'PermissionDeniedError') ? 'denied' : 'error';
+							mgr.err = (err && err.message) ? String(err.message) : n;
+						});
+					},
+					poll: function() {
+						var out = this.chunks.splice(0, this.chunks.length);
+						return JSON.stringify({ state: this.state, err: this.err, rms: this.rms, spk: this.speaking, chunks: out });
+					}
+				};
+			}
+			window.__lamporMic.start();
+		} catch (e) {}
+	})()""")
+
+func _stop_web_mic_capture() -> void:
+	_web_mic_pending = false
+	if _is_headless or not OS.has_feature("web"):
+		return
+	JavaScriptBridge.eval("if (window.__lamporMic) window.__lamporMic.stop();")
+
+func _poll_web_mic_capture() -> void:
+	if _is_headless or not OS.has_feature("web"):
+		return
+	var raw_var: Variant = JavaScriptBridge.eval("window.__lamporMic ? window.__lamporMic.poll() : ''")
+	if not (raw_var is String) or (raw_var as String).is_empty():
+		return
+	var parsed: Variant = JSON.parse_string(raw_var as String)
+	if not (parsed is Dictionary):
+		return
+	var data: Dictionary = parsed as Dictionary
+	var st: String = str(data.get("state", "idle"))
+	if st == "active":
+		if _web_mic_pending:
+			_web_mic_pending = false
+			mic_enabled = true
+			SignalBus.voice_mic_toggled.emit(true)
+			SignalBus.voice_mic_permission_status.emit(true, LocScript.pick("Mikrofon aktif.", "Microphone active."))
+			_emit_speaking_if_changed(true)
+		local_rms = float(data.get("rms", 0.0))
+		local_speaking = bool(data.get("spk", false))
+		var chunks_var: Variant = data.get("chunks", [])
+		if chunks_var is Array:
+			for c_var: Variant in (chunks_var as Array):
+				if c_var is Dictionary:
+					var c_dict: Dictionary = c_var as Dictionary
+					var b64: String = str(c_dict.get("d", ""))
+					if not b64.is_empty():
+						voice_chunk_ready.emit(b64, VOICE_SAMPLE_RATE, snappedf(float(c_dict.get("rms", local_rms)), 0.001))
+	elif st == "denied" or st == "error":
+		var was_active_or_pending: bool = _web_mic_pending or mic_enabled
+		_web_mic_pending = false
+		if was_active_or_pending:
+			mic_enabled = false
+			_reset_local_capture_state()
+			var err_txt: String = str(data.get("err", "")).strip_edges()
+			if st == "denied":
+				last_permission_error = LocScript.pick("Izin mikrofon browser ditolak. Izinkan mikrofon di pengaturan browser.", "Browser microphone permission denied. Allow microphone in browser settings.")
+			else:
+				last_permission_error = err_txt if not err_txt.is_empty() else LocScript.pick("Mikrofon browser tidak dapat diakses.", "Browser microphone unavailable.")
+			SignalBus.voice_mic_toggled.emit(false)
+			SignalBus.voice_mic_permission_status.emit(false, last_permission_error)
+			_emit_speaking_if_changed(true)
 
 func _on_android_permission_result(permission: String, granted: bool) -> void:
 	if permission.ends_with("RECORD_AUDIO"):
 		_awaiting_os_permission = false
 		if granted:
-			_enable_after_user_consent()
+			_android_runtime_granted = true
+			if _is_headless:
+				set_mic_enabled(true)
+			else:
+				_activate_native_capture(true)
 		else:
-			SignalBus.voice_mic_permission_status.emit(false, "Izin mikrofon Android ditolak. Aktifkan di Pengaturan Perangkat.")
+			_android_runtime_granted = false
+			last_permission_error = LocScript.pick("Izin mikrofon ditolak oleh sistem Android. Aktifkan di Pengaturan Perangkat.", "Microphone permission denied by Android. Enable it in Device Settings.")
+			set_mic_enabled(false)
+			SignalBus.voice_mic_permission_status.emit(false, last_permission_error)
 
 func set_mic_enabled(enabled: bool) -> bool:
 	if enabled == mic_enabled:
 		return mic_enabled
-	if enabled and not has_mic_permission():
-		if not SettingsManager.mic_permission_granted:
-			SignalBus.voice_mic_permission_requested.emit()
-		return false
+	if enabled and not _is_headless:
+		if OS.has_feature("web"):
+			request_mic_permission_and_enable()
+			return mic_enabled
+		if not has_os_mic_permission():
+			request_mic_permission_and_enable()
+			return mic_enabled
 	if _is_headless:
 		mic_enabled = enabled
 		if not mic_enabled:
@@ -220,14 +473,21 @@ func set_mic_enabled(enabled: bool) -> bool:
 			_capture_effect.clear_buffer()
 		if _mic_player != null and not _mic_player.playing:
 			_mic_player.play()
+		_no_frame_elapsed = 0.0
+		_tried_fallback_device = false
+		_no_frame_warned = false
 		mic_enabled = true
 	else:
 		mic_enabled = false
+		_web_mic_pending = false
 		_reset_local_capture_state()
-		if _mic_player != null and _mic_player.playing:
-			_mic_player.stop()
-		if _capture_effect != null:
-			_capture_effect.clear_buffer()
+		if OS.has_feature("web"):
+			_stop_web_mic_capture()
+		else:
+			if _mic_player != null and _mic_player.playing:
+				_mic_player.stop()
+			if _capture_effect != null:
+				_capture_effect.clear_buffer()
 
 	SignalBus.voice_mic_toggled.emit(mic_enabled)
 	_emit_speaking_if_changed(true)
@@ -394,11 +654,25 @@ func _process(delta: float) -> void:
 		_emit_speaking_if_changed(false)
 		return
 
+	if OS.has_feature("web"):
+		if _web_mic_pending or mic_enabled:
+			_web_poll_accum += delta
+			if _web_poll_accum >= 0.05:
+				_web_poll_accum = 0.0
+				_poll_web_mic_capture()
+		else:
+			local_speaking = false
+			local_rms = 0.0
+		_emit_speaking_if_changed(false)
+		return
+
 	if mic_enabled and _capture_effect != null:
 		if is_instance_valid(_mic_player) and not _mic_player.playing:
 			_mic_player.play()
 		var avail: int = _capture_effect.get_frames_available()
 		if avail > 0:
+			_no_frame_elapsed = 0.0
+			_no_frame_warned = false
 			var frames: PackedVector2Array = _capture_effect.get_buffer(avail)
 			var mix_rate: float = maxf(float(VOICE_SAMPLE_RATE), AudioServer.get_mix_rate())
 			var step: float = float(VOICE_SAMPLE_RATE) / mix_rate
@@ -426,6 +700,21 @@ func _process(delta: float) -> void:
 				_hangover_timer = maxf(0.0, _hangover_timer - delta)
 				local_speaking = _hangover_timer > 0.0
 		else:
+			_no_frame_elapsed += delta
+			if _no_frame_elapsed >= 3.0 and not _tried_fallback_device:
+				_tried_fallback_device = true
+				_no_frame_elapsed = 0.0
+				var is_and: bool = OS.get_name().to_lower() == "android"
+				var alt_dev: String = _select_best_input_device(is_and, AudioServer.input_device)
+				if not alt_dev.is_empty():
+					AudioServer.input_device = alt_dev
+					_recreate_mic_player()
+					if is_instance_valid(_mic_player):
+						_mic_player.play()
+			elif _no_frame_elapsed >= 2.5 and _tried_fallback_device and not _no_frame_warned:
+				_no_frame_warned = true
+				last_permission_error = LocScript.pick("Mikrofon tidak menerima suara. Periksa izin mikrofon di Pengaturan Perangkat/OS.", "Microphone is not receiving audio. Check microphone permission in Device/OS Settings.")
+				SignalBus.voice_mic_permission_status.emit(false, last_permission_error)
 			_hangover_timer = maxf(0.0, _hangover_timer - delta)
 			local_speaking = _hangover_timer > 0.0
 			if not local_speaking:

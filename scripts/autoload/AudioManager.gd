@@ -416,6 +416,8 @@ func _on_voice_finished() -> void:
 	_set_ambient_ducked(false)
 
 func play_voice_by_id(clip_id: String, volume_db: float = 3.5) -> bool:
+	if not SettingsManager.dialog_voice_enabled:
+		return false
 	if voice_player == null:
 		return false
 	var chosen_path: String = ""
@@ -443,6 +445,8 @@ func play_voice_by_id(clip_id: String, volume_db: float = 3.5) -> bool:
 	return true
 
 func play_voice_for_dialog_text(text_value: String, volume_db: float = 3.5) -> bool:
+	if not SettingsManager.dialog_voice_enabled:
+		return false
 	var clip_id: String = resolve_voice_clip_id_for_text(text_value)
 	if clip_id.is_empty():
 		return false

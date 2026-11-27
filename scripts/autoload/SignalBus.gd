@@ -52,6 +52,7 @@ signal friends_updated(friends: Array, directory: Array)
 signal voice_mic_toggled(enabled: bool)
 signal voice_mic_permission_status(granted: bool, message: String)
 signal voice_activity_updated(local_speaking: bool, active_speakers: Dictionary)
+signal inbox_messages_updated(messages: Array, unread_count: int)
 
 # Fate Card signals
 signal fate_card_applied(card_data: Dictionary)

@@ -133,6 +133,31 @@ func _run_checks() -> void:
 			errors.append("MainMenu guide_button did not open guide_overlay without opening settings_overlay")
 		guide_ov.visible = false
 
+	var dv_chk: CheckButton = mm.get("dialog_voice_check") as CheckButton
+	if dv_chk == null or stb == null or not stb.is_ancestor_of(dv_chk) or not dv_chk.button_pressed:
+		errors.append("MainMenu dialog_voice_check missing, outside settings_tab_box, or not enabled by default")
+	var open_kb_btn: Button = mm.get("open_keybinds_button") as Button
+	var kb_ov: Control = mm.get("keybinds_overlay") as Control
+	var kb_scr: ScrollContainer = mm.get("keybinds_scroll") as ScrollContainer
+	var kb_btns_var: Variant = mm.get("_keybind_buttons")
+	if open_kb_btn == null or stb == null or not stb.is_ancestor_of(open_kb_btn):
+		errors.append("MainMenu open_keybinds_button missing or not inside settings_tab_box")
+	elif kb_ov == null or kb_scr == null or not (kb_btns_var is Dictionary) or (kb_btns_var as Dictionary).size() != 14:
+		errors.append("MainMenu keybinds_overlay, keybinds_scroll, or 14 _keybind_buttons missing")
+	else:
+		for kb_val: Variant in (kb_btns_var as Dictionary).values():
+			var kb_btn: Control = kb_val as Control
+			if kb_btn == null or not kb_ov.is_ancestor_of(kb_btn) or (settings_ov != null and settings_ov.is_ancestor_of(kb_btn)):
+				errors.append("MainMenu keybind button must live inside keybinds_overlay and outside settings_overlay")
+				break
+		if settings_ov != null:
+			settings_ov.visible = false
+		kb_ov.visible = false
+		open_kb_btn.pressed.emit()
+		if not kb_ov.visible or (settings_ov != null and settings_ov.visible):
+			errors.append("MainMenu open_keybinds_button did not open keybinds_overlay without settings_overlay")
+		kb_ov.visible = false
+
 	var shop_scr: ScrollContainer = mm.get("shop_scroll") as ScrollContainer
 	if shop_scr == null:
 		errors.append("MainMenu shop_scroll missing")
@@ -201,6 +226,24 @@ func _run_checks() -> void:
 				errors.append("SettingsManager set_allow_friend_join_singleplayer(false) failed")
 			sm_menu.call("set_allow_friend_join_singleplayer", true)
 
+		var aud_mgr: Variant = root.get_node_or_null("AudioManager")
+		if sm_menu == null or not ("dialog_voice_enabled" in sm_menu) or not sm_menu.has_method("set_dialog_voice_enabled") or not sm_menu.has_signal("dialog_voice_changed"):
+			errors.append("SettingsManager dialog_voice_enabled property, setter, or signal missing")
+		elif not bool(sm_menu.get("dialog_voice_enabled")):
+			errors.append("SettingsManager dialog_voice_enabled must default to true")
+		elif aud_mgr == null:
+			errors.append("AudioManager missing during dialog_voice_enabled check")
+		else:
+			var orig_dv: bool = bool(sm_menu.get("dialog_voice_enabled"))
+			sm_menu.call("set_dialog_voice_enabled", false)
+			if bool(sm_menu.get("dialog_voice_enabled")) or (dv_chk != null and dv_chk.button_pressed):
+				errors.append("SettingsManager set_dialog_voice_enabled(false) did not update state or MainMenu checkbox")
+			if bool(aud_mgr.call("play_voice_by_id", "any_clip")) or bool(aud_mgr.call("play_voice_for_dialog_text", "test")):
+				errors.append("AudioManager played voice while dialog_voice_enabled was false")
+			sm_menu.call("set_dialog_voice_enabled", orig_dv)
+			if not bool(sm_menu.get("dialog_voice_enabled")) or (dv_chk != null and not dv_chk.button_pressed):
+				errors.append("SettingsManager failed to restore dialog_voice_enabled to true")
+
 		# Verify session persistence keeps optimistic logged-in state across empty storage load / offline verification
 		am.set("session_token", "persist-test-token")
 		am.set("is_logged_in", true)
@@ -246,6 +289,40 @@ func _run_checks() -> void:
 			errors.append("MainMenu friends_button pending dot or empty text check failed")
 		am.set("incoming_friend_requests", [])
 		mm.call("_refresh_friends_button_badge")
+
+		var sb_mm: Node = root.get_node_or_null("SignalBus")
+		var inb_list: VBoxContainer = mm.get("inbox_list") as VBoxContainer
+		if sb_mm == null or inb_list == null or not am.has_method("fetch_inbox_messages") or not am.has_method("mark_inbox_messages_read"):
+			errors.append("MainMenu inbox_list, SignalBus, or inbox fetch/read methods missing")
+		else:
+			am.set("inbox_messages", [
+				{"id": "m1", "scope": "global", "title": "Info Server", "bodyMarkdown": "# Halo\nPesan **penting** ke semua\n- Butir satu", "senderUsername": "admin_lampor", "isRead": false, "createdAt": "2026-11-27T05:00:00Z"},
+				{"id": "m2", "scope": "user", "targetUsername": "PemainTes", "title": "Pesan Pribadi", "bodyMarkdown": "Halo *khusus* kamu!", "senderUsername": "admin_lampor", "isRead": false, "createdAt": "2026-11-27T05:01:00Z"}
+			])
+			am.set("unread_inbox_count", 2)
+			sb_mm.emit_signal("inbox_messages_updated", am.get("inbox_messages"), 2)
+			mm.call("_render_inbox_modal")
+			if not bool(mm.get("_inbox_has_unread_dot")):
+				errors.append("MainMenu _inbox_has_unread_dot did not become true when unread_inbox_count=2")
+			var rtl_nodes: Array[Node] = inb_list.find_children("*", "RichTextLabel", true, false)
+			var found_penting: bool = false
+			var found_khusus: bool = false
+			for rtl_var: Node in rtl_nodes:
+				var rtl_ctrl: RichTextLabel = rtl_var as RichTextLabel
+				if rtl_ctrl == null:
+					continue
+				var parsed_txt: String = rtl_ctrl.get_parsed_text()
+				if parsed_txt.contains("penting"):
+					found_penting = true
+				if parsed_txt.contains("khusus"):
+					found_khusus = true
+			if not found_penting or not found_khusus:
+				errors.append("MainMenu inbox_list RichTextLabel missing expected markdown text (penting=%s, khusus=%s)" % [str(found_penting), str(found_khusus)])
+			am.set("inbox_messages", [])
+			am.set("unread_inbox_count", 0)
+			mm.call("_refresh_friends_button_badge")
+			mm.call("_render_inbox_modal")
+			await process_frame
 
 	var fix_file_text: String = FileAccess.get_file_as_string("res://FIX_NOTES.md")
 	if fix_file_text.is_empty() or fix_file_text.to_lower().contains("admin") or fix_file_text.to_lower().contains("alt+f2"):
@@ -552,6 +629,44 @@ func _run_checks() -> void:
 					errors.append("VoiceChatSystem _on_android_permission_result(false) did not disable mic or record error")
 			mp.call("reset_to_singleplayer")
 			gm.set("current_state", 0)
+
+		var p_dv_chk: CheckButton = hud_node.get("pause_dialog_voice_check") as CheckButton
+		var p_open_kb: Button = hud_node.get("pause_open_keybinds_button") as Button
+		var p_settings_cont: Control = hud_node.get("pause_settings_container") as Control
+		var p_kb_cont: PanelContainer = hud_node.get("pause_keybinds_container") as PanelContainer
+		var p_kb_btns_var: Variant = hud_node.get("_pause_keybind_buttons")
+		if p_dv_chk == null or not p_dv_chk.button_pressed:
+			errors.append("HUD pause_dialog_voice_check missing or not enabled by default")
+		elif sm != null:
+			sm.call("set_dialog_voice_enabled", false)
+			if p_dv_chk.button_pressed:
+				errors.append("HUD pause_dialog_voice_check did not sync when dialog_voice_enabled=false")
+			sm.call("set_dialog_voice_enabled", true)
+			if not p_dv_chk.button_pressed:
+				errors.append("HUD pause_dialog_voice_check did not sync back when dialog_voice_enabled=true")
+		if p_settings_cont == null or p_open_kb == null or not p_settings_cont.is_ancestor_of(p_open_kb):
+			errors.append("HUD pause_open_keybinds_button missing or not inside pause_settings_container")
+		elif p_kb_cont == null or p_settings_cont.is_ancestor_of(p_kb_cont) or not (p_kb_btns_var is Dictionary) or (p_kb_btns_var as Dictionary).size() != 14:
+			errors.append("HUD pause_keybinds_container invalid, nested inside pause_settings_container, or missing 14 _pause_keybind_buttons")
+		else:
+			for pkb_val: Variant in (p_kb_btns_var as Dictionary).values():
+				var pkb_btn: Control = pkb_val as Control
+				if pkb_btn == null or not p_kb_cont.is_ancestor_of(pkb_btn):
+					errors.append("HUD _pause_keybind_buttons entry not inside pause_keybinds_container")
+					break
+			hud_node.call("_open_pause_keybinds")
+			if not p_kb_cont.visible or p_settings_cont.visible:
+				errors.append("HUD _open_pause_keybinds did not show pause_keybinds_container and hide pause_settings_container")
+			hud_node.call("_close_pause_keybinds_to_settings")
+			if p_kb_cont.visible or not p_settings_cont.visible:
+				errors.append("HUD _close_pause_keybinds_to_settings did not return to pause_settings_container")
+			hud_node.call("_pause_settings_container_hide")
+			if p_kb_cont.visible or p_settings_cont.visible:
+				errors.append("HUD _pause_settings_container_hide did not hide both pause settings and keybinds containers")
+			var pm_node: Node = hud_node.get("pause_menu") as Node
+			var pm_center: Control = pm_node.get_node_or_null("Center") as Control if pm_node != null else null
+			if pm_center != null:
+				pm_center.visible = true
 
 		var ho: CanvasItem = hud_node.get("post_process_rect") as CanvasItem
 		if ho != null and ho.visible:

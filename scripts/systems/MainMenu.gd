@@ -60,6 +60,7 @@ var redeem_input: LineEdit
 var redeem_button: Button
 var redeem_result_label: Label
 var auto_update_check: CheckButton
+var dialog_voice_check: CheckButton
 var friend_join_sp_check: CheckButton
 var update_button: Button
 var update_check_button: Button
@@ -112,6 +113,10 @@ var start_button: Button
 var guide_rich_text: RichTextLabel
 var _listening_keybind_action: String = ""
 var _keybind_buttons: Dictionary = {}
+var keybinds_overlay: ColorRect
+var keybinds_panel: PanelContainer
+var keybinds_scroll: ScrollContainer
+var open_keybinds_button: Button
 
 # Akun LAMPOR & Gerbang Masuk (Force Login / Guest)
 var account_overlay: ColorRect
@@ -289,9 +294,13 @@ func _ready() -> void:
 		SettingsManager.keybinds_changed.connect(_on_settings_keybinds_changed)
 	if SettingsManager.has_signal("character_model_changed"):
 		SettingsManager.character_model_changed.connect(_on_settings_character_model_changed)
+	if SettingsManager.has_signal("dialog_voice_changed"):
+		SettingsManager.dialog_voice_changed.connect(_on_settings_dialog_voice_changed)
 	SignalBus.account_state_changed.connect(_on_account_state_changed)
 	SignalBus.coins_changed.connect(_on_coins_changed)
 	SignalBus.friends_updated.connect(_on_friends_updated)
+	if SignalBus.has_signal("inbox_messages_updated"):
+		SignalBus.inbox_messages_updated.connect(_on_inbox_messages_updated)
 	SignalBus.multiplayer_rooms_updated.connect(_on_multiplayer_rooms_updated)
 	SignalBus.multiplayer_room_updated.connect(_on_multiplayer_room_updated)
 	SignalBus.multiplayer_game_started.connect(_on_multiplayer_game_started)
@@ -311,9 +320,20 @@ func _ready() -> void:
 		_refresh_account_ui()
 		if am != null and am.can_access_online_modes():
 			call_deferred("_verify_saved_session_background")
+	if DisplayServer.get_name() != "headless" and am != null and am.has_method("fetch_inbox_messages"):
+		am.call_deferred("fetch_inbox_messages")
 	var mp_ready: Variant = _mp()
 	if mp_ready != null and bool(mp_ready.get("is_online_session")) and bool(mp_ready.get("is_friend_joinable_singleplayer")):
 		mp_ready.call("leave_room")
+
+func _on_settings_dialog_voice_changed(enabled: bool) -> void:
+	if is_instance_valid(dialog_voice_check):
+		dialog_voice_check.set_pressed_no_signal(enabled)
+
+func _on_inbox_messages_updated(_msgs: Array, _unread: int) -> void:
+	_refresh_friends_button_badge()
+	if inbox_overlay and inbox_overlay.visible:
+		_render_inbox_modal()
 
 func _on_coins_changed(_new_coins: int) -> void:
 	_refresh_currency_display()
@@ -545,6 +565,7 @@ func _build_menu() -> void:
 	_build_mode_select_modal()
 	_build_difficulty_modal()
 	_build_settings_modal()
+	_build_keybinds_modal()
 	_build_guide_modal()
 	_build_shop_modal()
 	_build_credits_modal()
@@ -1009,41 +1030,14 @@ func _build_settings_modal() -> void:
 
 	var keybinds_actions: Array = _sm_rebindable_actions()
 	if not keybinds_actions.is_empty():
-		var keybinds_title := _make_label(LocScript.pick("PENGATURAN TOMBOL (KEYBINDS)", "KEYBINDINGS"), 13, HorrorTheme.PRIMARY, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
-		settings_tab_box.add_child(keybinds_title)
-		var keybinds_hint := _make_label(
-			LocScript.pick("Klik tombol untuk mengganti tombol kontrol (Esc untuk batal).", "Click a binding to assign a new key or mouse button (Esc to cancel)."),
-			11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm"
-		)
-		keybinds_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		settings_tab_box.add_child(keybinds_hint)
-
-		_keybind_buttons.clear()
-		for action_var: Variant in keybinds_actions:
-			var action: String = str(action_var)
-			var k_row := HBoxContainer.new()
-			k_row.mouse_filter = Control.MOUSE_FILTER_PASS
-			k_row.add_theme_constant_override("separation", 8)
-			var k_lbl := _make_label(LocScript.action_label(action), 12, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "body-md")
-			k_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			k_row.add_child(k_lbl)
-			var k_btn := _make_button(_sm_get_action_key_text(action), false, "secondary")
-			k_btn.custom_minimum_size = Vector2(118.0, 36.0)
-			k_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
-			k_btn.pressed.connect(func() -> void: _begin_keybind_listen(action))
-			k_row.add_child(k_btn)
-			settings_tab_box.add_child(k_row)
-			_keybind_buttons[action] = k_btn
-
-		var reset_kb_btn := _make_button(LocScript.pick("RESET TOMBOL BAWAAN", "RESET DEFAULT KEYBINDS"), false, "ghost")
-		reset_kb_btn.pressed.connect(func() -> void:
-			_cancel_keybind_listening()
-			if SettingsManager.has_method("reset_keybinds"):
-				SettingsManager.reset_keybinds()
+		open_keybinds_button = _make_button(LocScript.pick("ATUR KEYBINDS", "CONFIGURE KEYBINDS"), false, "secondary")
+		open_keybinds_button.pressed.connect(func() -> void:
+			if keybinds_scroll:
+				keybinds_scroll.scroll_vertical = 0
 			_refresh_keybind_buttons()
+			_open_modal(keybinds_overlay, keybinds_panel)
 		)
-		settings_tab_box.add_child(reset_kb_btn)
-
+		settings_tab_box.add_child(open_keybinds_button)
 		settings_tab_box.add_child(HorrorTheme.make_hairline_divider())
 
 	auto_update_check = CheckButton.new()
@@ -1053,6 +1047,17 @@ func _build_settings_modal() -> void:
 	auto_update_check.toggled.connect(SettingsManager.set_auto_update)
 	HorrorTheme.style_check_button(auto_update_check)
 	settings_tab_box.add_child(auto_update_check)
+
+	dialog_voice_check = CheckButton.new()
+	dialog_voice_check.text = LocScript.pick("Suara Dialog Karakter", "Character Dialog Voice")
+	dialog_voice_check.custom_minimum_size.y = 42.0
+	dialog_voice_check.button_pressed = bool(SettingsManager.get("dialog_voice_enabled")) if "dialog_voice_enabled" in SettingsManager else true
+	dialog_voice_check.toggled.connect(func(pressed: bool) -> void:
+		if SettingsManager.has_method("set_dialog_voice_enabled"):
+			SettingsManager.call("set_dialog_voice_enabled", pressed)
+	)
+	HorrorTheme.style_check_button(dialog_voice_check)
+	settings_tab_box.add_child(dialog_voice_check)
 
 	friend_join_sp_check = CheckButton.new()
 	friend_join_sp_check.text = LocScript.pick("Izinkan Teman Gabung Singleplayer", "Allow Friends to Join Singleplayer")
@@ -1103,6 +1108,72 @@ func _build_settings_modal() -> void:
 	)
 	redeem_result_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	settings_tab_box.add_child(redeem_result_label)
+
+func _build_keybinds_modal() -> void:
+	var modal: Dictionary = _create_modal(LocScript.pick("ATUR KEYBINDS", "CONFIGURE KEYBINDS"))
+	keybinds_overlay = modal["overlay"] as ColorRect
+	keybinds_panel = modal["panel"] as PanelContainer
+	var kb_close_btn: Button = modal.get("close_button") as Button
+	if is_instance_valid(kb_close_btn):
+		for c: Dictionary in kb_close_btn.pressed.get_connections():
+			kb_close_btn.pressed.disconnect(c["callable"])
+		kb_close_btn.pressed.connect(func() -> void:
+			_cancel_keybind_listening()
+			keybinds_overlay.visible = false
+		)
+	var body: VBoxContainer = modal["body"] as VBoxContainer
+
+	var keybinds_hint := _make_label(
+		LocScript.pick("Klik tombol untuk mengganti tombol kontrol (Esc untuk batal).", "Click a binding to assign a new key or mouse button (Esc to cancel)."),
+		11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm"
+	)
+	keybinds_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.add_child(keybinds_hint)
+
+	keybinds_scroll = ScrollContainer.new()
+	keybinds_scroll.custom_minimum_size = Vector2(0, 290)
+	keybinds_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	keybinds_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	HorrorTheme.style_scroll_container(keybinds_scroll)
+	body.add_child(keybinds_scroll)
+
+	var kb_margin := MarginContainer.new()
+	kb_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	kb_margin.mouse_filter = Control.MOUSE_FILTER_PASS
+	kb_margin.add_theme_constant_override("margin_right", 10)
+	keybinds_scroll.add_child(kb_margin)
+
+	var kb_box := VBoxContainer.new()
+	kb_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	kb_box.mouse_filter = Control.MOUSE_FILTER_PASS
+	kb_box.add_theme_constant_override("separation", 10)
+	kb_margin.add_child(kb_box)
+
+	_keybind_buttons.clear()
+	for action_var: Variant in _sm_rebindable_actions():
+		var action: String = str(action_var)
+		var k_row := HBoxContainer.new()
+		k_row.mouse_filter = Control.MOUSE_FILTER_PASS
+		k_row.add_theme_constant_override("separation", 8)
+		var k_lbl := _make_label(LocScript.action_label(action), 12, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "body-md")
+		k_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		k_row.add_child(k_lbl)
+		var k_btn := _make_button(_sm_get_action_key_text(action), false, "secondary")
+		k_btn.custom_minimum_size = Vector2(118.0, 36.0)
+		k_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
+		k_btn.pressed.connect(func() -> void: _begin_keybind_listen(action))
+		k_row.add_child(k_btn)
+		kb_box.add_child(k_row)
+		_keybind_buttons[action] = k_btn
+
+	var reset_kb_btn := _make_button(LocScript.pick("RESET TOMBOL BAWAAN", "RESET DEFAULT KEYBINDS"), false, "ghost")
+	reset_kb_btn.pressed.connect(func() -> void:
+		_cancel_keybind_listening()
+		if SettingsManager.has_method("reset_keybinds"):
+			SettingsManager.reset_keybinds()
+		_refresh_keybind_buttons()
+	)
+	kb_box.add_child(reset_kb_btn)
 
 func _build_guide_modal() -> void:
 	var modal: Dictionary = _create_modal(LocScript.pick("PANDUAN BERMAIN", "HOW TO PLAY"))
@@ -1823,6 +1894,8 @@ func _get_active_scroll_container() -> ScrollContainer:
 		return fix_notes_scroll
 	if top_ov == settings_overlay and settings_scroll:
 		return settings_scroll
+	if top_ov == keybinds_overlay and keybinds_scroll:
+		return keybinds_scroll
 	if top_ov == guide_overlay and guide_scroll:
 		return guide_scroll
 	if top_ov == shop_overlay and shop_scroll:
@@ -2535,6 +2608,8 @@ func _apply_layout() -> void:
 			panel.custom_minimum_size = Vector2(maxf(280.0, minf(500.0, view_size.x - 28.0)), panel.custom_minimum_size.y)
 	if settings_scroll:
 		settings_scroll.custom_minimum_size.y = maxf(130.0, minf(310.0, view_size.y - 250.0))
+	if keybinds_scroll:
+		keybinds_scroll.custom_minimum_size.y = maxf(130.0, minf(310.0, view_size.y - 250.0))
 	if guide_scroll:
 		guide_scroll.custom_minimum_size.y = maxf(130.0, minf(330.0, view_size.y - 230.0))
 	if shop_scroll:
@@ -5075,7 +5150,8 @@ func _refresh_friends_button_badge() -> void:
 	var mp: Variant = _mp()
 	var ann_text: String = str(mp.get("server_announcement")).strip_edges() if (mp != null and "server_announcement" in mp) else ""
 	var has_update_notice: bool = is_instance_valid(update_button) and update_button.visible
-	_inbox_has_unread_dot = _friends_has_pending_dot or (not ann_text.is_empty()) or has_update_notice
+	var unread_admin_msgs: int = maxi(0, int(am.get("unread_inbox_count"))) if (am != null and "unread_inbox_count" in am) else 0
+	_inbox_has_unread_dot = _friends_has_pending_dot or (not ann_text.is_empty()) or has_update_notice or (unread_admin_msgs > 0)
 	if is_instance_valid(inbox_button):
 		inbox_button.text = ""
 	if is_instance_valid(_friends_icon_ctrl):
@@ -5114,6 +5190,24 @@ func _open_inbox_modal() -> void:
 	_open_modal(inbox_overlay, inbox_panel)
 	if inbox_scroll:
 		inbox_scroll.scroll_vertical = 0
+	var am: Variant = _am()
+	if am != null and am.has_method("fetch_inbox_messages"):
+		await am.call("fetch_inbox_messages")
+		if not is_instance_valid(self) or not is_inside_tree():
+			return
+		if inbox_overlay and inbox_overlay.visible:
+			_render_inbox_modal()
+		if am.can_access_online_modes() and "unread_inbox_count" in am and int(am.get("unread_inbox_count")) > 0 and am.has_method("mark_inbox_messages_read"):
+			am.call("mark_inbox_messages_read")
+
+func _format_inbox_timestamp(raw_ts: String) -> String:
+	var cleaned: String = raw_ts.strip_edges()
+	if cleaned.is_empty():
+		return ""
+	var t_idx: int = cleaned.find("T")
+	if t_idx > 0 and cleaned.length() >= t_idx + 6:
+		return cleaned.substr(0, t_idx) + " " + cleaned.substr(t_idx + 1, 5)
+	return cleaned
 
 func _render_inbox_modal() -> void:
 	if not is_instance_valid(inbox_list):
@@ -5225,6 +5319,85 @@ func _render_inbox_modal() -> void:
 			_open_friends_modal()
 		)
 		req_col.add_child(open_friends_btn)
+
+	var admin_msgs: Array = am.get("inbox_messages") if (am != null and "inbox_messages" in am and am.get("inbox_messages") is Array) else []
+	if not admin_msgs.is_empty():
+		_ensure_markdown_regexes()
+	for msg_var: Variant in admin_msgs:
+		if not (msg_var is Dictionary):
+			continue
+		var msg: Dictionary = msg_var as Dictionary
+		var scope: String = str(msg.get("scope", "global")).strip_edges().to_lower()
+		var title_str: String = str(msg.get("title", "")).strip_edges()
+		var body_md: String = str(msg.get("bodyMarkdown", msg.get("body_markdown", ""))).strip_edges()
+		var sender_str: String = str(msg.get("senderUsername", msg.get("sender_username", ""))).strip_edges()
+		var created_str: String = _format_inbox_timestamp(str(msg.get("createdAt", msg.get("created_at", ""))))
+		var is_read: bool = bool(msg.get("isRead", msg.get("is_read", false)))
+		var is_unread: bool = logged_in and not is_read
+		var is_direct: bool = (scope == "user")
+		has_items = true
+
+		var border_col: Color = HorrorTheme.ACCENT if is_unread else (HorrorTheme.RELIC_BRASS if is_direct else HorrorTheme.BORDER_SUBTLE)
+		var msg_card := PanelContainer.new()
+		msg_card.mouse_filter = Control.MOUSE_FILTER_PASS
+		msg_card.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOW, border_col, 2, 12, 10))
+		inbox_list.add_child(msg_card)
+
+		var msg_col := VBoxContainer.new()
+		msg_col.add_theme_constant_override("separation", 6)
+		msg_col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		msg_card.add_child(msg_col)
+
+		var hdr_row := HBoxContainer.new()
+		hdr_row.add_theme_constant_override("separation", 8)
+		hdr_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		msg_col.add_child(hdr_row)
+
+		var scope_tag: String = LocScript.pick("[PESAN KHUSUS]", "[DIRECT]") if is_direct else "[GLOBAL]"
+		if is_unread:
+			scope_tag += LocScript.pick(" · BARU", " · NEW")
+		var hdr_col: Color = HorrorTheme.ACCENT if is_unread else (HorrorTheme.RELIC_BRASS if is_direct else HorrorTheme.PRIMARY)
+		var scope_lbl := _make_label(scope_tag, 11, hdr_col, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
+		scope_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		scope_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hdr_row.add_child(scope_lbl)
+
+		var meta_parts := PackedStringArray()
+		if not sender_str.is_empty():
+			meta_parts.append(sender_str)
+		if not created_str.is_empty():
+			meta_parts.append(created_str)
+		if not meta_parts.is_empty():
+			var meta_lbl := _make_label(" · ".join(meta_parts), 10, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_RIGHT, "mono-sm")
+			meta_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			hdr_row.add_child(meta_lbl)
+
+		if not title_str.is_empty():
+			var title_lbl := _make_label(title_str, 14, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "title-md")
+			title_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			title_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			msg_col.add_child(title_lbl)
+
+		if not body_md.is_empty():
+			var body_rtl := RichTextLabel.new()
+			body_rtl.bbcode_enabled = true
+			body_rtl.fit_content = true
+			body_rtl.scroll_active = false
+			body_rtl.selection_enabled = false
+			body_rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			body_rtl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			body_rtl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			body_rtl.add_theme_font_override("normal_font", HorrorTheme.get_body_font())
+			body_rtl.add_theme_font_override("bold_font", HorrorTheme.get_serif_font(1, true))
+			body_rtl.add_theme_font_override("mono_font", HorrorTheme.get_mono_font())
+			body_rtl.add_theme_color_override("default_color", HorrorTheme.ON_SURFACE)
+			body_rtl.add_theme_font_size_override("normal_font_size", 14)
+			body_rtl.add_theme_font_size_override("bold_font_size", 14)
+			body_rtl.add_theme_font_size_override("italics_font_size", 14)
+			body_rtl.add_theme_font_size_override("mono_font_size", 12)
+			body_rtl.add_theme_constant_override("line_separation", 6)
+			body_rtl.parse_bbcode(_markdown_to_bbcode(body_md))
+			msg_col.add_child(body_rtl)
 
 	if not has_items:
 		var empty_card := PanelContainer.new()

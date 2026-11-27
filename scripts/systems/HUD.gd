@@ -123,6 +123,15 @@ var pause_online_note_label: Label = null
 var low_fear_tint: ColorRect = null
 var _pause_settings_box: VBoxContainer = null
 var _pause_language_option: OptionButton = null
+var pause_dialog_voice_check: CheckButton = null
+var pause_open_keybinds_button: Button = null
+var pause_keybinds_container: PanelContainer = null
+var pause_keybinds_scroll: ScrollContainer = null
+var _pause_keybinds_box: VBoxContainer = null
+var _pause_keybinds_title_lbl: Label = null
+var _pause_keybinds_hint_lbl: Label = null
+var _pause_keybinds_reset_btn: Button = null
+var _pause_keybinds_back_btn: Button = null
 var _pause_listening_keybind_action: String = ""
 var _pause_keybind_buttons: Dictionary = {}
 var _exit_confirm_title: Label = null
@@ -191,6 +200,8 @@ func _ready() -> void:
 		)
 	SettingsManager.keybinds_changed.connect(_on_settings_keybinds_changed)
 	SettingsManager.language_changed.connect(_on_language_changed)
+	if SettingsManager.has_signal("dialog_voice_changed"):
+		SettingsManager.dialog_voice_changed.connect(_on_dialog_voice_changed)
 
 	interaction_label.text = ""
 	stare_warning.visible = false
@@ -660,6 +671,15 @@ func _unhandled_input(event: InputEvent) -> void:
 				Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 			else:
 				Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _is_touch_device() else Input.MOUSE_MODE_CAPTURED
+		elif pause_keybinds_container and pause_keybinds_container.visible:
+			_cancel_pause_keybind_listening()
+			pause_keybinds_container.visible = false
+			if pause_settings_container:
+				pause_settings_container.visible = true
+				pause_settings_container.move_to_front()
+				_layout_pause_settings_panel()
+			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+			return
 		elif pause_settings_container and pause_settings_container.visible:
 			_pause_settings_container_hide()
 			pause_menu.get_node("Center").visible = true
@@ -727,6 +747,8 @@ func toggle_pause() -> void:
 	else:
 		if pause_settings_container:
 			pause_settings_container.visible = false
+		if pause_keybinds_container:
+			pause_keybinds_container.visible = false
 		pause_menu.get_node("Center").visible = true
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if _is_touch_device() else Input.MOUSE_MODE_CAPTURED
 
@@ -843,12 +865,148 @@ func _build_pause_settings_panel() -> void:
 	pause_settings_scroll.add_child(box)
 	_pause_settings_box = box
 	_populate_pause_settings_box()
+	_build_pause_keybinds_container()
+
+func _build_pause_keybinds_container() -> void:
+	if is_instance_valid(pause_keybinds_container):
+		pause_keybinds_container.queue_free()
+	pause_keybinds_container = PanelContainer.new()
+	pause_keybinds_container.name = "PauseKeybindsContainer"
+	pause_keybinds_container.visible = false
+	pause_keybinds_container.z_index = 1000
+	pause_keybinds_container.z_as_relative = false
+	pause_keybinds_container.mouse_filter = Control.MOUSE_FILTER_STOP
+	pause_keybinds_container.custom_minimum_size = Vector2(460.0, 0.0)
+	pause_keybinds_container.add_theme_stylebox_override("panel", HorrorTheme.make_minimal_panel_style(Color(0.086, 0.045, 0.043, 0.96), HorrorTheme.BORDER_INTERACTIVE, 2, 0, 0))
+	var parent_node: Node = pause_menu if pause_menu else self
+	parent_node.add_child(pause_keybinds_container)
+	pause_keybinds_container.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	pause_keybinds_container.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	pause_keybinds_container.grow_vertical = Control.GROW_DIRECTION_BOTH
+
+	var margin := MarginContainer.new()
+	for side in ["left", "right"]:
+		margin.add_theme_constant_override("margin_" + side, 22)
+	for side in ["top", "bottom"]:
+		margin.add_theme_constant_override("margin_" + side, 20)
+	pause_keybinds_container.add_child(margin)
+
+	var outer := VBoxContainer.new()
+	outer.add_theme_constant_override("separation", 10)
+	outer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	margin.add_child(outer)
+
+	_pause_keybinds_title_lbl = Label.new()
+	_pause_keybinds_title_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	HorrorTheme.style_label(_pause_keybinds_title_lbl, "headline-md", HorrorTheme.ON_SURFACE, 19)
+	outer.add_child(_pause_keybinds_title_lbl)
+	outer.add_child(HorrorTheme.make_hairline_divider())
+
+	_pause_keybinds_hint_lbl = Label.new()
+	_pause_keybinds_hint_lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	HorrorTheme.style_label(_pause_keybinds_hint_lbl, "label-sm", HorrorTheme.TEXT_MUTED, 11)
+	outer.add_child(_pause_keybinds_hint_lbl)
+
+	pause_keybinds_scroll = ScrollContainer.new()
+	pause_keybinds_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	pause_keybinds_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pause_keybinds_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	HorrorTheme.style_scroll_container(pause_keybinds_scroll)
+	outer.add_child(pause_keybinds_scroll)
+
+	var kb_margin := MarginContainer.new()
+	kb_margin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	kb_margin.mouse_filter = Control.MOUSE_FILTER_PASS
+	kb_margin.add_theme_constant_override("margin_right", 8)
+	pause_keybinds_scroll.add_child(kb_margin)
+
+	_pause_keybinds_box = VBoxContainer.new()
+	_pause_keybinds_box.add_theme_constant_override("separation", 8)
+	_pause_keybinds_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	kb_margin.add_child(_pause_keybinds_box)
+
+	_pause_keybinds_reset_btn = Button.new()
+	_pause_keybinds_reset_btn.custom_minimum_size.y = 38.0
+	HorrorTheme.style_button(_pause_keybinds_reset_btn, "ghost", 11, true)
+	_pause_keybinds_reset_btn.pressed.connect(func() -> void:
+		_cancel_pause_keybind_listening()
+		if SettingsManager.has_method("reset_keybinds"):
+			SettingsManager.reset_keybinds()
+		_refresh_pause_keybind_buttons()
+	)
+	outer.add_child(_pause_keybinds_reset_btn)
+
+	_pause_keybinds_back_btn = Button.new()
+	_pause_keybinds_back_btn.custom_minimum_size.y = 44.0
+	HorrorTheme.style_button(_pause_keybinds_back_btn, "primary", 13, true)
+	_pause_keybinds_back_btn.pressed.connect(_close_pause_keybinds_to_settings)
+	outer.add_child(_pause_keybinds_back_btn)
+
+	_populate_pause_keybinds_box()
+
+func _populate_pause_keybinds_box() -> void:
+	if not is_instance_valid(_pause_keybinds_box):
+		return
+	_pause_listening_keybind_action = ""
+	_pause_keybind_buttons.clear()
+	for child: Node in _pause_keybinds_box.get_children():
+		_pause_keybinds_box.remove_child(child)
+		child.queue_free()
+	if is_instance_valid(_pause_keybinds_title_lbl):
+		_pause_keybinds_title_lbl.text = LocScript.pick("ATUR KEYBINDS", "CONFIGURE KEYBINDS")
+	if is_instance_valid(_pause_keybinds_hint_lbl):
+		_pause_keybinds_hint_lbl.text = LocScript.pick(
+			"Klik tombol untuk mengganti tombol kontrol (Esc untuk batal).",
+			"Click a binding to assign a new key or mouse button (Esc to cancel)."
+		)
+	if is_instance_valid(_pause_keybinds_reset_btn):
+		_pause_keybinds_reset_btn.text = LocScript.pick("RESET TOMBOL BAWAAN", "RESET DEFAULT KEYBINDS")
+	if is_instance_valid(_pause_keybinds_back_btn):
+		_pause_keybinds_back_btn.text = LocScript.pick("KEMBALI KE PENGATURAN", "BACK TO SETTINGS")
+
+	var pause_actions: Array = SettingsManager.get("REBINDABLE_ACTIONS") if "REBINDABLE_ACTIONS" in SettingsManager else []
+	for action: String in pause_actions:
+		var k_row := HBoxContainer.new()
+		k_row.add_theme_constant_override("separation", 8)
+		var k_lbl := Label.new()
+		k_lbl.text = LocScript.action_label(action)
+		k_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		HorrorTheme.style_label(k_lbl, "label-sm", HorrorTheme.ON_SURFACE, 12)
+		k_row.add_child(k_lbl)
+		var k_btn := Button.new()
+		k_btn.text = SettingsManager.get_action_key_text(action) if SettingsManager.has_method("get_action_key_text") else action.to_upper()
+		k_btn.custom_minimum_size = Vector2(108.0, 34.0)
+		HorrorTheme.style_button(k_btn, "secondary", 11, true)
+		k_btn.pressed.connect(func() -> void: _begin_pause_keybind_listen(action))
+		k_row.add_child(k_btn)
+		_pause_keybinds_box.add_child(k_row)
+		_pause_keybind_buttons[action] = k_btn
+
+func _open_pause_keybinds() -> void:
+	_cancel_pause_keybind_listening()
+	_refresh_pause_keybind_buttons()
+	if pause_settings_container:
+		pause_settings_container.visible = false
+	if pause_keybinds_container:
+		if pause_keybinds_scroll:
+			pause_keybinds_scroll.scroll_vertical = 0
+		pause_keybinds_container.visible = true
+		pause_keybinds_container.move_to_front()
+		pause_keybinds_container.z_index = 1000
+		_layout_pause_settings_panel()
+		HorrorTheme.animate_surface_enter(pause_keybinds_container)
+		if is_instance_valid(_pause_keybinds_back_btn):
+			_pause_keybinds_back_btn.call_deferred("grab_focus")
+
+func _close_pause_keybinds_to_settings() -> void:
+	_cancel_pause_keybind_listening()
+	if pause_keybinds_container:
+		pause_keybinds_container.visible = false
+	_open_pause_settings()
 
 func _populate_pause_settings_box() -> void:
 	if not is_instance_valid(_pause_settings_box):
 		return
-	_pause_listening_keybind_action = ""
-	_pause_keybind_buttons.clear()
 	for child: Node in _pause_settings_box.get_children():
 		_pause_settings_box.remove_child(child)
 		child.queue_free()
@@ -908,6 +1066,17 @@ func _populate_pause_settings_box() -> void:
 	HorrorTheme.style_check_button(auto_update)
 	box.add_child(auto_update)
 
+	pause_dialog_voice_check = CheckButton.new()
+	pause_dialog_voice_check.text = LocScript.pick("Suara Dialog Karakter", "Character Dialog Voice")
+	pause_dialog_voice_check.custom_minimum_size.y = 44.0
+	pause_dialog_voice_check.button_pressed = bool(SettingsManager.get("dialog_voice_enabled")) if "dialog_voice_enabled" in SettingsManager else true
+	pause_dialog_voice_check.toggled.connect(func(pressed: bool) -> void:
+		if SettingsManager.has_method("set_dialog_voice_enabled"):
+			SettingsManager.call("set_dialog_voice_enabled", pressed)
+	)
+	HorrorTheme.style_check_button(pause_dialog_voice_check)
+	box.add_child(pause_dialog_voice_check)
+
 	var sp_friend_chk := CheckButton.new()
 	sp_friend_chk.text = LocScript.pick("Izinkan teman gabung Singleplayer", "Allow friends to join Singleplayer")
 	sp_friend_chk.custom_minimum_size.y = 44.0
@@ -930,37 +1099,12 @@ func _populate_pause_settings_box() -> void:
 	var pause_actions: Array = SettingsManager.get("REBINDABLE_ACTIONS") if "REBINDABLE_ACTIONS" in SettingsManager else []
 	if not pause_actions.is_empty():
 		box.add_child(HorrorTheme.make_hairline_divider())
-		var kb_title := Label.new()
-		kb_title.text = LocScript.pick("KEYBINDS (KLIK UNTUK UBAH)", "KEYBINDINGS (CLICK TO REBIND)")
-		HorrorTheme.style_label(kb_title, "label-sm", HorrorTheme.PRIMARY, 12)
-		box.add_child(kb_title)
-		for action: String in pause_actions:
-			var k_row := HBoxContainer.new()
-			k_row.add_theme_constant_override("separation", 8)
-			var k_lbl := Label.new()
-			k_lbl.text = LocScript.action_label(action)
-			k_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			HorrorTheme.style_label(k_lbl, "label-sm", HorrorTheme.ON_SURFACE, 12)
-			k_row.add_child(k_lbl)
-			var k_btn := Button.new()
-			k_btn.text = SettingsManager.get_action_key_text(action) if SettingsManager.has_method("get_action_key_text") else action.to_upper()
-			k_btn.custom_minimum_size = Vector2(108.0, 34.0)
-			HorrorTheme.style_button(k_btn, "secondary", 11, true)
-			k_btn.pressed.connect(func() -> void: _begin_pause_keybind_listen(action))
-			k_row.add_child(k_btn)
-			box.add_child(k_row)
-			_pause_keybind_buttons[action] = k_btn
-		var kb_reset := Button.new()
-		kb_reset.text = LocScript.pick("RESET TOMBOL BAWAAN", "RESET DEFAULT KEYBINDS")
-		kb_reset.custom_minimum_size.y = 38.0
-		HorrorTheme.style_button(kb_reset, "ghost", 11, true)
-		kb_reset.pressed.connect(func() -> void:
-			_cancel_pause_keybind_listening()
-			if SettingsManager.has_method("reset_keybinds"):
-				SettingsManager.reset_keybinds()
-			_refresh_pause_keybind_buttons()
-		)
-		box.add_child(kb_reset)
+		pause_open_keybinds_button = Button.new()
+		pause_open_keybinds_button.text = LocScript.pick("ATUR KEYBINDS", "CONFIGURE KEYBINDS")
+		pause_open_keybinds_button.custom_minimum_size.y = 44.0
+		HorrorTheme.style_button(pause_open_keybinds_button, "secondary", 12, true)
+		pause_open_keybinds_button.pressed.connect(_open_pause_keybinds)
+		box.add_child(pause_open_keybinds_button)
 
 	if _is_touch_device():
 		_add_pause_slider(box, LocScript.pick("Ukuran tombol mobile", "Mobile button size"), SettingsManager.mobile_button_scale * 100.0, 75.0, 150.0, func(v: float) -> void:
@@ -1019,29 +1163,46 @@ func _refresh_pause_keybind_buttons() -> void:
 			btn.text = SettingsManager.get_action_key_text(action) if SettingsManager.has_method("get_action_key_text") else action.to_upper()
 			HorrorTheme.style_button(btn, "secondary", 11, true)
 
+func _on_dialog_voice_changed(enabled: bool) -> void:
+	if is_instance_valid(pause_dialog_voice_check):
+		pause_dialog_voice_check.set_pressed_no_signal(enabled)
+
 func _pause_settings_container_hide() -> void:
 	_cancel_pause_keybind_listening()
 	if pause_settings_container:
 		pause_settings_container.visible = false
+	if pause_keybinds_container:
+		pause_keybinds_container.visible = false
 
 func _layout_pause_settings_panel() -> void:
-	if not pause_settings_panel or not pause_settings_scroll or not pause_settings_container:
-		return
-	pause_settings_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var view_size: Vector2 = get_viewport().get_visible_rect().size
 	var panel_width: float = maxf(180.0, minf(460.0, view_size.x - 24.0))
-	var content_h: float = 400.0
-	if pause_settings_scroll.get_child_count() > 0:
-		var box_ctrl: Control = pause_settings_scroll.get_child(0) as Control
-		if box_ctrl:
-			content_h = maxf(200.0, box_ctrl.get_combined_minimum_size().y + 4.0)
-	var max_scroll_h: float = maxf(160.0, view_size.y - 68.0)
-	var scroll_h: float = minf(content_h, max_scroll_h)
-	pause_settings_panel.custom_minimum_size = Vector2(panel_width, 0.0)
-	pause_settings_panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	pause_settings_panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	pause_settings_scroll.custom_minimum_size = Vector2(panel_width - 44.0, scroll_h)
-	pause_settings_panel.reset_size()
+	if pause_settings_panel and pause_settings_scroll and pause_settings_container:
+		pause_settings_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		var content_h: float = 400.0
+		if pause_settings_scroll.get_child_count() > 0:
+			var box_ctrl: Control = pause_settings_scroll.get_child(0) as Control
+			if box_ctrl:
+				content_h = maxf(200.0, box_ctrl.get_combined_minimum_size().y + 4.0)
+		var max_scroll_h: float = maxf(160.0, view_size.y - 68.0)
+		var scroll_h: float = minf(content_h, max_scroll_h)
+		pause_settings_panel.custom_minimum_size = Vector2(panel_width, 0.0)
+		pause_settings_panel.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		pause_settings_panel.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		pause_settings_scroll.custom_minimum_size = Vector2(panel_width - 44.0, scroll_h)
+		pause_settings_panel.reset_size()
+	if pause_keybinds_container and pause_keybinds_scroll:
+		var kb_content_h: float = 320.0
+		if pause_keybinds_scroll.get_child_count() > 0:
+			var kb_ctrl: Control = pause_keybinds_scroll.get_child(0) as Control
+			if kb_ctrl:
+				kb_content_h = maxf(160.0, kb_ctrl.get_combined_minimum_size().y + 4.0)
+		var kb_max_scroll_h: float = maxf(130.0, view_size.y - 220.0)
+		var kb_scroll_h: float = minf(kb_content_h, kb_max_scroll_h)
+		pause_keybinds_container.custom_minimum_size = Vector2(panel_width, 0.0)
+		pause_keybinds_scroll.custom_minimum_size = Vector2(panel_width - 44.0, kb_scroll_h)
+		pause_keybinds_container.set_anchors_and_offsets_preset(Control.PRESET_CENTER, Control.PRESET_MODE_MINSIZE)
+		pause_keybinds_container.reset_size()
 
 func _add_pause_slider(parent: VBoxContainer, caption: String, initial: float, minimum: float, maximum: float, callback: Callable) -> void:
 	var row := VBoxContainer.new()
@@ -1989,6 +2150,7 @@ func _on_settings_keybinds_changed() -> void:
 
 func _on_language_changed(_new_lang: String) -> void:
 	_populate_pause_settings_box()
+	_populate_pause_keybinds_box()
 	_refresh_localized_hud_texts()
 	_refresh_fate_cards_strip()
 	_layout_pause_settings_panel()
@@ -2159,8 +2321,11 @@ func _input(event: InputEvent) -> void:
 	if mobile_editor_active:
 		_handle_mobile_editor_input(event)
 		return
-	if pause_settings_container and pause_settings_container.visible and pause_settings_scroll:
-		if _handle_pause_settings_scroll_input(event):
+	if pause_keybinds_container and pause_keybinds_container.visible and pause_keybinds_scroll:
+		if _handle_pause_settings_scroll_input(event, pause_keybinds_scroll):
+			return
+	elif pause_settings_container and pause_settings_container.visible and pause_settings_scroll:
+		if _handle_pause_settings_scroll_input(event, pause_settings_scroll):
 			return
 	_pause_drag_scrolling = false
 	_pause_drag_moved = false
@@ -2196,7 +2361,10 @@ func _input(event: InputEvent) -> void:
 			if player:
 				player.apply_touch_look(drag.relative)
 
-func _handle_pause_settings_scroll_input(event: InputEvent) -> bool:
+func _handle_pause_settings_scroll_input(event: InputEvent, target_scroll: ScrollContainer = null) -> bool:
+	var sc: ScrollContainer = target_scroll if target_scroll != null else pause_settings_scroll
+	if sc == null:
+		return false
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if (mb.button_index == MOUSE_BUTTON_WHEEL_UP or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN) and mb.pressed:
@@ -2204,13 +2372,13 @@ func _handle_pause_settings_scroll_input(event: InputEvent) -> bool:
 				return false
 			if _pause_language_option and _pause_language_option.get_popup().visible:
 				return false
-			if pause_settings_scroll.get_global_rect().has_point(mb.position):
+			if sc.get_global_rect().has_point(mb.position):
 				var step: int = -48 if mb.button_index == MOUSE_BUTTON_WHEEL_UP else 48
-				pause_settings_scroll.scroll_vertical = maxi(0, pause_settings_scroll.scroll_vertical + step)
+				sc.scroll_vertical = maxi(0, sc.scroll_vertical + step)
 				get_viewport().set_input_as_handled()
 				return true
 		elif mb.button_index == MOUSE_BUTTON_LEFT:
-			if mb.pressed and pause_settings_scroll.get_global_rect().has_point(mb.position):
+			if mb.pressed and sc.get_global_rect().has_point(mb.position):
 				var hovered: Control = get_viewport().gui_get_hovered_control()
 				if hovered is HSlider or hovered is VScrollBar or hovered is HScrollBar or hovered is LineEdit or hovered is TextEdit or hovered is OptionButton:
 					return false
@@ -2239,7 +2407,7 @@ func _handle_pause_settings_scroll_input(event: InputEvent) -> bool:
 				_pause_drag_button = null
 		if _pause_drag_moved:
 			var delta_y: float = mm.position.y - _pause_drag_last_y
-			pause_settings_scroll.scroll_vertical = maxi(0, pause_settings_scroll.scroll_vertical - int(round(delta_y)))
+			sc.scroll_vertical = maxi(0, sc.scroll_vertical - int(round(delta_y)))
 			get_viewport().set_input_as_handled()
 			_pause_drag_last_y = mm.position.y
 			return true
@@ -2526,6 +2694,8 @@ func _begin_cutscene_ui(cutscene_type: String, overlay_name: String, title_text:
 		pause_menu.visible = false
 	if pause_settings_container:
 		pause_settings_container.visible = false
+	if pause_keybinds_container:
+		pause_keybinds_container.visible = false
 	if exit_confirm_overlay:
 		exit_confirm_overlay.visible = false
 	if barricade_dialog:

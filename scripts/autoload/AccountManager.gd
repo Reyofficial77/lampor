@@ -27,11 +27,14 @@ var friends_list: Array = []
 var incoming_friend_requests: Array = []
 var outgoing_friend_requests: Array = []
 var players_directory: Array = []
+var inbox_messages: Array = []
+var unread_inbox_count: int = 0
 
 var _is_syncing_profile: bool = false
 var _pending_profile_sync: bool = false
 var _applying_cloud_profile: bool = false
 var _me_refresh_in_flight: bool = false
+var _inbox_fetch_in_flight: bool = false
 var _session_verified_with_server: bool = false
 var _realtime_poll_accum: float = 0.0
 var _web_sync_pending: bool = false
@@ -294,12 +297,15 @@ func _clear_session_local() -> void:
 	incoming_friend_requests.clear()
 	outgoing_friend_requests.clear()
 	players_directory.clear()
+	inbox_messages = []
+	unread_inbox_count = 0
 
 func _handle_session_expired(reason_msg: String) -> void:
 	_clear_session_local()
 	last_error = reason_msg if not reason_msg.is_empty() else LocScript.network_error_label(401)
 	_clear_account_storage()
 	SignalBus.account_state_changed.emit()
+	SignalBus.inbox_messages_updated.emit(inbox_messages, unread_inbox_count)
 
 func solve_pow_challenge() -> Dictionary:
 	var res: Dictionary = await api_request("GET", "/api/auth/challenge", null, false)
@@ -418,6 +424,8 @@ func _submit_auth_request(endpoint: String, uname: String, pwd: String, is_regis
 	_save_account_storage()
 	_apply_server_user_to_game_manager(user_dict)
 	SignalBus.account_state_changed.emit()
+	if DisplayServer.get_name() != "headless":
+		call_deferred("fetch_inbox_messages")
 
 	return {
 		"ok": true,
@@ -469,6 +477,8 @@ func verify_saved_session() -> bool:
 			_save_account_storage()
 			_apply_server_user_to_game_manager(user_dict)
 			SignalBus.account_state_changed.emit()
+			if DisplayServer.get_name() != "headless":
+				call_deferred("fetch_inbox_messages")
 			return true
 
 	var status_code: int = int(res.get("status", 0))
@@ -497,6 +507,7 @@ func enter_guest_mode() -> void:
 	last_error = ""
 	_save_account_storage()
 	SignalBus.account_state_changed.emit()
+	SignalBus.inbox_messages_updated.emit(inbox_messages, unread_inbox_count)
 
 func logout_account() -> void:
 	var mp: Variant = GameManager.get_multiplayer_manager(false)
@@ -514,6 +525,7 @@ func logout_account() -> void:
 	last_error = ""
 	_clear_account_storage()
 	SignalBus.account_state_changed.emit()
+	SignalBus.inbox_messages_updated.emit(inbox_messages, unread_inbox_count)
 
 func fetch_friends_and_directory(search_query: String = "") -> Dictionary:
 	if not can_access_online_modes():
@@ -762,6 +774,80 @@ func refresh_profile_from_server() -> Dictionary:
 	var user_dict: Dictionary = data.get("user", {}) if data.get("user") is Dictionary else {}
 	if not user_dict.is_empty():
 		apply_live_server_user(user_dict)
+	if data.has("unreadMessagesCount"):
+		var next_unread: int = maxi(0, int(data.get("unreadMessagesCount", unread_inbox_count)))
+		if next_unread != unread_inbox_count:
+			unread_inbox_count = next_unread
+			SignalBus.inbox_messages_updated.emit(inbox_messages, unread_inbox_count)
+	return res
+
+func fetch_inbox_messages() -> Dictionary:
+	if _inbox_fetch_in_flight:
+		return {
+			"ok": false,
+			"status": 0,
+			"messages": inbox_messages,
+			"unreadCount": unread_inbox_count
+		}
+	_inbox_fetch_in_flight = true
+	var use_auth: bool = can_access_online_modes()
+	var path: String = "/api/auth/messages" if use_auth else "/api/auth/global-messages"
+	var res: Dictionary = await api_request("GET", path, null, use_auth)
+	_inbox_fetch_in_flight = false
+	if bool(res.get("ok", false)):
+		var data: Dictionary = res.get("data", {}) if res.get("data") is Dictionary else {}
+		var msgs_raw: Variant = data.get("messages", [])
+		var next_msgs: Array = []
+		if msgs_raw is Array:
+			for item: Variant in (msgs_raw as Array):
+				if item is Dictionary:
+					next_msgs.append((item as Dictionary).duplicate(true))
+		inbox_messages = next_msgs
+		if can_access_online_modes():
+			if data.has("unreadCount"):
+				unread_inbox_count = maxi(0, int(data.get("unreadCount", 0)))
+			else:
+				var computed_unread: int = 0
+				for msg: Dictionary in next_msgs:
+					if not bool(msg.get("isRead", false)):
+						computed_unread += 1
+				unread_inbox_count = computed_unread
+		else:
+			unread_inbox_count = 0
+		SignalBus.inbox_messages_updated.emit(inbox_messages, unread_inbox_count)
+	return res
+
+func mark_inbox_messages_read(message_ids: Array = []) -> Dictionary:
+	if not can_access_online_modes():
+		return {"ok": false}
+	var payload: Dictionary = {"action": "mark_read"}
+	if not message_ids.is_empty():
+		payload["messageIds"] = message_ids
+	var res: Dictionary = await api_request("POST", "/api/auth/messages", payload, true)
+	if bool(res.get("ok", false)):
+		var mark_all: bool = message_ids.is_empty()
+		var id_set: Dictionary = {}
+		for raw_id: Variant in message_ids:
+			var s_id: String = str(raw_id).strip_edges()
+			if not s_id.is_empty():
+				id_set[s_id] = true
+		for i: int in range(inbox_messages.size()):
+			if inbox_messages[i] is Dictionary:
+				var msg: Dictionary = inbox_messages[i] as Dictionary
+				var msg_id: String = str(msg.get("id", msg.get("_id", msg.get("messageId", "")))).strip_edges()
+				if mark_all or id_set.has(msg_id):
+					msg["isRead"] = true
+					inbox_messages[i] = msg
+		var data: Dictionary = res.get("data", {}) if res.get("data") is Dictionary else {}
+		if data.has("unreadCount"):
+			unread_inbox_count = maxi(0, int(data.get("unreadCount", 0)))
+		else:
+			var remaining_unread: int = 0
+			for item: Variant in inbox_messages:
+				if item is Dictionary and not bool((item as Dictionary).get("isRead", false)):
+					remaining_unread += 1
+			unread_inbox_count = remaining_unread
+		SignalBus.inbox_messages_updated.emit(inbox_messages, unread_inbox_count)
 	return res
 
 func apply_live_server_user(user_dict: Dictionary) -> void:

@@ -7,6 +7,7 @@ signal language_changed(new_language: String)
 signal character_model_changed(model_id: String)
 signal graphics_quality_changed(effective_quality: String)
 signal allow_friend_join_singleplayer_changed(enabled: bool)
+signal dialog_voice_changed(enabled: bool)
 
 const CONFIG_PATH: String = "user://lampor_settings.cfg"
 const WEB_SETTINGS_STORAGE_KEY: String = "lampor_settings_v1"
@@ -20,6 +21,7 @@ const DEFAULT_MOBILE_JOYSTICK_SCALE: float = 1.0
 const DEFAULT_LANGUAGE: String = "id"
 const DEFAULT_CHARACTER_MODEL: String = "male"
 const DEFAULT_ALLOW_FRIEND_JOIN_SINGLEPLAYER: bool = true
+const DEFAULT_DIALOG_VOICE_ENABLED: bool = true
 const CHARACTER_MODEL_PATHS: Dictionary = {
 	"male": "res://assets/models/player/adult_male.glb",
 	"female": "res://assets/models/player/adult_female.glb"
@@ -73,6 +75,7 @@ var mobile_button_positions: Array = []
 var language: String = DEFAULT_LANGUAGE
 var character_model: String = DEFAULT_CHARACTER_MODEL
 var mic_input_device: String = "Default"
+var dialog_voice_enabled: bool = DEFAULT_DIALOG_VOICE_ENABLED
 var allow_friend_join_singleplayer: bool = DEFAULT_ALLOW_FRIEND_JOIN_SINGLEPLAYER
 var server_base_url: String = DEFAULT_SERVER_URL
 var keybinds: Dictionary = {}
@@ -139,6 +142,7 @@ func _apply_config_values(config: ConfigFile) -> void:
 	language = LocScript.normalize_language(str(config.get_value("general", "language", DEFAULT_LANGUAGE)))
 	character_model = normalize_character_model(str(config.get_value("general", "character_model", DEFAULT_CHARACTER_MODEL)))
 	mic_input_device = str(config.get_value("audio", "mic_input_device", "Default"))
+	dialog_voice_enabled = bool(config.get_value("audio", "dialog_voice_enabled", DEFAULT_DIALOG_VOICE_ENABLED))
 	allow_friend_join_singleplayer = bool(config.get_value("multiplayer", "allow_friend_join_singleplayer", DEFAULT_ALLOW_FRIEND_JOIN_SINGLEPLAYER))
 	server_base_url = DEFAULT_SERVER_URL
 	_sync_server_url_to_account_manager()
@@ -164,6 +168,7 @@ func _save_settings() -> void:
 	config.set_value("mobile", "joystick_position", mobile_joystick_position)
 	config.set_value("mobile", "button_positions", mobile_button_positions)
 	config.set_value("audio", "mic_input_device", mic_input_device)
+	config.set_value("audio", "dialog_voice_enabled", dialog_voice_enabled)
 	config.set_value("multiplayer", "allow_friend_join_singleplayer", allow_friend_join_singleplayer)
 	for action: String in REBINDABLE_ACTIONS:
 		if keybinds.has(action):
@@ -270,6 +275,13 @@ func set_mic_input_device(device_name: String) -> void:
 	var cleaned: String = device_name.strip_edges()
 	mic_input_device = cleaned if not cleaned.is_empty() else "Default"
 	_save_settings()
+
+func set_dialog_voice_enabled(enabled: bool) -> void:
+	dialog_voice_enabled = enabled
+	_save_settings()
+	if not dialog_voice_enabled and AudioManager != null:
+		AudioManager.stop_voice()
+	dialog_voice_changed.emit(dialog_voice_enabled)
 
 func set_allow_friend_join_singleplayer(enabled: bool) -> void:
 	allow_friend_join_singleplayer = enabled

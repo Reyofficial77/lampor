@@ -73,6 +73,29 @@ func _run_checks() -> void:
 	if mm.get("account_chip_panel") != null or mm.get("account_chip_badge") != null:
 		errors.append("MainMenu account_chip_panel/account_chip_badge above MULAI PERMAINAN must be removed")
 
+	var stats_bar_ctrl: HBoxContainer = mm.get("stats_bar") as HBoxContainer
+	var wins_lbl: Label = mm.get("stats_wins_label") as Label
+	var coins_lbl: Label = mm.get("stats_coins_label") as Label
+	var lives_lbl: Label = mm.get("stats_lives_label") as Label
+	if mm.get("stats_label") != null:
+		errors.append("MainMenu deprecated stats_label must be removed")
+	if stats_bar_ctrl == null or wins_lbl == null or coins_lbl == null or lives_lbl == null:
+		errors.append("MainMenu stats_bar or stat value labels missing")
+	else:
+		var gm_stats: Variant = root.get_node_or_null("GameManager")
+		var expected_wins: String = str(int(gm_stats.get("total_wins"))) if gm_stats != null else "0"
+		var expected_coins: String = str(int(gm_stats.get("coins"))) if gm_stats != null else "0"
+		var expected_lives: String = str(int(gm_stats.get("extra_lives"))) if gm_stats != null else "0"
+		if wins_lbl.text != expected_wins or coins_lbl.text != expected_coins or lives_lbl.text != expected_lives:
+			errors.append("MainMenu stats labels must show numeric values only (%s/%s/%s vs %s/%s/%s)" % [wins_lbl.text, coins_lbl.text, lives_lbl.text, expected_wins, expected_coins, expected_lives])
+		var found_stat_icons: Array[String] = []
+		for icon_node: Node in stats_bar_ctrl.find_children("IconDraw", "Control", true, false):
+			if icon_node.has_meta("stat_icon"):
+				found_stat_icons.append(str(icon_node.get_meta("stat_icon")))
+		for req_icon: String in ["trophy", "coin", "heart"]:
+			if not found_stat_icons.has(req_icon):
+				errors.append("MainMenu stats_bar missing vector IconDraw for: " + req_icon)
+
 	var icon_rail: Control = mm.get("right_icon_rail") as Control
 	var rail_friends_btn: Button = mm.get("friends_button") as Button
 	var rail_inbox_btn: Button = mm.get("inbox_button") as Button

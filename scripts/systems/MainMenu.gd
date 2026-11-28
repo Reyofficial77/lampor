@@ -18,7 +18,13 @@ var main_content: VBoxContainer
 var title_label: Label
 var subtitle_label: Label
 var title_rule: ColorRect
-var stats_label: Label
+var stats_bar: HBoxContainer
+var stats_wins_label: Label
+var stats_coins_label: Label
+var stats_lives_label: Label
+var stats_icons: Array[Control] = []
+var stats_value_labels: Array[Label] = []
+var stats_sep_labels: Array[Label] = []
 var top_right_bar: HBoxContainer
 var top_account_chip: PanelContainer
 var top_account_avatar_rect: TextureRect
@@ -436,9 +442,40 @@ func _build_menu() -> void:
 	title_rule.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	header_block.add_child(title_rule)
 
-	stats_label = _make_label("", 12, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm")
-	stats_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	main_content.add_child(stats_label)
+	stats_icons.clear()
+	stats_value_labels.clear()
+	stats_sep_labels.clear()
+	stats_bar = HBoxContainer.new()
+	stats_bar.name = "StatsBar"
+	stats_bar.add_theme_constant_override("separation", 8)
+	stats_bar.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	stats_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	main_content.add_child(stats_bar)
+
+	var win_item: Dictionary = _make_stat_item("trophy", LocScript.pick("Kemenangan", "Wins"))
+	stats_wins_label = win_item["label"] as Label
+	stats_bar.add_child(win_item["box"] as Control)
+
+	var sep1 := _make_label("·", 12, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_CENTER, "mono-sm")
+	sep1.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	sep1.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	stats_sep_labels.append(sep1)
+	stats_bar.add_child(sep1)
+
+	var coin_item: Dictionary = _make_stat_item("coin", LocScript.pick("Koin", "Coins"))
+	stats_coins_label = coin_item["label"] as Label
+	stats_bar.add_child(coin_item["box"] as Control)
+
+	var sep2 := _make_label("·", 12, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_CENTER, "mono-sm")
+	sep2.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	sep2.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	stats_sep_labels.append(sep2)
+	stats_bar.add_child(sep2)
+
+	var life_item: Dictionary = _make_stat_item("heart", LocScript.pick("Nyawa", "Lives"))
+	stats_lives_label = life_item["label"] as Label
+	stats_bar.add_child(life_item["box"] as Control)
+
 	_refresh_currency_display()
 
 	var menu_buttons := VBoxContainer.new()
@@ -1619,11 +1656,18 @@ func _add_shop_offer(parent: VBoxContainer, title_text: String, description: Str
 	row.add_child(buy)
 
 func _refresh_currency_display() -> void:
-	if stats_label:
-		stats_label.text = LocScript.pick(
-			"%d Kemenangan  ·  %d Koin  ·  %d Nyawa" % [GameManager.total_wins, GameManager.coins, GameManager.extra_lives],
-			"%d Wins  ·  %d Coins  ·  %d Lives" % [GameManager.total_wins, GameManager.coins, GameManager.extra_lives]
-		)
+	if is_instance_valid(stats_wins_label):
+		stats_wins_label.text = str(GameManager.total_wins)
+		if stats_wins_label.get_parent() is Control:
+			(stats_wins_label.get_parent() as Control).tooltip_text = LocScript.pick("Kemenangan", "Wins")
+	if is_instance_valid(stats_coins_label):
+		stats_coins_label.text = str(GameManager.coins)
+		if stats_coins_label.get_parent() is Control:
+			(stats_coins_label.get_parent() as Control).tooltip_text = LocScript.pick("Koin", "Coins")
+	if is_instance_valid(stats_lives_label):
+		stats_lives_label.text = str(GameManager.extra_lives)
+		if stats_lives_label.get_parent() is Control:
+			(stats_lives_label.get_parent() as Control).tooltip_text = LocScript.pick("Nyawa", "Lives")
 
 func _refresh_shop_display() -> void:
 	if shop_balance_label:
@@ -2652,6 +2696,106 @@ func _draw_menu_icon(ctrl: Control, icon_kind: String) -> void:
 			ctrl.draw_line(c + Vector2(-xr, -xr), c + Vector2(xr, xr), col, xw, true)
 			ctrl.draw_line(c + Vector2(xr, -xr), c + Vector2(-xr, xr), col, xw, true)
 
+func _make_stat_item(icon_kind: String, tooltip_txt: String) -> Dictionary:
+	var box := HBoxContainer.new()
+	box.name = "StatItem_" + icon_kind
+	box.add_theme_constant_override("separation", 5)
+	box.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	box.tooltip_text = tooltip_txt
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	var icon_ctrl := Control.new()
+	icon_ctrl.name = "IconDraw"
+	icon_ctrl.set_meta("stat_icon", icon_kind)
+	icon_ctrl.custom_minimum_size = Vector2(16.0, 16.0)
+	icon_ctrl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	icon_ctrl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon_ctrl.draw.connect(_draw_stat_icon.bind(icon_ctrl, icon_kind))
+	box.add_child(icon_ctrl)
+	stats_icons.append(icon_ctrl)
+
+	var val_col: Color = HorrorTheme.ON_SURFACE
+	match icon_kind:
+		"trophy", "coin":
+			val_col = Color(0.96, 0.84, 0.56, 1.0)
+		"heart":
+			val_col = Color(0.96, 0.72, 0.72, 1.0)
+	var lbl := _make_label("0", 12, val_col, HORIZONTAL_ALIGNMENT_LEFT, "mono-sm")
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	box.add_child(lbl)
+	stats_value_labels.append(lbl)
+
+	return {"box": box, "icon": icon_ctrl, "label": lbl}
+
+func _draw_stat_icon(ctrl: Control, icon_kind: String) -> void:
+	if not is_instance_valid(ctrl):
+		return
+	var s: float = minf(ctrl.size.x, ctrl.size.y)
+	if s <= 2.0:
+		return
+	var c: Vector2 = ctrl.size * 0.5
+	var lw: float = maxf(1.1, s * 0.085)
+
+	match icon_kind:
+		"trophy":
+			var gold := Color(0.95, 0.77, 0.25, 1.0)
+			var gold_dark := Color(0.70, 0.50, 0.12, 1.0)
+			var gold_hi := Color(1.0, 0.92, 0.62, 1.0)
+			# Handles
+			ctrl.draw_arc(Vector2(c.x - s * 0.21, c.y - s * 0.15), s * 0.11, PI * 0.55, PI * 1.55, 10, gold_dark, lw, true)
+			ctrl.draw_arc(Vector2(c.x + s * 0.21, c.y - s * 0.15), s * 0.11, -PI * 0.55, PI * 0.45, 10, gold_dark, lw, true)
+			# Cup bowl
+			var bowl := PackedVector2Array([
+				Vector2(c.x - s * 0.23, c.y - s * 0.34),
+				Vector2(c.x + s * 0.23, c.y - s * 0.34),
+				Vector2(c.x + s * 0.17, c.y - s * 0.06),
+				Vector2(c.x + s * 0.07, c.y + s * 0.08),
+				Vector2(c.x - s * 0.07, c.y + s * 0.08),
+				Vector2(c.x - s * 0.17, c.y - s * 0.06)
+			])
+			ctrl.draw_colored_polygon(bowl, gold)
+			# Rim & sheen
+			ctrl.draw_line(Vector2(c.x - s * 0.25, c.y - s * 0.34), Vector2(c.x + s * 0.25, c.y - s * 0.34), gold_hi, lw, true)
+			ctrl.draw_line(Vector2(c.x - s * 0.11, c.y - s * 0.26), Vector2(c.x - s * 0.08, c.y - s * 0.08), gold_hi, maxf(1.0, lw * 0.7), true)
+			# Stem & pedestal base
+			ctrl.draw_rect(Rect2(c.x - s * 0.045, c.y + s * 0.07, s * 0.09, s * 0.17), gold_dark, true)
+			ctrl.draw_rect(Rect2(c.x - s * 0.16, c.y + s * 0.23, s * 0.32, s * 0.07), gold, true)
+			ctrl.draw_rect(Rect2(c.x - s * 0.23, c.y + s * 0.30, s * 0.46, s * 0.08), gold_dark, true)
+		"coin":
+			var rim_col := Color(0.74, 0.52, 0.10, 1.0)
+			var face_col := Color(0.98, 0.80, 0.22, 1.0)
+			var inner_col := Color(0.76, 0.54, 0.10, 1.0)
+			var glint_col := Color(1.0, 0.94, 0.65, 1.0)
+			ctrl.draw_circle(c, s * 0.40, rim_col)
+			ctrl.draw_circle(c, s * 0.33, face_col)
+			ctrl.draw_arc(c, s * 0.23, 0.0, TAU, 20, inner_col, maxf(1.0, s * 0.065), true)
+			var emblem := PackedVector2Array([
+				Vector2(c.x, c.y - s * 0.13),
+				Vector2(c.x + s * 0.075, c.y),
+				Vector2(c.x, c.y + s * 0.13),
+				Vector2(c.x - s * 0.075, c.y)
+			])
+			ctrl.draw_colored_polygon(emblem, glint_col)
+			ctrl.draw_arc(c, s * 0.29, PI * 1.12, PI * 1.48, 8, glint_col, maxf(1.0, s * 0.06), true)
+		"heart":
+			var heart_col := Color(0.88, 0.18, 0.22, 1.0)
+			var edge_col := Color(0.98, 0.44, 0.44, 0.92)
+			var sheen_col := Color(1.0, 0.78, 0.78, 0.85)
+			var pts := PackedVector2Array()
+			var scale_h: float = s * 0.0235
+			var center_off := Vector2(c.x, c.y + s * 0.04)
+			for i: int in range(24):
+				var t: float = (float(i) / 24.0) * TAU
+				var hx: float = 16.0 * pow(sin(t), 3.0)
+				var hy: float = -(13.0 * cos(t) - 5.0 * cos(2.0 * t) - 2.0 * cos(3.0 * t) - cos(4.0 * t))
+				pts.append(center_off + Vector2(hx * scale_h, hy * scale_h))
+			ctrl.draw_colored_polygon(pts, heart_col)
+			var outline := PackedVector2Array(pts)
+			outline.append(pts[0])
+			ctrl.draw_polyline(outline, edge_col, maxf(1.0, s * 0.06), true)
+			ctrl.draw_circle(Vector2(c.x - s * 0.14, c.y - s * 0.11), s * 0.055, sheen_col)
+
 func _panel_style() -> StyleBoxFlat:
 	return HorrorTheme.make_minimal_panel_style(Color(0.086, 0.045, 0.043, 0.96), HorrorTheme.BORDER_INTERACTIVE, 2, 24, 22)
 
@@ -2673,9 +2817,21 @@ func _apply_layout() -> void:
 
 	title_label.add_theme_font_size_override("font_size", 30 if short_screen else (38 if narrow else 52))
 	subtitle_label.add_theme_font_size_override("font_size", 11 if short_screen else 13)
-	if stats_label:
-		stats_label.visible = not (short_screen and view_size.y < 380.0)
-		stats_label.add_theme_font_size_override("font_size", 11 if narrow or short_screen else 12)
+	if stats_bar:
+		stats_bar.visible = not (short_screen and view_size.y < 380.0)
+		stats_bar.add_theme_constant_override("separation", 6 if narrow or short_screen else 9)
+		var icon_sz: float = 14.0 if narrow or short_screen else 16.0
+		var stat_font_sz: int = 11 if narrow or short_screen else 12
+		for st_icon: Control in stats_icons:
+			if is_instance_valid(st_icon):
+				st_icon.custom_minimum_size = Vector2(icon_sz, icon_sz)
+				st_icon.queue_redraw()
+		for st_lbl: Label in stats_value_labels:
+			if is_instance_valid(st_lbl):
+				st_lbl.add_theme_font_size_override("font_size", stat_font_sz)
+		for st_sep: Label in stats_sep_labels:
+			if is_instance_valid(st_sep):
+				st_sep.add_theme_font_size_override("font_size", stat_font_sz)
 	main_content.add_theme_constant_override("separation", 6 if short_screen else 10)
 
 	var menu_buttons: VBoxContainer = main_content.get_node("MenuButtons") as VBoxContainer

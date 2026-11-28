@@ -441,6 +441,8 @@ func login_account(uname: String, pwd: String) -> Dictionary:
 	return await _submit_auth_request("/api/auth/login", uname, pwd, false)
 
 func verify_saved_session() -> bool:
+	if DisplayServer.get_name() == "headless":
+		return can_access_online_modes()
 	if session_token.is_empty():
 		return false
 	if _me_refresh_in_flight:

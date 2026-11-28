@@ -278,6 +278,15 @@ func get_active_mic_device_name() -> String:
 		return "Default"
 	return str(voice_chat.call("get_active_input_device_name"))
 
+func get_available_mic_devices() -> PackedStringArray:
+	if voice_chat == null or not voice_chat.has_method("get_available_input_devices"):
+		return PackedStringArray()
+	return voice_chat.call("get_available_input_devices")
+
+func set_mic_input_device(device_name: String) -> void:
+	if voice_chat != null and voice_chat.has_method("set_input_device"):
+		voice_chat.call("set_input_device", device_name)
+
 func is_local_speaking() -> bool:
 	return voice_chat != null and bool(voice_chat.get("local_speaking"))
 

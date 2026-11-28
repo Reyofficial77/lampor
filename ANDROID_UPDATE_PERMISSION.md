@@ -1,4 +1,15 @@
-# Izin Internet Android untuk updater Lampor
+# Izin Android (Internet & Mikrofon) untuk Lampor
+
+## Izin Mikrofon untuk Voice Chat (.apk)
+
+Di Godot 4 (Preset **Android > Permissions**), izin mikrofon tidak dinamai "Microphone", melainkan:
+- **Custom Permissions** (`permissions/custom_permissions`): `android.permission.RECORD_AUDIO`, `android.permission.MODIFY_AUDIO_SETTINGS`
+- **Record Audio** (`permissions/record_audio=true`)
+- **Modify Audio Settings** (`permissions/modify_audio_settings=true`)
+
+Penting: Patch auto-update `.pck` (`update.pck`) **tidak** dapat mengubah `AndroidManifest.xml` di dalam `.apk` yang sudah terpasang. Jika APK sebelumnya diekspor sebelum izin `RECORD_AUDIO` aktif, opsi "Izinkan mengakses mikrofon" tidak akan muncul di Pengaturan Aplikasi Android maupun di pop-up sistem sampai APK diekspor ulang dari preset Android terbaru dan dipasang ulang di HP.
+
+## Izin Internet untuk Updater
 
 HTTP 0 pada updater bukan status HTTP dari GitHub. Artinya aplikasi tidak menerima respons HTTP. Pada APK Android, penyebab umum adalah permission INTERNET tidak ikut dimasukkan ke manifest.
 

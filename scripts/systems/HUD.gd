@@ -150,6 +150,9 @@ var mic_toggle_button: Button = null
 var _mission_mic_row: HBoxContainer = null
 var _mic_icon_ctrl: Control = null
 var _mic_text_lbl: Label = null
+var _pause_mic_device_option: OptionButton = null
+var _pause_mic_test_button: Button = null
+var _pause_mic_status_label: Label = null
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -514,6 +517,7 @@ func _on_mic_toggle_pressed() -> void:
 	if mp.has_method("is_mic_enabled") and bool(mp.call("is_mic_enabled")):
 		if mp.has_method("set_mic_enabled"):
 			mp.call("set_mic_enabled", false)
+		SignalBus.dialog_requested.emit(LocScript.pick("Mikrofon dimatikan.", "Microphone muted."), 1.8)
 	elif mp.has_method("request_mic_permission_and_enable"):
 		var status: String = str(mp.call("request_mic_permission_and_enable"))
 		if status == "pending_os":
@@ -574,13 +578,16 @@ func _refresh_mic_button_visuals() -> void:
 	mic_toggle_button.add_theme_stylebox_override("focus", normal)
 
 	if is_instance_valid(_mic_text_lbl):
+		var mic_key: String = SettingsManager.get_action_key_text("mic_toggle") if SettingsManager.has_method("get_action_key_text") else "V"
+		if mic_key.is_empty():
+			mic_key = "V"
 		var label_str: String = ""
 		if local_spk:
 			label_str = LocScript.pick("BICARA", "SPEAK")
 		elif mic_on:
-			label_str = "MIC ON" if touch else "MIC ON [V]"
+			label_str = "MIC ON" if touch else ("MIC ON [%s]" % mic_key)
 		else:
-			label_str = "MIC OFF" if touch else "MIC OFF [V]"
+			label_str = "MIC OFF" if touch else ("MIC OFF [%s]" % mic_key)
 		_mic_text_lbl.text = label_str
 		HorrorTheme.style_label(_mic_text_lbl, "mono-sm", text_col, 7 if touch else 9)
 
@@ -645,12 +652,20 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	var focus_owner: Control = get_viewport().gui_get_focus_owner()
 	if focus_owner is LineEdit or focus_owner is TextEdit:
 		return
-	if event is InputEventKey:
-		var ke := event as InputEventKey
-		if ke.pressed and not ke.echo and ke.keycode == KEY_V and not ke.ctrl_pressed and not ke.alt_pressed and not ke.meta_pressed:
-			if _should_show_coop_hud():
-				_on_mic_toggle_pressed()
-				get_viewport().set_input_as_handled()
+	var mic_action_pressed: bool = InputMap.has_action("mic_toggle") and event.is_action_pressed("mic_toggle")
+	var legacy_v_pressed: bool = (not InputMap.has_action("mic_toggle")) and event is InputEventKey and (event as InputEventKey).pressed and not (event as InputEventKey).echo and (event as InputEventKey).keycode == KEY_V and not (event as InputEventKey).ctrl_pressed and not (event as InputEventKey).alt_pressed and not (event as InputEventKey).meta_pressed
+	if mic_action_pressed or legacy_v_pressed:
+		if _should_show_coop_hud():
+			_on_mic_toggle_pressed()
+		else:
+			SignalBus.dialog_requested.emit(
+				LocScript.pick(
+					"Mikrofon aktif saat bermain Multiplayer/Co-op atau ketika teman bergabung. Periksa tes mikrofon di Pengaturan.",
+					"Microphone is active in Multiplayer/Co-op or when a friend joins. Check mic test in Settings."
+				),
+				2.8
+			)
+		get_viewport().set_input_as_handled()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if is_cutscene_active() or is_fate_card_overlay_open():
@@ -1076,6 +1091,63 @@ func _populate_pause_settings_box() -> void:
 	)
 	HorrorTheme.style_check_button(pause_dialog_voice_check)
 	box.add_child(pause_dialog_voice_check)
+
+	var mp_pause: Variant = _mp()
+	var is_web_pause: bool = OS.has_feature("web")
+	if not is_web_pause:
+		var mic_dev_lbl := Label.new()
+		mic_dev_lbl.text = LocScript.pick("Perangkat Mikrofon", "Microphone Device")
+		HorrorTheme.style_label(mic_dev_lbl, "label-sm", HorrorTheme.ON_SURFACE, 12)
+		box.add_child(mic_dev_lbl)
+		_pause_mic_device_option = OptionButton.new()
+		_pause_mic_device_option.custom_minimum_size.y = 40.0
+		var devs: PackedStringArray = mp_pause.call("get_available_mic_devices") if (mp_pause != null and mp_pause.has_method("get_available_mic_devices")) else AudioServer.get_input_device_list()
+		if devs.is_empty():
+			_pause_mic_device_option.add_item("Default")
+		else:
+			var sel_idx: int = 0
+			var cur_dev: String = str(SettingsManager.mic_input_device).strip_edges()
+			for idx: int in range(devs.size()):
+				var dname: String = devs[idx]
+				_pause_mic_device_option.add_item(dname)
+				if dname == cur_dev:
+					sel_idx = idx
+			_pause_mic_device_option.select(sel_idx)
+		_pause_mic_device_option.item_selected.connect(func(idx: int) -> void:
+			if is_instance_valid(_pause_mic_device_option):
+				var chosen_dev: String = _pause_mic_device_option.get_item_text(idx)
+				SettingsManager.set_mic_input_device(chosen_dev)
+				var mp_sel: Variant = _mp()
+				if mp_sel != null and mp_sel.has_method("set_mic_input_device"):
+					mp_sel.call("set_mic_input_device", chosen_dev)
+		)
+		HorrorTheme.style_option_button(_pause_mic_device_option)
+		box.add_child(_pause_mic_device_option)
+
+	_pause_mic_test_button = Button.new()
+	var pause_mic_on: bool = mp_pause != null and mp_pause.has_method("is_mic_enabled") and bool(mp_pause.call("is_mic_enabled"))
+	_pause_mic_test_button.text = LocScript.pick("MATIKAN MIKROFON" if pause_mic_on else "TES / IZINKAN MIKROFON", "MUTE MICROPHONE" if pause_mic_on else "TEST / ALLOW MICROPHONE")
+	_pause_mic_test_button.custom_minimum_size.y = 40.0
+	HorrorTheme.style_button(_pause_mic_test_button, "secondary", 12, true)
+	_pause_mic_test_button.pressed.connect(func() -> void:
+		var mp_t: Variant = _mp()
+		if mp_t == null:
+			return
+		if mp_t.has_method("is_mic_enabled") and bool(mp_t.call("is_mic_enabled")):
+			mp_t.call("set_mic_enabled", false)
+		elif mp_t.has_method("request_mic_permission_and_enable"):
+			var st: String = str(mp_t.call("request_mic_permission_and_enable"))
+			if st == "pending_os" and is_instance_valid(_pause_mic_status_label):
+				_pause_mic_status_label.text = LocScript.pick("Meminta izin mikrofon perangkat...", "Requesting device microphone permission...")
+		_refresh_pause_mic_controls()
+	)
+	box.add_child(_pause_mic_test_button)
+
+	_pause_mic_status_label = Label.new()
+	_pause_mic_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	HorrorTheme.style_label(_pause_mic_status_label, "label-sm", HorrorTheme.TEXT_MUTED, 11)
+	box.add_child(_pause_mic_status_label)
+	_refresh_pause_mic_controls()
 
 	var sp_friend_chk := CheckButton.new()
 	sp_friend_chk.text = LocScript.pick("Izinkan teman gabung Singleplayer", "Allow friends to join Singleplayer")
@@ -1515,10 +1587,28 @@ func _build_exit_confirm() -> void:
 	confirm.pressed.connect(_on_main_menu_pressed)
 	buttons.add_child(confirm)
 
+func _refresh_pause_mic_controls() -> void:
+	var mp: Variant = _mp()
+	var mic_on: bool = mp != null and mp.has_method("is_mic_enabled") and bool(mp.call("is_mic_enabled"))
+	if is_instance_valid(_pause_mic_test_button):
+		_pause_mic_test_button.text = LocScript.pick("MATIKAN MIKROFON" if mic_on else "TES / IZINKAN MIKROFON", "MUTE MICROPHONE" if mic_on else "TEST / ALLOW MICROPHONE")
+	if is_instance_valid(_pause_mic_status_label):
+		var dev_name: String = str(mp.call("get_active_mic_device_name")) if (mp != null and mp.has_method("get_active_mic_device_name")) else str(SettingsManager.mic_input_device)
+		if mic_on:
+			_pause_mic_status_label.text = LocScript.pick("Status: Mikrofon aktif (%s)" % dev_name, "Status: Microphone active (%s)" % dev_name)
+			_pause_mic_status_label.add_theme_color_override("font_color", HorrorTheme.SUCCESS_SAGE)
+		else:
+			_pause_mic_status_label.text = LocScript.pick("Status: Mikrofon mati (%s)" % dev_name, "Status: Microphone muted (%s)" % dev_name)
+			_pause_mic_status_label.add_theme_color_override("font_color", HorrorTheme.TEXT_MUTED)
+
 func _on_mic_permission_status(granted: bool, message: String) -> void:
 	_refresh_mic_button_visuals()
-	if not granted and not message.strip_edges().is_empty():
-		SignalBus.dialog_requested.emit(message, 3.0)
+	_refresh_pause_mic_controls()
+	if is_instance_valid(_pause_mic_status_label) and not message.strip_edges().is_empty():
+		_pause_mic_status_label.text = message
+		_pause_mic_status_label.add_theme_color_override("font_color", HorrorTheme.SUCCESS_SAGE if granted else HorrorTheme.ERROR)
+	if not message.strip_edges().is_empty():
+		SignalBus.dialog_requested.emit(message, 2.0 if granted else 3.5)
 
 func _show_exit_confirm() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -2150,6 +2240,7 @@ func _refresh_online_room_overlay(force: bool = false) -> void:
 func _on_settings_keybinds_changed() -> void:
 	_populate_desktop_hints()
 	_refresh_pause_keybind_buttons()
+	_refresh_mic_button_visuals()
 	if _inv_close_btn:
 		_inv_close_btn.text = ""
 		_inv_close_btn.tooltip_text = LocScript.pick("Tutup [%s]" % SettingsManager.get_action_key_text("toggle_inventory"), "Close [%s]" % SettingsManager.get_action_key_text("toggle_inventory"))
@@ -2380,6 +2471,8 @@ func _handle_pause_settings_scroll_input(event: InputEvent, target_scroll: Scrol
 			if pause_graphics_option and pause_graphics_option.get_popup().visible:
 				return false
 			if _pause_language_option and _pause_language_option.get_popup().visible:
+				return false
+			if _pause_mic_device_option and _pause_mic_device_option.get_popup().visible:
 				return false
 			if sc.get_global_rect().has_point(mb.position):
 				var step: int = -48 if mb.button_index == MOUSE_BUTTON_WHEEL_UP else 48

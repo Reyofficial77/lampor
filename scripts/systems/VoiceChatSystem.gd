@@ -10,10 +10,10 @@ const CAPTURE_SINK_BUS_NAME: String = "VoiceMicSink"
 const CAPTURE_BUS_NAME: String = "VoiceMicCapture"
 const CHUNK_INTERVAL_SEC: float = 0.20
 const MAX_CHUNK_SAMPLES: int = 1600
-const VOICE_RMS_THRESHOLD: float = 0.0020
+const VOICE_RMS_THRESHOLD: float = 0.0010
 const VOICE_HANGOVER_SEC: float = 0.55
 const PEER_SPEAK_DECAY_SEC: float = 0.65
-const MIC_GAIN: float = 2.4
+const MIC_GAIN: float = 3.0
 const PEER_BUFFER_LENGTH_SEC: float = 1.5
 const CHUNK_EDGE_FADE_SAMPLES: int = 24
 
@@ -41,9 +41,12 @@ var _last_emitted_local_speaking: bool = false
 var _last_emitted_speaker_keys: String = ""
 var _awaiting_os_permission: bool = false
 var _android_runtime_granted: bool = false
+var _android_perm_requested_msec: int = 0
+var _android_saw_focus_out: bool = false
 var _web_mic_pending: bool = false
 var _web_poll_accum: float = 0.0
 var _no_frame_elapsed: float = 0.0
+var _zero_signal_elapsed: float = 0.0
 var _tried_fallback_device: bool = false
 var _no_frame_warned: bool = false
 var last_permission_error: String = ""
@@ -60,8 +63,11 @@ func _exit_tree() -> void:
 		_stop_web_mic_capture()
 
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_APPLICATION_FOCUS_IN and _awaiting_os_permission and has_os_mic_permission():
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT and _awaiting_os_permission:
+		_android_saw_focus_out = true
+	elif what == NOTIFICATION_APPLICATION_FOCUS_IN and _awaiting_os_permission and has_os_mic_permission():
 		_awaiting_os_permission = false
+		_android_saw_focus_out = false
 		_android_runtime_granted = true
 		_activate_native_capture(true)
 
@@ -163,6 +169,24 @@ func _select_best_input_device(is_android: bool, exclude_device: String = "") ->
 		return "Default"
 	return filtered[0]
 
+func set_input_device(device_name: String) -> void:
+	if _is_headless or OS.has_feature("web"):
+		return
+	var cleaned: String = device_name.strip_edges()
+	if cleaned.is_empty():
+		cleaned = "Default"
+	AudioServer.input_device = cleaned
+	if mic_enabled:
+		_recreate_mic_player()
+		if _capture_effect != null:
+			_capture_effect.clear_buffer()
+		if is_instance_valid(_mic_player):
+			_mic_player.play()
+		_no_frame_elapsed = 0.0
+		_zero_signal_elapsed = 0.0
+		_tried_fallback_device = false
+		_no_frame_warned = false
+
 func _recreate_mic_player() -> void:
 	if _is_headless:
 		return
@@ -182,6 +206,8 @@ func request_mic_permission_and_enable() -> String:
 	var os_name: String = OS.get_name().to_lower()
 	if os_name == "android":
 		if not has_os_mic_permission():
+			_android_perm_requested_msec = Time.get_ticks_msec()
+			_android_saw_focus_out = false
 			var already_granted: bool = OS.request_permission("android.permission.RECORD_AUDIO")
 			if already_granted:
 				_android_runtime_granted = true
@@ -205,13 +231,15 @@ func _activate_native_capture(is_android: bool) -> String:
 		last_permission_error = LocScript.pick("Mikrofon perangkat tidak terdeteksi.", "Device microphone not detected.")
 		SignalBus.voice_mic_permission_status.emit(false, last_permission_error)
 		return "no_device"
-	AudioServer.input_device = chosen
+	if AudioServer.input_device != chosen:
+		AudioServer.input_device = chosen
 	_recreate_mic_player()
 	_no_frame_elapsed = 0.0
+	_zero_signal_elapsed = 0.0
 	_tried_fallback_device = false
 	_no_frame_warned = false
 	set_mic_enabled(true)
-	SignalBus.voice_mic_permission_status.emit(true, LocScript.pick("Mikrofon aktif.", "Microphone active."))
+	SignalBus.voice_mic_permission_status.emit(true, LocScript.pick("Mikrofon aktif (%s)." % chosen, "Microphone active (%s)." % chosen))
 	return "enabled"
 
 func _start_web_mic_capture() -> void:
@@ -436,7 +464,10 @@ func _poll_web_mic_capture() -> void:
 
 func _on_android_permission_result(permission: String, granted: bool) -> void:
 	if permission.ends_with("RECORD_AUDIO"):
+		var elapsed_ms: int = Time.get_ticks_msec() - _android_perm_requested_msec
+		var likely_missing_manifest: bool = (not granted) and (not _android_saw_focus_out) and (_android_perm_requested_msec > 0) and (elapsed_ms < 450)
 		_awaiting_os_permission = false
+		_android_saw_focus_out = false
 		if granted:
 			_android_runtime_granted = true
 			if _is_headless:
@@ -445,7 +476,13 @@ func _on_android_permission_result(permission: String, granted: bool) -> void:
 				_activate_native_capture(true)
 		else:
 			_android_runtime_granted = false
-			last_permission_error = LocScript.pick("Izin mikrofon ditolak oleh sistem Android. Aktifkan di Pengaturan Perangkat.", "Microphone permission denied by Android. Enable it in Device Settings.")
+			if likely_missing_manifest:
+				last_permission_error = LocScript.pick(
+					"Izin mikrofon ditolak langsung oleh Android (pop-up tidak muncul). Jika opsi Mikrofon tidak ada di Pengaturan Aplikasi, ekspor ulang & pasang APK terbaru dengan izin RECORD_AUDIO aktif.",
+					"Microphone permission was immediately denied by Android (no prompt). If Microphone is missing in App Settings, re-export and reinstall the APK with RECORD_AUDIO enabled."
+				)
+			else:
+				last_permission_error = LocScript.pick("Izin mikrofon ditolak oleh sistem Android. Aktifkan di Pengaturan Perangkat.", "Microphone permission denied by Android. Enable it in Device Settings.")
 			set_mic_enabled(false)
 			SignalBus.voice_mic_permission_status.emit(false, last_permission_error)
 
@@ -474,6 +511,7 @@ func set_mic_enabled(enabled: bool) -> bool:
 		if _mic_player != null and not _mic_player.playing:
 			_mic_player.play()
 		_no_frame_elapsed = 0.0
+		_zero_signal_elapsed = 0.0
 		_tried_fallback_device = false
 		_no_frame_warned = false
 		mic_enabled = true
@@ -672,14 +710,15 @@ func _process(delta: float) -> void:
 		var avail: int = _capture_effect.get_frames_available()
 		if avail > 0:
 			_no_frame_elapsed = 0.0
-			_no_frame_warned = false
 			var frames: PackedVector2Array = _capture_effect.get_buffer(avail)
 			var mix_rate: float = maxf(float(VOICE_SAMPLE_RATE), AudioServer.get_mix_rate())
 			var step: float = float(VOICE_SAMPLE_RATE) / mix_rate
 			var sum_sq: float = 0.0
+			var peak_sample: float = 0.0
 			for i: int in range(frames.size()):
 				var f: Vector2 = frames[i]
 				var mono: float = clampf((f.x + f.y) * 0.5, -1.0, 1.0)
+				peak_sample = maxf(peak_sample, absf(mono))
 				sum_sq += mono * mono
 				_resample_sum += mono
 				_resample_count += 1
@@ -692,6 +731,28 @@ func _process(delta: float) -> void:
 					_resample_sum = 0.0
 					_resample_count = 0
 					_resample_accum -= 1.0
+			if peak_sample > 0.0000001:
+				_zero_signal_elapsed = 0.0
+				_no_frame_warned = false
+			else:
+				_zero_signal_elapsed += delta
+				if _zero_signal_elapsed >= 3.5 and not _tried_fallback_device:
+					_tried_fallback_device = true
+					_zero_signal_elapsed = 0.0
+					var is_and_z: bool = OS.get_name().to_lower() == "android"
+					var alt_dev_z: String = _select_best_input_device(is_and_z, AudioServer.input_device)
+					if not alt_dev_z.is_empty():
+						AudioServer.input_device = alt_dev_z
+						_recreate_mic_player()
+						if is_instance_valid(_mic_player):
+							_mic_player.play()
+				elif _zero_signal_elapsed >= 3.0 and _tried_fallback_device and not _no_frame_warned:
+					_no_frame_warned = true
+					last_permission_error = LocScript.pick(
+						"Mikrofon aktif tetapi sinyal audio nol. Periksa izin Privasi Mikrofon OS atau pilih perangkat lain di Pengaturan.",
+						"Microphone is active but receiving zero audio. Check OS Microphone Privacy settings or choose another device in Settings."
+					)
+					SignalBus.voice_mic_permission_status.emit(false, last_permission_error)
 			local_rms = sqrt(sum_sq / float(maxi(1, frames.size())))
 			if local_rms >= VOICE_RMS_THRESHOLD:
 				_hangover_timer = VOICE_HANGOVER_SEC

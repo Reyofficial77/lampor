@@ -119,6 +119,11 @@ var keybinds_overlay: ColorRect
 var keybinds_panel: PanelContainer
 var keybinds_scroll: ScrollContainer
 var open_keybinds_button: Button
+var mic_device_option: OptionButton
+var mic_test_button: Button
+var mic_status_label: Label
+var mic_level_bar: ProgressBar
+var _menu_mic_test_active: bool = false
 
 # Akun LAMPOR & Gerbang Masuk (Force Login / Guest)
 var account_overlay: ColorRect
@@ -318,6 +323,10 @@ func _ready() -> void:
 	SignalBus.friends_updated.connect(_on_friends_updated)
 	if SignalBus.has_signal("inbox_messages_updated"):
 		SignalBus.inbox_messages_updated.connect(_on_inbox_messages_updated)
+	if SignalBus.has_signal("voice_mic_toggled"):
+		SignalBus.voice_mic_toggled.connect(func(_en: bool) -> void: _refresh_mic_settings_ui())
+	if SignalBus.has_signal("voice_mic_permission_status"):
+		SignalBus.voice_mic_permission_status.connect(_on_menu_mic_permission_status)
 	SignalBus.multiplayer_rooms_updated.connect(_on_multiplayer_rooms_updated)
 	SignalBus.multiplayer_room_updated.connect(_on_multiplayer_room_updated)
 	SignalBus.multiplayer_game_started.connect(_on_multiplayer_game_started)
@@ -331,7 +340,9 @@ func _ready() -> void:
 		call_deferred("_focus_control_safely", start_button)
 	call_deferred("_check_for_game_updates")
 	var am: Variant = _am()
-	if am != null and not am.account_gate_resolved:
+	if DisplayServer.get_name() == "headless":
+		_refresh_account_ui()
+	elif am != null and not am.account_gate_resolved:
 		call_deferred("_run_initial_account_gate")
 	else:
 		_refresh_account_ui()
@@ -361,6 +372,14 @@ func _process(delta: float) -> void:
 	menu_anim_time += delta
 	if horror_backdrop:
 		horror_backdrop.queue_redraw()
+	if settings_overlay and settings_overlay.visible and is_instance_valid(mic_level_bar):
+		var mp_lvl: Variant = _mp()
+		var target_val: float = 0.0
+		if mp_lvl != null and mp_lvl.has_method("is_mic_enabled") and bool(mp_lvl.call("is_mic_enabled")):
+			var vcs_lvl: Variant = mp_lvl.get("voice_chat")
+			if vcs_lvl != null and "local_rms" in vcs_lvl:
+				target_val = clampf(float(vcs_lvl.get("local_rms")) * 2200.0, 0.0, 100.0)
+		mic_level_bar.value = lerpf(mic_level_bar.value, target_val, minf(1.0, delta * 14.0))
 	if mp_server_overlay and mp_server_overlay.visible:
 		_mp_auto_refresh_accum += delta
 		if _mp_auto_refresh_accum >= 1.0:
@@ -494,6 +513,8 @@ func _build_menu() -> void:
 	settings_button.pressed.connect(func() -> void:
 		if settings_scroll:
 			settings_scroll.scroll_vertical = 0
+		_refresh_mic_device_options()
+		_refresh_mic_settings_ui()
 		_open_modal(settings_overlay, settings_panel)
 	)
 	menu_buttons.add_child(settings_button)
@@ -669,6 +690,8 @@ func _close_topmost_modal() -> bool:
 		_reset_mode_select_lock_notice()
 		_open_modal(mode_select_overlay, mode_select_panel)
 		return true
+	if top_ov == settings_overlay:
+		_stop_menu_mic_test()
 	top_ov.visible = false
 	if start_button:
 		start_button.call_deferred("grab_focus")
@@ -981,6 +1004,7 @@ func _build_settings_modal() -> void:
 			settings_close_btn.pressed.disconnect(c["callable"])
 		settings_close_btn.pressed.connect(func() -> void:
 			_cancel_keybind_listening()
+			_stop_menu_mic_test()
 			settings_overlay.visible = false
 		)
 	var body: VBoxContainer = modal["body"] as VBoxContainer
@@ -1109,6 +1133,51 @@ func _build_settings_modal() -> void:
 	friend_join_sp_check.toggled.connect(func(pressed: bool) -> void: SettingsManager.set_allow_friend_join_singleplayer(pressed))
 	HorrorTheme.style_check_button(friend_join_sp_check)
 	settings_tab_box.add_child(friend_join_sp_check)
+
+	settings_tab_box.add_child(HorrorTheme.make_hairline_divider())
+
+	var mic_sec_title := _make_label(LocScript.pick("MIKROFON (VOICE CHAT)", "MICROPHONE (VOICE CHAT)"), 13, HorrorTheme.PRIMARY, HORIZONTAL_ALIGNMENT_LEFT, "label-lg")
+	settings_tab_box.add_child(mic_sec_title)
+
+	var mic_dev_row := HBoxContainer.new()
+	mic_dev_row.mouse_filter = Control.MOUSE_FILTER_PASS
+	var mic_dev_lbl := _make_label(LocScript.pick("Perangkat Input", "Input Device"), 13, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "body-md")
+	mic_dev_lbl.custom_minimum_size.x = 132.0
+	mic_dev_row.add_child(mic_dev_lbl)
+	mic_device_option = OptionButton.new()
+	mic_device_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	mic_device_option.custom_minimum_size.y = 40.0
+	mic_device_option.item_selected.connect(_on_mic_device_selected)
+	HorrorTheme.style_option_button(mic_device_option)
+	mic_dev_row.add_child(mic_device_option)
+	mic_dev_row.visible = not OS.has_feature("web")
+	settings_tab_box.add_child(mic_dev_row)
+
+	mic_test_button = _make_button(LocScript.pick("TES / IZINKAN MIKROFON", "TEST / ALLOW MICROPHONE"), false, "secondary")
+	mic_test_button.pressed.connect(_on_mic_test_pressed)
+	settings_tab_box.add_child(mic_test_button)
+
+	mic_level_bar = ProgressBar.new()
+	mic_level_bar.min_value = 0.0
+	mic_level_bar.max_value = 100.0
+	mic_level_bar.value = 0.0
+	mic_level_bar.show_percentage = false
+	mic_level_bar.custom_minimum_size = Vector2(0.0, 10.0)
+	var bar_bg := StyleBoxFlat.new()
+	bar_bg.bg_color = HorrorTheme.SURFACE_LOWEST
+	bar_bg.set_corner_radius_all(3)
+	var bar_fill := StyleBoxFlat.new()
+	bar_fill.bg_color = HorrorTheme.SUCCESS_SAGE
+	bar_fill.set_corner_radius_all(3)
+	mic_level_bar.add_theme_stylebox_override("background", bar_bg)
+	mic_level_bar.add_theme_stylebox_override("fill", bar_fill)
+	settings_tab_box.add_child(mic_level_bar)
+
+	mic_status_label = _make_label("", 11, HorrorTheme.TEXT_MUTED, HORIZONTAL_ALIGNMENT_LEFT, "label-sm")
+	mic_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	settings_tab_box.add_child(mic_status_label)
+	_refresh_mic_device_options()
+	_refresh_mic_settings_ui()
 
 	update_check_button = _make_button(LocScript.pick("PERIKSA PEMBARUAN GAME", "CHECK FOR UPDATES"))
 	update_check_button.pressed.connect(func() -> void:
@@ -1260,10 +1329,93 @@ func _build_guide_bbcode() -> String:
 	var flash_k: String = _sm_get_action_key_text("flashlight")
 	var bag_k: String = _sm_get_action_key_text("toggle_inventory")
 	var drop_k: String = _sm_get_action_key_text("drop_item")
+	var mic_k: String = _sm_get_action_key_text("mic_toggle")
 	var slot_k: String = "%s-%s" % [_sm_get_action_key_text("slot_1"), _sm_get_action_key_text("slot_5")]
 	if LocScript.is_en():
-		return "[color=#ffb4ac][b]OBJECTIVE[/b][/color]\nSurvive from 01:00 WIB until the ritual completes before 05:00 WIB. Light 5 torches, barricade 3 house doors, collect 4 ritual relics, and burn them all at the Village Hall furnace. If 05:00 WIB strikes before completion, Lampor devours your soul.\n\n[color=#ffb4ac][b]DESKTOP CONTROLS[/b][/color]\n• %s: Move\n• Mouse: Look around\n• %s: Sprint (Hold)\n• %s: Interact, light torches, barricade doors, hide, & use Herbal Elixir / Battery / Energy Drink / Kentongan\n• %s: Flashlight\n• %s: Select hotbar slot\n• %s: Toggle inventory bag (15 slots)\n• %s: Drop item\n• Esc: Pause game\n\n[color=#ffb4ac][b]MOBILE CONTROLS[/b][/color]\nUse the left joystick to move, swipe the right half to look, and tap action buttons to run, interact (Hand icon), toggle flashlight, open bag, or pause.\n\n[color=#ffb4ac][b]SURVIVING LAMPOR[/b][/color]\n• Never stare directly at Lampor's green coffin; look away immediately.\n• When bells chime nearby, kill your flashlight and hide inside houses or closets.\n• Strike Kentongan [%s] to repel Lampor's chase for 5 seconds (Supply Shop only, 1-time use, max 5).\n• Drink Energy Drink [%s] to lock 100%% stamina for 3 seconds (anti-spam cooldown).\n• Lit torch areas steadily restore your Sanity.\n• Nightmare mode unlocks after 5 victories." % [move_k, sprint_k, act_k, flash_k, slot_k, bag_k, drop_k, act_k, act_k]
-	return "[color=#ffb4ac][b]TUJUAN PERMAINAN[/b][/color]\nBertahan mulai pukul 01.00 WIB hingga ritual tuntas sebelum pukul 05.00 WIB. Nyalakan 5 obor, amankan 3 pintu rumah, kumpulkan 4 benda ritual, lalu bakar semuanya di tungku balai desa. Bila pukul 05.00 WIB tiba sebelum tuntas, Lampor akan langsung melahapmu.\n\n[color=#ffb4ac][b]KONTROL DESKTOP[/b][/color]\n• %s: Bergerak\n• Mouse: Melihat ke sekitar\n• %s: Berlari (Tahan)\n• %s: Interaksi, nyalakan obor, palang pintu, sembunyi, & pakai Jamu/Baterai/Energy Drink/Kentongan\n• %s: Senter\n• %s: Pilih slot hotbar\n• %s: Buka tas inventori (15 slot)\n• %s: Jatuhkan barang\n• Esc: Jeda permainan\n\n[color=#ffb4ac][b]KONTROL MOBILE[/b][/color]\nGunakan joystick kiri untuk bergerak, geser sisi kanan layar untuk menoleh, dan sentuh tombol aksi di layar untuk lari, interaksi (ikon Tangan), senter, tas, serta jeda.\n\n[color=#ffb4ac][b]MENGHADAPI LAMPOR[/b][/color]\n• Jangan menatap langsung keranda Lampor; segera palingkan pandangan.\n• Saat lonceng mendekat, matikan senter dan bersembunyilah di rumah atau lemari.\n• Pukul Kentongan [%s] untuk mengusir kejaran Lampor selama 5 detik (hanya tersedia di Toko Bekal, 1x pakai, maks. 5).\n• Minum Energy Drink [%s] untuk mengunci stamina 100%% selama 3 detik (ada jeda anti-spam).\n• Area obor yang menyala membantu memulihkan kewarasan.\n• Mode Nightmare terbuka setelah 5 kemenangan." % [move_k, sprint_k, act_k, flash_k, slot_k, bag_k, drop_k, act_k, act_k]
+		return "[color=#ffb4ac][b]OBJECTIVE[/b][/color]\nSurvive from 01:00 WIB until the ritual completes before 05:00 WIB. Light 5 torches, barricade 3 house doors, collect 4 ritual relics, and burn them all at the Village Hall furnace. If 05:00 WIB strikes before completion, Lampor devours your soul.\n\n[color=#ffb4ac][b]DESKTOP CONTROLS[/b][/color]\n• %s: Move\n• Mouse: Look around\n• %s: Sprint (Hold)\n• %s: Interact, light torches, barricade doors, hide, & use Herbal Elixir / Battery / Energy Drink / Kentongan\n• %s: Flashlight\n• %s: Select hotbar slot\n• %s: Toggle inventory bag (15 slots)\n• %s: Drop item\n• %s: Toggle microphone (Multiplayer)\n• Esc: Pause game\n\n[color=#ffb4ac][b]MOBILE CONTROLS[/b][/color]\nUse the left joystick to move, swipe the right half to look, and tap action buttons to run, interact (Hand icon), toggle flashlight, open bag, or pause.\n\n[color=#ffb4ac][b]SURVIVING LAMPOR[/b][/color]\n• Never stare directly at Lampor's green coffin; look away immediately.\n• When bells chime nearby, kill your flashlight and hide inside houses or closets.\n• Strike Kentongan [%s] to repel Lampor's chase for 5 seconds (Supply Shop only, 1-time use, max 5).\n• Drink Energy Drink [%s] to lock 100%% stamina for 3 seconds (anti-spam cooldown).\n• Lit torch areas steadily restore your Sanity.\n• Nightmare mode unlocks after 5 victories." % [move_k, sprint_k, act_k, flash_k, slot_k, bag_k, drop_k, mic_k, act_k, act_k]
+	return "[color=#ffb4ac][b]TUJUAN PERMAINAN[/b][/color]\nBertahan mulai pukul 01.00 WIB hingga ritual tuntas sebelum pukul 05.00 WIB. Nyalakan 5 obor, amankan 3 pintu rumah, kumpulkan 4 benda ritual, lalu bakar semuanya di tungku balai desa. Bila pukul 05.00 WIB tiba sebelum tuntas, Lampor akan langsung melahapmu.\n\n[color=#ffb4ac][b]KONTROL DESKTOP[/b][/color]\n• %s: Bergerak\n• Mouse: Melihat ke sekitar\n• %s: Berlari (Tahan)\n• %s: Interaksi, nyalakan obor, palang pintu, sembunyi, & pakai Jamu/Baterai/Energy Drink/Kentongan\n• %s: Senter\n• %s: Pilih slot hotbar\n• %s: Buka tas inventori (15 slot)\n• %s: Jatuhkan barang\n• %s: Nyalakan / Matikan Mikrofon (Multiplayer)\n• Esc: Jeda permainan\n\n[color=#ffb4ac][b]KONTROL MOBILE[/b][/color]\nGunakan joystick kiri untuk bergerak, geser sisi kanan layar untuk menoleh, dan sentuh tombol aksi di layar untuk lari, interaksi (ikon Tangan), senter, tas, serta jeda.\n\n[color=#ffb4ac][b]MENGHADAPI LAMPOR[/b][/color]\n• Jangan menatap langsung keranda Lampor; segera palingkan pandangan.\n• Saat lonceng mendekat, matikan senter dan bersembunyilah di rumah atau lemari.\n• Pukul Kentongan [%s] untuk mengusir kejaran Lampor selama 5 detik (hanya tersedia di Toko Bekal, 1x pakai, maks. 5).\n• Minum Energy Drink [%s] untuk mengunci stamina 100%% selama 3 detik (ada jeda anti-spam).\n• Area obor yang menyala membantu memulihkan kewarasan.\n• Mode Nightmare terbuka setelah 5 kemenangan." % [move_k, sprint_k, act_k, flash_k, slot_k, bag_k, drop_k, mic_k, act_k, act_k]
+
+func _refresh_mic_device_options() -> void:
+	if not is_instance_valid(mic_device_option):
+		return
+	mic_device_option.clear()
+	var mp: Variant = _mp()
+	var devices: PackedStringArray = mp.call("get_available_mic_devices") if (mp != null and mp.has_method("get_available_mic_devices")) else AudioServer.get_input_device_list()
+	if devices.is_empty():
+		mic_device_option.add_item("Default")
+		mic_device_option.select(0)
+		return
+	var saved: String = str(SettingsManager.mic_input_device).strip_edges()
+	var selected_idx: int = 0
+	for idx: int in range(devices.size()):
+		var dev: String = devices[idx]
+		mic_device_option.add_item(dev)
+		if dev == saved:
+			selected_idx = idx
+	mic_device_option.select(selected_idx)
+
+func _on_mic_device_selected(index: int) -> void:
+	if not is_instance_valid(mic_device_option) or index < 0 or index >= mic_device_option.item_count:
+		return
+	var chosen: String = mic_device_option.get_item_text(index)
+	SettingsManager.set_mic_input_device(chosen)
+	var mp: Variant = _mp()
+	if mp != null and mp.has_method("set_mic_input_device"):
+		mp.call("set_mic_input_device", chosen)
+	_refresh_mic_settings_ui()
+
+func _on_mic_test_pressed() -> void:
+	var mp: Variant = _mp()
+	if mp == null:
+		return
+	if mp.has_method("is_mic_enabled") and bool(mp.call("is_mic_enabled")):
+		_menu_mic_test_active = false
+		if mp.has_method("set_mic_enabled"):
+			mp.call("set_mic_enabled", false)
+		_refresh_mic_settings_ui()
+		return
+	_menu_mic_test_active = true
+	if mp.has_method("request_mic_permission_and_enable"):
+		var status: String = str(mp.call("request_mic_permission_and_enable"))
+		if status == "pending_os" and is_instance_valid(mic_status_label):
+			mic_status_label.text = LocScript.pick("Meminta izin mikrofon perangkat...", "Requesting device microphone permission...")
+			mic_status_label.add_theme_color_override("font_color", HorrorTheme.RELIC_BRASS)
+	_refresh_mic_settings_ui()
+
+func _on_menu_mic_permission_status(granted: bool, message: String) -> void:
+	if not is_instance_valid(self) or not is_inside_tree():
+		return
+	_refresh_mic_settings_ui()
+	if is_instance_valid(mic_status_label) and not message.strip_edges().is_empty():
+		mic_status_label.text = message
+		mic_status_label.add_theme_color_override("font_color", HorrorTheme.SUCCESS_SAGE if granted else HorrorTheme.ERROR)
+
+func _refresh_mic_settings_ui() -> void:
+	var mp: Variant = _mp()
+	var mic_on: bool = mp != null and mp.has_method("is_mic_enabled") and bool(mp.call("is_mic_enabled"))
+	if is_instance_valid(mic_test_button):
+		mic_test_button.text = LocScript.pick("HENTIKAN TES MIKROFON" if mic_on else "TES / IZINKAN MIKROFON", "STOP MIC TEST" if mic_on else "TEST / ALLOW MICROPHONE")
+	if is_instance_valid(mic_level_bar) and not mic_on:
+		mic_level_bar.value = 0.0
+	if is_instance_valid(mic_status_label):
+		var dev_name: String = str(mp.call("get_active_mic_device_name")) if (mp != null and mp.has_method("get_active_mic_device_name")) else str(SettingsManager.mic_input_device)
+		if mic_on:
+			mic_status_label.text = LocScript.pick("Mikrofon aktif (%s). Coba berbicara untuk melihat bar suara." % dev_name, "Microphone active (%s). Speak to see the input bar move." % dev_name)
+			mic_status_label.add_theme_color_override("font_color", HorrorTheme.SUCCESS_SAGE)
+		else:
+			var mic_key: String = _sm_get_action_key_text("mic_toggle")
+			mic_status_label.text = LocScript.pick("Tombol mic di Multiplayer: [%s] · Pilih perangkat lalu tekan tombol di atas untuk menguji." % mic_key, "Multiplayer mic key: [%s] · Choose device and press above to test." % mic_key)
+			mic_status_label.add_theme_color_override("font_color", HorrorTheme.TEXT_MUTED)
+
+func _stop_menu_mic_test() -> void:
+	if not _menu_mic_test_active:
+		return
+	_menu_mic_test_active = false
+	var mp: Variant = _mp()
+	if mp != null and not bool(mp.get("is_online_session")) and mp.has_method("set_mic_enabled"):
+		mp.call("set_mic_enabled", false)
+	if is_instance_valid(mic_level_bar):
+		mic_level_bar.value = 0.0
 
 func _sm_is_en() -> bool:
 	if SettingsManager.has_method("is_en"):
@@ -1967,7 +2119,7 @@ func _get_active_scroll_container() -> ScrollContainer:
 	return null
 
 func _has_open_option_popup() -> bool:
-	for opt: OptionButton in [graphics_option, language_option, character_option, mode_character_option, create_room_max_players_opt, create_room_diff_opt, create_room_timescale_opt]:
+	for opt: OptionButton in [graphics_option, language_option, character_option, mode_character_option, mic_device_option, create_room_max_players_opt, create_room_diff_opt, create_room_timescale_opt]:
 		if is_instance_valid(opt) and opt.get_popup().visible:
 			return true
 	return false
@@ -5267,6 +5419,8 @@ func _on_friends_reset_pressed() -> void:
 	_refresh_friends_data(false)
 
 func _trigger_initial_friends_badge_fetch() -> void:
+	if DisplayServer.get_name() == "headless":
+		return
 	var am: Variant = _am()
 	if am == null or not am.can_access_online_modes():
 		return
@@ -5331,7 +5485,7 @@ func _open_inbox_modal() -> void:
 	if inbox_scroll:
 		inbox_scroll.scroll_vertical = 0
 	var am: Variant = _am()
-	if am != null and am.has_method("fetch_inbox_messages"):
+	if DisplayServer.get_name() != "headless" and am != null and am.has_method("fetch_inbox_messages"):
 		await am.call("fetch_inbox_messages")
 		if not is_instance_valid(self) or not is_inside_tree():
 			return

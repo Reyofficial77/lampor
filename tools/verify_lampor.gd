@@ -236,14 +236,28 @@ func _run_checks() -> void:
 	var dv_chk: CheckButton = mm.get("dialog_voice_check") as CheckButton
 	if dv_chk == null or stb == null or not stb.is_ancestor_of(dv_chk) or not dv_chk.button_pressed:
 		errors.append("MainMenu dialog_voice_check missing, outside settings_tab_box, or not enabled by default")
+	var mm_mic_dev_opt: OptionButton = mm.get("mic_device_option") as OptionButton
+	var mm_mic_test_btn: Button = mm.get("mic_test_button") as Button
+	var mm_mic_status_lbl: Label = mm.get("mic_status_label") as Label
+	var mm_mic_lvl_bar: ProgressBar = mm.get("mic_level_bar") as ProgressBar
+	if mm_mic_dev_opt == null or mm_mic_test_btn == null or mm_mic_status_lbl == null or mm_mic_lvl_bar == null or stb == null or not stb.is_ancestor_of(mm_mic_test_btn):
+		errors.append("MainMenu Settings mic controls missing or outside settings_tab_box")
+	else:
+		mm_mic_test_btn.pressed.emit()
+		var mp_mm: Variant = mm.call("_mp")
+		if mp_mm == null or not bool(mp_mm.call("is_mic_enabled")):
+			errors.append("MainMenu mic_test_button did not enable mic in headless mode")
+		mm.call("_stop_menu_mic_test")
+		if mp_mm != null and bool(mp_mm.call("is_mic_enabled")):
+			errors.append("MainMenu _stop_menu_mic_test did not disable mic")
 	var open_kb_btn: Button = mm.get("open_keybinds_button") as Button
 	var kb_ov: Control = mm.get("keybinds_overlay") as Control
 	var kb_scr: ScrollContainer = mm.get("keybinds_scroll") as ScrollContainer
 	var kb_btns_var: Variant = mm.get("_keybind_buttons")
 	if open_kb_btn == null or stb == null or not stb.is_ancestor_of(open_kb_btn):
 		errors.append("MainMenu open_keybinds_button missing or not inside settings_tab_box")
-	elif kb_ov == null or kb_scr == null or not (kb_btns_var is Dictionary) or (kb_btns_var as Dictionary).size() != 14:
-		errors.append("MainMenu keybinds_overlay, keybinds_scroll, or 14 _keybind_buttons missing")
+	elif kb_ov == null or kb_scr == null or not (kb_btns_var is Dictionary) or (kb_btns_var as Dictionary).size() != 15:
+		errors.append("MainMenu keybinds_overlay, keybinds_scroll, or 15 _keybind_buttons missing")
 	else:
 		for kb_val: Variant in (kb_btns_var as Dictionary).values():
 			var kb_btn: Control = kb_val as Control
@@ -788,15 +802,21 @@ func _run_checks() -> void:
 			if not bool(mp.call("is_mic_enabled")) or self.paused:
 				errors.append("HUD _on_mic_toggle_pressed did not re-enable mic natively without fake modal")
 			if vcs != null and is_instance_valid(vcs_inst):
-				for expected_m: String in ["_start_web_mic_capture", "_stop_web_mic_capture", "_poll_web_mic_capture", "_on_android_permission_result", "_recreate_mic_player"]:
+				for expected_m: String in ["_start_web_mic_capture", "_stop_web_mic_capture", "_poll_web_mic_capture", "_on_android_permission_result", "_recreate_mic_player", "set_input_device"]:
 					if not vcs_inst.has_method(expected_m):
 						errors.append("VoiceChatSystem missing native capture method: " + expected_m)
 				vcs_inst.call("_on_android_permission_result", "android.permission.RECORD_AUDIO", true)
 				if not bool(vcs_inst.get("_android_runtime_granted")) or not bool(vcs_inst.get("mic_enabled")):
 					errors.append("VoiceChatSystem _on_android_permission_result(true) did not activate mic")
+				vcs_inst.set("_android_perm_requested_msec", Time.get_ticks_msec())
+				vcs_inst.set("_android_saw_focus_out", false)
 				vcs_inst.call("_on_android_permission_result", "android.permission.RECORD_AUDIO", false)
-				if bool(vcs_inst.get("_android_runtime_granted")) or bool(vcs_inst.get("mic_enabled")) or str(vcs_inst.get("last_permission_error")).strip_edges().is_empty():
-					errors.append("VoiceChatSystem _on_android_permission_result(false) did not disable mic or record error")
+				var perm_err: String = str(vcs_inst.get("last_permission_error")).strip_edges()
+				if bool(vcs_inst.get("_android_runtime_granted")) or bool(vcs_inst.get("mic_enabled")) or not perm_err.contains("RECORD_AUDIO"):
+					errors.append("VoiceChatSystem instant Android deny did not surface RECORD_AUDIO APK guidance: " + perm_err)
+			var exp_cfg_txt: String = FileAccess.get_file_as_string("res://export_presets.cfg")
+			if not exp_cfg_txt.contains("permissions/record_audio=true") or not exp_cfg_txt.contains("permissions/modify_audio_settings=true") or not exp_cfg_txt.contains("android.permission.RECORD_AUDIO"):
+				errors.append("export_presets.cfg Android preset missing record_audio/modify_audio_settings or RECORD_AUDIO custom_permissions")
 			mp.call("reset_to_singleplayer")
 			gm.set("current_state", 0)
 
@@ -888,10 +908,14 @@ func _run_checks() -> void:
 			sm.call("set_dialog_voice_enabled", true)
 			if not p_dv_chk.button_pressed:
 				errors.append("HUD pause_dialog_voice_check did not sync back when dialog_voice_enabled=true")
+		var p_mic_test: Button = hud_node.get("_pause_mic_test_button") as Button
+		var p_mic_lbl: Label = hud_node.get("_pause_mic_status_label") as Label
+		if p_mic_test == null or p_mic_lbl == null or p_settings_cont == null or not p_settings_cont.is_ancestor_of(p_mic_test):
+			errors.append("HUD pause settings mic test controls missing or outside pause_settings_container")
 		if p_settings_cont == null or p_open_kb == null or not p_settings_cont.is_ancestor_of(p_open_kb):
 			errors.append("HUD pause_open_keybinds_button missing or not inside pause_settings_container")
-		elif p_kb_cont == null or p_settings_cont.is_ancestor_of(p_kb_cont) or not (p_kb_btns_var is Dictionary) or (p_kb_btns_var as Dictionary).size() != 14:
-			errors.append("HUD pause_keybinds_container invalid, nested inside pause_settings_container, or missing 14 _pause_keybind_buttons")
+		elif p_kb_cont == null or p_settings_cont.is_ancestor_of(p_kb_cont) or not (p_kb_btns_var is Dictionary) or (p_kb_btns_var as Dictionary).size() != 15:
+			errors.append("HUD pause_keybinds_container invalid, nested inside pause_settings_container, or missing 15 _pause_keybind_buttons")
 		else:
 			for pkb_val: Variant in (p_kb_btns_var as Dictionary).values():
 				var pkb_btn: Control = pkb_val as Control

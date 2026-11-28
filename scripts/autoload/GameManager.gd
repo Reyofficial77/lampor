@@ -114,6 +114,19 @@ var active_fate_cards: Array[Dictionary] = []
 var drawn_fate_card_ids: Array[String] = []
 var fate_cards_offered_acts: Dictionary = {}
 var fate_modifiers: Dictionary = {}
+var fate_card_selection_active: bool = false
+var local_fate_selection_act: int = 0
+var local_fate_selection_done: bool = false
+var mp_fate_round_active: bool = false
+var mp_fate_round_act: int = 0
+var mp_fate_all_chosen: bool = true
+var mp_fate_chosen_count: int = 0
+var mp_fate_total_count: int = 1
+var mp_fate_pending_names: Array[String] = []
+var mp_fate_completed_acts: Dictionary = {}
+var mp_fate_chosen_uids: Dictionary = {}
+var mp_fate_round_started_ms: int = 0
+const MP_FATE_SAFETY_TIMEOUT_MS: int = 18000
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -1500,6 +1513,8 @@ func _process(delta: float) -> void:
 		return
 	if in_online and mp != null and not mp.is_room_owner:
 		_apply_client_world_state()
+		if is_fate_card_selection_blocking():
+			return
 		if furnace_burning:
 			furnace_time_left = maxf(0.0, furnace_time_left - delta)
 			SignalBus.furnace_progress_updated.emit(furnace_time_left, furnace_total_time)
@@ -1513,6 +1528,10 @@ func _process(delta: float) -> void:
 					int(furnace_total_time),
 					furnace_time_left <= 0.0
 				)
+		return
+	if in_online and mp != null and mp.is_room_owner and mp_fate_round_active:
+		sync_mp_fate_selection_state()
+	if is_fate_card_selection_blocking():
 		return
 	if current_act == Act.BABAK_1:
 		_sync_babak_1_progress()
@@ -1691,7 +1710,188 @@ func reset_fate_cards() -> void:
 	drawn_fate_card_ids.clear()
 	fate_cards_offered_acts.clear()
 	fate_modifiers.clear()
+	fate_card_selection_active = false
+	local_fate_selection_act = 0
+	local_fate_selection_done = false
+	mp_fate_round_active = false
+	mp_fate_round_act = 0
+	mp_fate_all_chosen = true
+	mp_fate_chosen_count = 0
+	mp_fate_total_count = 1
+	mp_fate_pending_names.clear()
+	mp_fate_completed_acts.clear()
+	mp_fate_chosen_uids.clear()
+	mp_fate_round_started_ms = 0
 	SignalBus.fate_cards_reset.emit()
+
+func _get_local_player_uid() -> String:
+	var am: Variant = get_account_manager(false)
+	if am != null and "user_id" in am:
+		return str(am.get("user_id")).strip_edges()
+	return ""
+
+func _get_player_display_label(p_dict: Dictionary) -> String:
+	var disp: String = str(p_dict.get("displayName", p_dict.get("display_name", ""))).strip_edges()
+	if not disp.is_empty():
+		return disp
+	var uname: String = str(p_dict.get("username", "")).strip_edges()
+	if not uname.is_empty():
+		return uname
+	return LocScript.pick("Pemain", "Player")
+
+func is_fate_card_selection_blocking() -> bool:
+	if fate_card_selection_active:
+		return true
+	var mp: Variant = get_multiplayer_manager(false)
+	if mp != null and mp.is_online_session and mp_fate_round_active and not mp_fate_all_chosen:
+		return true
+	return false
+
+func is_multiplayer_fate_barrier_needed(act_num: int) -> bool:
+	var mp: Variant = get_multiplayer_manager(false)
+	if mp == null or not mp.is_online_session:
+		return false
+	if bool(mp_fate_completed_acts.get(act_num, false)):
+		return false
+	return mp.room_players.size() > 1
+
+func begin_fate_card_selection(act_num: int) -> void:
+	fate_card_selection_active = true
+	local_fate_selection_act = act_num
+	local_fate_selection_done = false
+	var mp: Variant = get_multiplayer_manager(false)
+	if mp != null and mp.is_online_session and mp.is_room_owner and not bool(mp_fate_completed_acts.get(act_num, false)):
+		mp_fate_round_active = true
+		mp_fate_round_act = act_num
+		mp_fate_all_chosen = false
+		mp_fate_round_started_ms = Time.get_ticks_msec()
+		sync_mp_fate_selection_state()
+		mp._poll_elapsed = mp.GAME_POLL_INTERVAL
+
+func mark_local_fate_card_chosen(act_num: int, card: Dictionary) -> void:
+	local_fate_selection_act = act_num
+	local_fate_selection_done = true
+	var mp: Variant = get_multiplayer_manager(false)
+	if mp != null and mp.is_online_session:
+		var uid: String = _get_local_player_uid()
+		if not uid.is_empty():
+			mp_fate_chosen_uids[uid] = act_num
+		mp.push_event("fate_card_chosen", {
+			"act": act_num,
+			"userId": uid,
+			"cardId": str(card.get("id", ""))
+		})
+		mp._poll_elapsed = mp.GAME_POLL_INTERVAL
+		sync_mp_fate_selection_state()
+
+func finish_local_fate_card_overlay(_act_num: int) -> void:
+	fate_card_selection_active = false
+
+func get_owner_fate_selection_world_state() -> Dictionary:
+	var completed: Array[int] = []
+	for k: Variant in mp_fate_completed_acts.keys():
+		if bool(mp_fate_completed_acts[k]):
+			completed.append(int(k))
+	return {
+		"active": mp_fate_round_active,
+		"act": mp_fate_round_act,
+		"allChosen": mp_fate_all_chosen,
+		"chosenCount": mp_fate_chosen_count,
+		"totalCount": mp_fate_total_count,
+		"pendingNames": mp_fate_pending_names.duplicate(),
+		"completedActs": completed
+	}
+
+func sync_mp_fate_selection_state() -> void:
+	var mp: Variant = get_multiplayer_manager(false)
+	if mp == null or not mp.is_online_session or not mp.is_room_owner:
+		return
+	if not mp_fate_round_active or mp_fate_round_act <= 0:
+		return
+
+	var target_act: int = mp_fate_round_act
+	var my_uid: String = _get_local_player_uid()
+	var total_cnt: int = 0
+	var chosen_cnt: int = 0
+	var pending: Array[String] = []
+
+	for p_var: Variant in mp.room_players:
+		if not (p_var is Dictionary):
+			continue
+		var pd: Dictionary = p_var as Dictionary
+		var uid: String = str(pd.get("userId", pd.get("user_id", pd.get("id", "")))).strip_edges()
+		var pstate_raw: Variant = pd.get("playerState", pd.get("state", {}))
+		var pstate: Dictionary = pstate_raw as Dictionary if pstate_raw is Dictionary else {}
+		var is_local: bool = (not my_uid.is_empty() and uid == my_uid) or (my_uid.is_empty() and bool(pd.get("isHost", false)))
+		if not is_local and pstate.has("isAlive") and not bool(pstate.get("isAlive", true)):
+			continue
+		total_cnt += 1
+		var p_done: bool = false
+		if is_local:
+			p_done = (local_fate_selection_act == target_act and local_fate_selection_done)
+		if not p_done and not uid.is_empty() and int(mp_fate_chosen_uids.get(uid, 0)) >= target_act:
+			p_done = true
+		if not p_done and int(pstate.get("fateCardAct", 0)) == target_act and bool(pstate.get("fateCardDone", false)):
+			p_done = true
+			if not uid.is_empty():
+				mp_fate_chosen_uids[uid] = target_act
+		if p_done:
+			chosen_cnt += 1
+		else:
+			pending.append(_get_player_display_label(pd))
+
+	if total_cnt <= 0:
+		total_cnt = 1
+		chosen_cnt = 1 if (local_fate_selection_act == target_act and local_fate_selection_done) else 0
+		if chosen_cnt == 0:
+			pending.append(LocScript.pick("Host", "Host"))
+
+	var timed_out: bool = mp_fate_round_started_ms > 0 and (Time.get_ticks_msec() - mp_fate_round_started_ms) >= MP_FATE_SAFETY_TIMEOUT_MS
+	var all_done: bool = (chosen_cnt >= total_cnt) or timed_out
+	if timed_out and chosen_cnt < total_cnt:
+		chosen_cnt = total_cnt
+		pending.clear()
+
+	mp_fate_chosen_count = chosen_cnt
+	mp_fate_total_count = total_cnt
+	mp_fate_pending_names = pending
+	mp_fate_all_chosen = all_done
+
+	if all_done:
+		mp_fate_round_active = false
+		mp_fate_completed_acts[target_act] = true
+		mp.push_event("fate_card_all_ready", {"act": target_act})
+		mp._poll_elapsed = mp.GAME_POLL_INTERVAL
+
+	SignalBus.fate_card_round_status_changed.emit(target_act, mp_fate_chosen_count, mp_fate_total_count, mp_fate_all_chosen, mp_fate_pending_names.duplicate())
+
+func get_fate_round_status(act_num: int) -> Dictionary:
+	if not is_multiplayer_fate_barrier_needed(act_num):
+		var done_local: bool = local_fate_selection_done and local_fate_selection_act == act_num
+		return {
+			"act": act_num,
+			"chosen_count": 1 if done_local else 0,
+			"total_count": 1,
+			"all_chosen": done_local or bool(mp_fate_completed_acts.get(act_num, false)),
+			"pending_names": []
+		}
+	var all_ready: bool = bool(mp_fate_completed_acts.get(act_num, false)) or (mp_fate_round_act == act_num and mp_fate_all_chosen and not mp_fate_round_active)
+	return {
+		"act": act_num,
+		"chosen_count": mp_fate_chosen_count,
+		"total_count": maxi(1, mp_fate_total_count),
+		"all_chosen": all_ready,
+		"pending_names": mp_fate_pending_names.duplicate()
+	}
+
+func are_all_players_fate_ready(act_num: int) -> bool:
+	if bool(mp_fate_completed_acts.get(act_num, false)):
+		return true
+	if not is_multiplayer_fate_barrier_needed(act_num):
+		return local_fate_selection_done and local_fate_selection_act == act_num
+	if mp_fate_round_act == act_num and mp_fate_all_chosen and not mp_fate_round_active:
+		return true
+	return false
 
 func _restore_fate_cards_snapshot(raw_fate: Variant) -> void:
 	reset_fate_cards()
@@ -2339,6 +2539,51 @@ func _apply_client_world_state() -> void:
 			if absf(host_left - furnace_time_left) > 1.2:
 				furnace_time_left = host_left
 
+	var raw_fate_sel: Variant = ws.get("fateSelection", {})
+	if raw_fate_sel is Dictionary and not (raw_fate_sel as Dictionary).is_empty():
+		var fs: Dictionary = raw_fate_sel as Dictionary
+		var next_active: bool = bool(fs.get("active", false))
+		var next_act: int = clampi(int(fs.get("act", 0)), 0, 3)
+		var next_all: bool = bool(fs.get("allChosen", true))
+		var next_chosen: int = maxi(0, int(fs.get("chosenCount", 0)))
+		var next_total: int = maxi(1, int(fs.get("totalCount", 1)))
+		var next_pending: Array[String] = []
+		var raw_pending: Variant = fs.get("pendingNames", [])
+		if raw_pending is Array:
+			for p_name: Variant in (raw_pending as Array):
+				var p_str: String = str(p_name).strip_edges()
+				if not p_str.is_empty():
+					next_pending.append(p_str)
+		var raw_comp: Variant = fs.get("completedActs", [])
+		if raw_comp is Array:
+			for c_act: Variant in (raw_comp as Array):
+				var ca: int = int(c_act)
+				if ca >= 1 and ca <= 3:
+					mp_fate_completed_acts[ca] = true
+		if next_act >= 1 and next_all and not next_active:
+			mp_fate_completed_acts[next_act] = true
+		var changed: bool = (
+			next_active != mp_fate_round_active
+			or next_act != mp_fate_round_act
+			or next_all != mp_fate_all_chosen
+			or next_chosen != mp_fate_chosen_count
+			or next_total != mp_fate_total_count
+			or next_pending != mp_fate_pending_names
+		)
+		mp_fate_round_active = next_active
+		mp_fate_round_act = next_act
+		mp_fate_all_chosen = next_all
+		mp_fate_chosen_count = next_chosen
+		mp_fate_total_count = next_total
+		mp_fate_pending_names = next_pending
+		if changed and next_act >= 1:
+			SignalBus.fate_card_round_status_changed.emit(next_act, mp_fate_chosen_count, mp_fate_total_count, mp_fate_all_chosen, mp_fate_pending_names.duplicate())
+		if mp_fate_round_active and mp_fate_round_act >= 1 and not bool(fate_cards_offered_acts.get(mp_fate_round_act, false)):
+			var world_hud_root: Node = get_tree().current_scene
+			var hud_node: Node = world_hud_root.find_child("HUD", true, false) if is_instance_valid(world_hud_root) else null
+			if hud_node and hud_node.has_method("_try_offer_fate_card"):
+				hud_node.call_deferred("_try_offer_fate_card", mp_fate_round_act)
+
 func _on_multiplayer_event_received(event_type: String, payload: Dictionary, sender_name: String) -> void:
 	var am: Variant = get_account_manager(false)
 	if event_type == "player_kicked":
@@ -2362,6 +2607,22 @@ func _on_multiplayer_event_received(event_type: String, payload: Dictionary, sen
 
 	var world_root: Node = get_tree().current_scene
 	match event_type:
+		"fate_card_chosen":
+			var fc_act: int = clampi(int(payload.get("act", 0)), 0, 3)
+			var fc_uid: String = str(payload.get("userId", "")).strip_edges()
+			if fc_act >= 1 and not fc_uid.is_empty():
+				mp_fate_chosen_uids[fc_uid] = maxi(int(mp_fate_chosen_uids.get(fc_uid, 0)), fc_act)
+				sync_mp_fate_selection_state()
+		"fate_card_all_ready":
+			var ready_act: int = clampi(int(payload.get("act", 0)), 0, 3)
+			if ready_act >= 1:
+				mp_fate_completed_acts[ready_act] = true
+				if mp_fate_round_act == ready_act or mp_fate_round_act == 0:
+					mp_fate_round_act = ready_act
+					mp_fate_all_chosen = true
+					mp_fate_round_active = false
+					mp_fate_pending_names.clear()
+				SignalBus.fate_card_round_status_changed.emit(ready_act, mp_fate_chosen_count, mp_fate_total_count, true, [])
 		"torch_lit":
 			var t_id: int = int(payload.get("torch_id", payload.get("torchId", -1)))
 			var t_path: String = str(payload.get("node_path", ""))
@@ -2453,6 +2714,18 @@ func _handle_kicked_or_disconnected(reason: String) -> void:
 	is_sandbox_mode = false
 	sandbox_time_scale = 1.0
 	reset_sandbox_flags()
+	fate_card_selection_active = false
+	local_fate_selection_act = 0
+	local_fate_selection_done = false
+	mp_fate_round_active = false
+	mp_fate_round_act = 0
+	mp_fate_all_chosen = true
+	mp_fate_chosen_count = 0
+	mp_fate_total_count = 1
+	mp_fate_pending_names.clear()
+	mp_fate_completed_acts.clear()
+	mp_fate_chosen_uids.clear()
+	mp_fate_round_started_ms = 0
 	var mp: Variant = get_multiplayer_manager(false)
 	if mp != null:
 		mp.reset_to_singleplayer()

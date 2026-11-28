@@ -398,6 +398,10 @@ func has_line_of_sight_to_player() -> bool:
 func _physics_process(delta: float) -> void:
 	if GameManager.current_state != GameManager.GameState.PLAYING:
 		return
+	if GameManager.is_fate_card_selection_blocking():
+		velocity = Vector3.ZERO
+		SignalBus.lampor_stare_detected.emit(0.0)
+		return
 
 	if _is_lampor_disabled_by_room():
 		visible = false
@@ -723,7 +727,7 @@ func _give_up_chase() -> void:
 	_set_state(State.PATROL)
 
 func _on_player_noise(level: float, noise_pos: Vector3) -> void:
-	if _is_lampor_disabled_by_room() or GameManager.sandbox_freeze_lampor:
+	if _is_lampor_disabled_by_room() or GameManager.sandbox_freeze_lampor or GameManager.is_fate_card_selection_blocking():
 		return
 	var mp: Variant = _mp()
 	if mp != null and mp.is_online_session and not mp.is_room_owner:

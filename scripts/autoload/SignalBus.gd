@@ -57,3 +57,4 @@ signal inbox_messages_updated(messages: Array, unread_count: int)
 # Fate Card signals
 signal fate_card_applied(card_data: Dictionary)
 signal fate_cards_reset()
+signal fate_card_round_status_changed(act_num: int, chosen_count: int, total_count: int, all_chosen: bool, pending_names: Array)

@@ -479,7 +479,9 @@ func _collect_local_player_state() -> Dictionary:
 		"isHiding": hiding,
 		"isAlive": not caught,
 		"micOn": is_mic_enabled(),
-		"speaking": is_local_speaking()
+		"speaking": is_local_speaking(),
+		"fateCardAct": GameManager.local_fate_selection_act,
+		"fateCardDone": GameManager.local_fate_selection_done
 	}
 
 func _collect_owner_world_state() -> Dictionary:
@@ -508,6 +510,7 @@ func _collect_owner_world_state() -> Dictionary:
 		"furnaceTimeLeft": snappedf(GameManager.furnace_time_left, 0.1),
 		"ritualItems": GameManager.ritual_items.duplicate(true),
 		"lampor": lampor_dict,
+		"fateSelection": GameManager.get_owner_fate_selection_world_state(),
 		"sandbox": {
 			"freezeLampor": freeze_lampor,
 			"pauseClock": pause_clock,
@@ -583,6 +586,7 @@ func _sync_tick() -> void:
 	var prev_seq: int = last_event_seq
 
 	_apply_room_response(data, false)
+	GameManager.sync_mp_fate_selection_state()
 	SignalBus.multiplayer_room_updated.emit(current_room, room_players)
 
 	var new_status: String = str(current_room.get("status", "")).to_lower()

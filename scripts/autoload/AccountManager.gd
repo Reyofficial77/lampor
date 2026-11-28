@@ -200,7 +200,7 @@ func api_request(method: String, path: String, body: Variant = null, use_auth: b
 		"Content-Type: application/json",
 		"Accept: application/json",
 		"Cache-Control: no-cache",
-		"X-Lampor-Client-Version: 1.3.0"
+		"X-Lampor-Client-Version: 1.3.1"
 	])
 	var used_token: String = session_token if (use_auth and not session_token.is_empty()) else ""
 	if not used_token.is_empty():

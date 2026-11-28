@@ -4,7 +4,7 @@ extends Control
 const LocScript = preload("res://scripts/systems/Loc.gd")
 const ProfanityFilterScript = preload("res://scripts/systems/ProfanityFilter.gd")
 const VerifiedBadgeScript = preload("res://scripts/ui/VerifiedBadge.gd")
-const GAME_VERSION: String = "v1.3.0"
+const GAME_VERSION: String = "v1.3.1"
 const FALLBACK_REDEEM_CODES: Dictionary = {
 	"LAMPORGIFT": {"type": "coins", "quantity": 2500, "description": "hadiah untuk kalian!"},
 	"FOREVERYONE": {"type": "coins", "quantity": 5000, "description": "Hadiah untuk semua pemain!", "description_en": "A gift for everyone!"},
@@ -19,10 +19,6 @@ var title_label: Label
 var subtitle_label: Label
 var title_rule: ColorRect
 var stats_label: Label
-var account_chip_panel: PanelContainer
-var account_chip_avatar_rect: TextureRect
-var account_chip_label: Label
-var account_chip_badge: Control
 var top_right_bar: HBoxContainer
 var top_account_chip: PanelContainer
 var top_account_avatar_rect: TextureRect
@@ -444,45 +440,6 @@ func _build_menu() -> void:
 	stats_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	main_content.add_child(stats_label)
 	_refresh_currency_display()
-
-	account_chip_panel = PanelContainer.new()
-	account_chip_panel.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	account_chip_panel.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	account_chip_panel.tooltip_text = LocScript.pick("Lihat & Edit Profil", "View & Edit Profile")
-	account_chip_panel.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOWEST, HorrorTheme.OUTLINE_VARIANT, 4, 8, 4))
-	account_chip_panel.gui_input.connect(_on_account_chip_gui_input)
-	main_content.add_child(account_chip_panel)
-
-	var chip_hbox := HBoxContainer.new()
-	chip_hbox.add_theme_constant_override("separation", 7)
-	chip_hbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	account_chip_panel.add_child(chip_hbox)
-
-	var chip_avatar_frame := PanelContainer.new()
-	chip_avatar_frame.custom_minimum_size = Vector2(22.0, 22.0)
-	chip_avatar_frame.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	chip_avatar_frame.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	chip_avatar_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	chip_avatar_frame.add_theme_stylebox_override("panel", HorrorTheme.make_chip_style(HorrorTheme.SURFACE_LOWEST, HorrorTheme.OUTLINE_VARIANT, 3, 1, 1))
-	chip_hbox.add_child(chip_avatar_frame)
-
-	account_chip_avatar_rect = TextureRect.new()
-	account_chip_avatar_rect.custom_minimum_size = Vector2(20.0, 20.0)
-	account_chip_avatar_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	account_chip_avatar_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	account_chip_avatar_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	chip_avatar_frame.add_child(account_chip_avatar_rect)
-
-	account_chip_label = _make_label("", 12, HorrorTheme.ON_SURFACE, HORIZONTAL_ALIGNMENT_LEFT, "title-md")
-	account_chip_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	account_chip_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	chip_hbox.add_child(account_chip_label)
-
-	account_chip_badge = VerifiedBadgeScript.create_control(14.0)
-	account_chip_badge.visible = false
-	account_chip_badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	account_chip_badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	chip_hbox.add_child(account_chip_badge)
 
 	var menu_buttons := VBoxContainer.new()
 	menu_buttons.name = "MenuButtons"
@@ -2745,8 +2702,8 @@ func _apply_layout() -> void:
 		top_right_bar.offset_left = -minf(view_size.x - tr_margin * 2.0, 840.0)
 		top_right_bar.offset_bottom = tr_margin + 40.0
 	if top_account_chip:
-		top_account_chip.visible = not narrow
-		top_account_chip.custom_minimum_size.y = 34.0 if short_screen else 38.0
+		top_account_chip.visible = true
+		top_account_chip.custom_minimum_size.y = 34.0 if (narrow or short_screen) else 38.0
 	if update_button:
 		update_button.custom_minimum_size.y = 34.0 if narrow or short_screen else 38.0
 		update_button.add_theme_font_size_override("font_size", 10 if narrow else 11)
@@ -2951,13 +2908,9 @@ func _run_initial_account_gate() -> void:
 	if am == null or am.account_gate_resolved:
 		_refresh_account_ui()
 		return
-	if account_chip_label:
-		account_chip_label.text = LocScript.pick("Memeriksa...", "Checking...")
 	if top_account_label:
 		top_account_label.text = LocScript.pick("Memeriksa...", "Checking...")
 	var checking_tex: Texture2D = _get_cached_avatar_texture("", "")
-	if is_instance_valid(account_chip_avatar_rect):
-		account_chip_avatar_rect.texture = checking_tex
 	if is_instance_valid(top_account_avatar_rect):
 		top_account_avatar_rect.texture = checking_tex
 	var verified: bool = await am.verify_saved_session()
@@ -3405,11 +3358,6 @@ func _refresh_account_ui() -> void:
 		chip_text = LocScript.pick("Masuk", "Sign In")
 		chip_color = HorrorTheme.PRIMARY
 		card_tex = _get_cached_avatar_texture("", "")
-	if account_chip_label:
-		account_chip_label.text = chip_text
-		account_chip_label.add_theme_color_override("font_color", chip_color)
-	if is_instance_valid(account_chip_avatar_rect):
-		account_chip_avatar_rect.texture = card_tex
 	if top_account_label:
 		top_account_label.text = chip_text
 		top_account_label.add_theme_color_override("font_color", chip_color)
@@ -3419,8 +3367,6 @@ func _refresh_account_ui() -> void:
 		profile_status_badge_label.text = "[ONLINE]" if logged_in else (LocScript.pick("[TAMU]", "[GUEST]") if is_guest else "[OFFLINE]")
 		profile_status_badge_label.add_theme_color_override("font_color", HorrorTheme.SUCCESS_SAGE if logged_in else Color("9e8886"))
 	var is_v: bool = logged_in and am != null and bool(am.get("is_verified"))
-	if account_chip_badge:
-		account_chip_badge.visible = is_v
 	if top_account_badge:
 		top_account_badge.visible = is_v
 	if profile_verified_badge:

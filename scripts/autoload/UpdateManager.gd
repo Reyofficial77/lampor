@@ -31,7 +31,17 @@ const FIX_NOTES_CACHE_PATH: String = "user://lampor_fix_notes.md"
 const AUTO_CHECK_INTERVAL_SEC: float = 300.0
 const REQUIRED_UPDATE_FILES: PackedStringArray = ["project.godot", "scripts/autoload/UpdateManager.gd", "FIX_NOTES.md"]
 
-const BUNDLED_FIX_NOTES: String = """# LAMPOR v1.3.0
+const BUNDLED_FIX_NOTES: String = """# LAMPOR v1.3.1
+
+## v1.3.1
+
+- **Animasi Mengambil & Menggenggam Barang dari Kantong Celana**:
+  - Memperbarui animasi karakter pemain (baik sudut pandang FPP maupun tampilan karakter pemain lain di Multiplayer) saat berganti item: tangan menjangkau ke kantong celana kanan/kiri, menggenggam item di dalam saku, menariknya keluar, lalu menggenggam erat barang tersebut dengan tekukan jari dan genggaman yang alami.
+- **Pemilihan Kartu Takdir (Timer 10 Detik & Sinkronisasi Semua Pemain)**:
+  - Menambahkan batas waktu **10 detik** pada layar pemilihan **Kartu Takdir** dengan bilah hitung mundur; jika waktu habis sebelum memilih, sistem otomatis memilihkan salah satu kartu untuk pemain.
+  - Selama proses pemilihan kartu berlangsung, simulasi permainan (waktu malam, tungku, kewarasan, dan Lampor) dijeda sementara dan sistem menunggu seluruh pemain di room selesai memilih kartu terlebih dahulu sebelum permainan dilanjutkan.
+- **Penyederhanaan Antarmuka Menu Utama & Menu Jeda**:
+  - Menghapus tombol akun duplikat di atas tombol **MULAI PERMAINAN** pada Menu Utama (profil tetap dapat diakses melalui chip akun di kanan atas) serta menghapus tombol panel khusus dari Menu Jeda permainan.
 
 ## v1.3.0
 

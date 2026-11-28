@@ -118,7 +118,6 @@ var _mp_refresh_elapsed: float = 0.0
 var _mp_last_sig: String = ""
 var _last_sandbox_hint_active: bool = false
 var _last_admin_hint_active: bool = false
-var pause_admin_button: Button = null
 var pause_online_note_label: Label = null
 var low_fear_tint: ColorRect = null
 var _pause_settings_box: VBoxContainer = null
@@ -750,8 +749,6 @@ func toggle_pause() -> void:
 			GameManager.save_active_run()
 		joystick_vector = Vector2.ZERO
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-		if is_instance_valid(pause_admin_button):
-			pause_admin_button.visible = GameManager.is_logged_in_admin()
 		_apply_overlay_layouts()
 		var pause_panel: Control = pause_menu.get_node_or_null("Center/Panel") as Control
 		if pause_panel:
@@ -805,17 +802,6 @@ func _style_pause_and_dialogs() -> void:
 		settings_button.text = "PENGATURAN"
 		settings_button.custom_minimum_size.y = 44.0
 		HorrorTheme.style_button(settings_button, "secondary", 13, true)
-	if pause_vbox and pause_admin_button == null:
-		pause_admin_button = Button.new()
-		pause_admin_button.name = "AdminPanelButton"
-		pause_admin_button.text = "ADMIN PANEL [ALT+F2]"
-		pause_admin_button.custom_minimum_size.y = 44.0
-		HorrorTheme.style_button(pause_admin_button, "primary", 12, true)
-		pause_admin_button.pressed.connect(func() -> void: GameManager.toggle_admin_panel())
-		pause_vbox.add_child(pause_admin_button)
-		if exit_button and exit_button.get_parent() == pause_vbox:
-			pause_vbox.move_child(pause_admin_button, exit_button.get_index())
-		pause_admin_button.visible = GameManager.is_logged_in_admin()
 	if exit_button:
 		exit_button.text = "KEMBALI KE MENU UTAMA"
 		exit_button.custom_minimum_size.y = 44.0
@@ -3919,6 +3905,23 @@ func _try_offer_fate_card(act_num: int) -> void:
 		return
 	if not is_instance_valid(fate_card_overlay):
 		return
+	var in_online: bool = _is_online_session_active()
+	if in_online and not is_cutscene_active() and not is_fate_card_overlay_open():
+		if inventory_overlay and inventory_overlay.visible:
+			inventory_overlay.visible = false
+			selected_swap_slot = -1
+			var player_inv: PlayerController = GameManager.player_character as PlayerController
+			if player_inv:
+				player_inv.is_inventory_open = false
+		if pause_menu and pause_menu.visible:
+			pause_menu.visible = false
+			if pause_settings_container:
+				pause_settings_container.visible = false
+			if pause_keybinds_container:
+				pause_keybinds_container.visible = false
+			var player_pm: PlayerController = GameManager.player_character as PlayerController
+			if player_pm:
+				player_pm.is_pause_menu_open = false
 	var modal_blocking: bool = is_cutscene_active() \
 		or is_fate_card_overlay_open() \
 		or get_tree().paused \

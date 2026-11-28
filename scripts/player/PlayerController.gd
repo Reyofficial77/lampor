@@ -55,10 +55,15 @@ var equip_raise_blend: float = 1.0
 var visual_equipped_item_id: String = "flashlight"
 var _equip_prev_item_id: String = "flashlight"
 var _equip_switch_progress: float = 1.0
-var _equip_switch_duration: float = 0.44
-var _equip_swap_point: float = 0.44
+var _equip_switch_duration: float = 0.64
+var _equip_swap_point: float = 0.42
+var _equip_grab_end: float = 0.56
+var _equip_grab_sfx_played: bool = false
+var equip_anim_phase: String = "holding"
 var _item_hold_blend: float = 1.0
 var _left_equip_blend: float = 0.0
+var _hand_grip_blend: float = 1.0
+var _left_grip_blend: float = 0.0
 var _move_dir_local_smooth: Vector2 = Vector2.ZERO
 var _sprint_momentum: float = 0.0
 var _idle_fidget_wait: float = 4.5
@@ -170,8 +175,11 @@ func _ready() -> void:
 	else:
 		visual_equipped_item_id = equipped_item_id
 		_equip_switch_progress = 1.0
+		equip_anim_phase = "holding" if visual_equipped_item_id != "" else "empty"
 		_item_hold_blend = 1.0 if visual_equipped_item_id != "" else 0.0
 		_left_equip_blend = 1.0 if visual_equipped_item_id == "kentongan" else 0.0
+		_hand_grip_blend = 1.0 if visual_equipped_item_id != "" else 0.0
+		_left_grip_blend = 1.0 if visual_equipped_item_id == "kentongan" else 0.0
 		_sync_hand_prop_visibility()
 		_sync_flashlight_state(true)
 
@@ -255,7 +263,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if GameManager.current_state != GameManager.GameState.PLAYING:
 		return
 
-	if is_inventory_open or is_pause_menu_open or (get_viewport().gui_get_focus_owner() is LineEdit):
+	if is_inventory_open or is_pause_menu_open or GameManager.is_fate_card_selection_blocking() or (get_viewport().gui_get_focus_owner() is LineEdit):
 		return
 
 	if is_hiding:
@@ -324,7 +332,7 @@ func _physics_process(delta: float) -> void:
 		_sync_hand_prop_visibility()
 		_sync_flashlight_state(true)
 
-	if is_hiding or is_inventory_open or is_pause_menu_open or (get_viewport().gui_get_focus_owner() is LineEdit):
+	if is_hiding or is_inventory_open or is_pause_menu_open or GameManager.is_fate_card_selection_blocking() or (get_viewport().gui_get_focus_owner() is LineEdit):
 		release_held_sprint()
 		current_noise_level = 0.0
 		velocity = Vector3.ZERO
@@ -549,8 +557,12 @@ func _apply_equipped_item(item_data: Dictionary, instant: bool = false) -> void:
 		_equip_prev_item_id = next_id
 		_equip_switch_progress = 1.0
 		equip_raise_blend = 1.0
+		_equip_grab_sfx_played = true
+		equip_anim_phase = "holding" if next_id != "" else "empty"
 		_item_hold_blend = 1.0 if next_id != "" else 0.0
 		_left_equip_blend = 1.0 if next_id == "kentongan" else 0.0
+		_hand_grip_blend = 1.0 if next_id != "" else 0.0
+		_left_grip_blend = 1.0 if next_id == "kentongan" else 0.0
 		_sync_hand_prop_visibility()
 		_sync_flashlight_state(true)
 		if interaction_ray:
@@ -561,16 +573,21 @@ func _apply_equipped_item(item_data: Dictionary, instant: bool = false) -> void:
 		_equip_prev_item_id = visual_equipped_item_id
 		_equip_switch_progress = 0.0
 		equip_raise_blend = 0.0
+		_equip_grab_sfx_played = false
 		_idle_fidget_timer = 0.0
+		equip_anim_phase = "reaching_pocket"
 		if _equip_prev_item_id == "" and next_id != "":
-			_equip_switch_duration = 0.36
-			_equip_swap_point = 0.36
+			_equip_switch_duration = 0.64
+			_equip_swap_point = 0.40
+			_equip_grab_end = 0.54
 		elif _equip_prev_item_id != "" and next_id == "":
-			_equip_switch_duration = 0.36
+			_equip_switch_duration = 0.52
 			_equip_swap_point = 0.56
+			_equip_grab_end = 0.66
 		else:
-			_equip_switch_duration = 0.46
+			_equip_switch_duration = 0.78
 			_equip_swap_point = 0.44
+			_equip_grab_end = 0.56
 	equipped_item_id = next_id
 	_sync_hand_prop_visibility()
 	_sync_flashlight_state(true)
@@ -578,17 +595,27 @@ func _apply_equipped_item(item_data: Dictionary, instant: bool = false) -> void:
 		interaction_ray._update_prompt()
 
 func _sync_hand_prop_visibility() -> void:
-	var show_prop: bool = not in_cutscene and not is_caught and not is_hiding and equipped_item_id != ""
+	var shown_id: String = visual_equipped_item_id
+	var show_prop: bool = not in_cutscene and not is_caught and not is_hiding and shown_id != ""
 	for prop_id: String in hand_item_props.keys():
 		var prop_node: Node3D = hand_item_props[prop_id] as Node3D
 		if prop_node:
-			prop_node.visible = show_prop and (prop_id == equipped_item_id)
+			prop_node.visible = show_prop and (prop_id == shown_id)
 	for prop_id: String in left_hand_item_props.keys():
 		var prop_node: Node3D = left_hand_item_props[prop_id] as Node3D
 		if prop_node:
-			prop_node.visible = show_prop and (prop_id == equipped_item_id)
-	var drawing_down: bool = (_equip_switch_progress < _equip_swap_point) and (equipped_item_id != "")
-	var prop_scale: Vector3 = _base_hand_prop_scale * 0.001 if drawing_down else _base_hand_prop_scale
+			prop_node.visible = show_prop and (prop_id == shown_id)
+	var scale_mult: float = 1.0
+	if shown_id == "":
+		scale_mult = 0.001
+	elif _equip_switch_progress < _equip_swap_point:
+		var t_stow: float = clampf(_equip_switch_progress / maxf(0.01, _equip_swap_point), 0.0, 1.0)
+		if t_stow >= 0.78:
+			scale_mult = lerpf(1.0, 0.001, (t_stow - 0.78) / 0.22)
+	elif _equip_switch_progress < _equip_grab_end:
+		var t_grab: float = clampf((_equip_switch_progress - _equip_swap_point) / maxf(0.01, _equip_grab_end - _equip_swap_point), 0.0, 1.0)
+		scale_mult = lerpf(0.25, 1.0, t_grab)
+	var prop_scale: Vector3 = _base_hand_prop_scale * scale_mult
 	if hand_prop_pivot and is_instance_valid(hand_prop_pivot):
 		hand_prop_pivot.scale = prop_scale
 	if left_hand_prop_pivot and is_instance_valid(left_hand_prop_pivot):
@@ -1588,18 +1615,29 @@ func _apply_fpp_hand_override() -> void:
 		var progress: float = clampf(1.0 - (action_anim_timer / maxf(0.01, action_anim_duration)), 0.0, 1.0)
 		action_nudge = sin(progress * PI) * 16.0
 
-	# Trouser-pocket reach curve when switching hotbar items
+	# Trouser-pocket reach curve when switching hotbar items (reach -> grab -> pull out -> grip)
 	var pocket_reach: float = 0.0
 	var pocket_settle: float = 0.0
+	var pocket_grab_tug: float = 0.0
 	if _equip_switch_progress < 1.0:
 		if _equip_switch_progress < _equip_swap_point:
 			var t_down: float = clampf(_equip_switch_progress / maxf(0.01, _equip_swap_point), 0.0, 1.0)
 			pocket_reach = t_down * t_down * (3.0 - 2.0 * t_down)
+		elif _equip_switch_progress < _equip_grab_end:
+			pocket_reach = 1.0
+			var t_grab: float = clampf((_equip_switch_progress - _equip_swap_point) / maxf(0.01, _equip_grab_end - _equip_swap_point), 0.0, 1.0)
+			pocket_grab_tug = sin(t_grab * PI) * 5.0
 		else:
-			var t_up: float = clampf((_equip_switch_progress - _equip_swap_point) / maxf(0.01, 1.0 - _equip_swap_point), 0.0, 1.0)
+			var t_up: float = clampf((_equip_switch_progress - _equip_grab_end) / maxf(0.01, 1.0 - _equip_grab_end), 0.0, 1.0)
 			var smooth_up: float = t_up * t_up * (3.0 - 2.0 * t_up)
 			pocket_reach = 1.0 - smooth_up
-			pocket_settle = sin(t_up * PI) * 7.5
+			pocket_settle = sin(t_up * PI) * 8.5
+
+	# Subtle natural torso/chest lean toward pocket when reaching
+	spine_yaw -= pocket_reach * 5.5
+	spine_roll += pocket_reach * 4.5
+	_set_skeleton_bone_rot("Torso", spine_pitch * 0.55, spine_roll * 0.6, spine_yaw * 0.55)
+	_set_skeleton_bone_rot("Chest", spine_pitch * 0.45, spine_roll * 0.4, spine_yaw * 0.45)
 
 	var hand_idx: int = _find_bone_idx(player_skeleton, "Hand.R")
 	var hand_l_idx: int = _find_bone_idx(player_skeleton, "Hand.L")
@@ -1692,10 +1730,10 @@ func _apply_fpp_hand_override() -> void:
 
 	# Blend cleanly toward right trouser pocket when switching items!
 	if pocket_reach > 0.001 or absf(pocket_settle) > 0.01:
-		var pocket_sh_r := Vector3(6.0, -4.0, -6.0)
-		var pocket_up_r := Vector3(12.0, -60.0, -16.0)
-		var pocket_lo_r := Vector3(-44.0, -8.0, -18.0)
-		var pocket_ha_r := Vector3(-12.0, -14.0, 16.0)
+		var pocket_sh_r := Vector3(10.0, -6.0, -8.0)
+		var pocket_up_r := Vector3(16.0 + pocket_grab_tug * 0.6, -70.0, -18.0)
+		var pocket_lo_r := Vector3(-52.0 - pocket_grab_tug, -12.0, -24.0)
+		var pocket_ha_r := Vector3(-16.0, -14.0, 20.0)
 		target_sh_r = target_sh_r.lerp(pocket_sh_r, pocket_reach)
 		target_up_r = target_up_r.lerp(pocket_up_r, pocket_reach) + Vector3(-pocket_settle, 0.0, pocket_settle * 0.45)
 		target_lo_r = target_lo_r.lerp(pocket_lo_r, pocket_reach) + Vector3(-pocket_settle * 0.7, 0.0, 0.0)
@@ -1722,7 +1760,7 @@ func _apply_fpp_hand_override() -> void:
 
 	var kent_sh_l := Vector3(-18.0 + shoulder_pump_l * 0.35, 8.0, -6.0)
 	var kent_up_l := Vector3(
-		-95.0 - pitch_deg - idle_breath * 0.9 - sway_lift * 0.5 + look_sway.y * 0.8 + fear_tremor * 0.3 + pocket_reach * 26.0,
+		-95.0 - pitch_deg - idle_breath * 0.9 - sway_lift * 0.5 + look_sway.y * 0.8 + fear_tremor * 0.3,
 		52.0 + sprint_blend * 4.5,
 		-28.0 - sway_yaw * 0.6 - sprint_blend * 5.0 + look_sway.x * 1.0
 	)
@@ -1734,6 +1772,16 @@ func _apply_fpp_hand_override() -> void:
 	var target_up_l: Vector3 = empty_up_l.lerp(kent_up_l, lb)
 	var target_lo_l: Vector3 = empty_lo_l.lerp(kent_lo_l, lb)
 	var target_ha_l: Vector3 = empty_ha_l.lerp(kent_ha_l, lb)
+	var left_pocket: bool = (equipped_item_id == "kentongan") or (_equip_prev_item_id == "kentongan")
+	if left_pocket and (pocket_reach > 0.001 or absf(pocket_settle) > 0.01):
+		var pocket_sh_l := Vector3(10.0, 6.0, 8.0)
+		var pocket_up_l := Vector3(16.0 + pocket_grab_tug * 0.6, 70.0, 18.0)
+		var pocket_lo_l := Vector3(-52.0 - pocket_grab_tug, 12.0, 24.0)
+		var pocket_ha_l := Vector3(-16.0, 14.0, -20.0)
+		target_sh_l = target_sh_l.lerp(pocket_sh_l, pocket_reach)
+		target_up_l = target_up_l.lerp(pocket_up_l, pocket_reach) + Vector3(-pocket_settle, 0.0, -pocket_settle * 0.45)
+		target_lo_l = target_lo_l.lerp(pocket_lo_l, pocket_reach) + Vector3(-pocket_settle * 0.7, 0.0, 0.0)
+		target_ha_l = target_ha_l.lerp(pocket_ha_l, pocket_reach) + Vector3(pocket_settle * 0.4, 0.0, 0.0)
 	_set_skeleton_bone_rot("Shoulder.L", target_sh_l.x, target_sh_l.y, target_sh_l.z)
 	_set_skeleton_bone_rot("UpperArm.L", target_up_l.x, target_up_l.y, target_up_l.z)
 	_set_skeleton_bone_rot("LowerArm.L", target_lo_l.x, target_lo_l.y, target_lo_l.z)
@@ -1746,22 +1794,28 @@ func _apply_fpp_hand_override() -> void:
 		var hl_s: float = lerpf(0.86, 0.78, lb)
 		player_skeleton.set_bone_pose_scale(hand_l_idx, Vector3(hl_s, hl_s, hl_s))
 
-	# Finger curls: relaxed breath curve in idle, clenched when empty-handed sprint, snug grip on held items
+	# Finger curls: open gently while reaching into pocket, close tightly when grabbing & holding item
 	var relax_curl: float = lerpf(14.0, 34.0, sprint_blend * move_blend) + breath_wave * 2.5
-	var hold_curl: float = 44.0
-	var curl_r: float = lerpf(relax_curl, hold_curl, hb)
-	for finger_name: String in ["Index", "Middle", "Ring", "Pinky"]:
-		_set_skeleton_bone_rot(finger_name + "2.R", 0.0, -curl_r * 0.95, 0.0)
-		_set_skeleton_bone_rot(finger_name + "3.R", 0.0, -curl_r * 1.18, 0.0)
-		_set_skeleton_bone_rot(finger_name + "4.R", 0.0, -curl_r * 0.68, 0.0)
-		var curl_l: float = lerpf(relax_curl, hold_curl, lb)
-		_set_skeleton_bone_rot(finger_name + "2.L", 0.0, curl_l * 0.95, 0.0)
-		_set_skeleton_bone_rot(finger_name + "3.L", 0.0, curl_l * 1.18, 0.0)
-		_set_skeleton_bone_rot(finger_name + "4.L", 0.0, curl_l * 0.68, 0.0)
-	_set_skeleton_bone_rot("Thumb2.R", lerpf(6.0, 14.0, hb), lerpf(-14.0, -34.0, hb), lerpf(-8.0, -18.0, hb))
-	_set_skeleton_bone_rot("Thumb3.R", lerpf(4.0, 8.0, hb), lerpf(-10.0, -24.0, hb), 0.0)
-	_set_skeleton_bone_rot("Thumb2.L", lerpf(6.0, 14.0, lb), lerpf(14.0, 34.0, lb), lerpf(8.0, 18.0, lb))
-	_set_skeleton_bone_rot("Thumb3.L", lerpf(4.0, 8.0, lb), lerpf(10.0, 24.0, lb), 0.0)
+	var hold_curl: float = 56.0
+	var grip_r: float = clampf(_hand_grip_blend, 0.0, 1.0)
+	var grip_l: float = clampf(_left_grip_blend, 0.0, 1.0)
+	var curl_r: float = lerpf(relax_curl, hold_curl, grip_r)
+	var curl_l: float = lerpf(relax_curl, hold_curl, grip_l)
+	var finger_names: Array[String] = ["Index", "Middle", "Ring", "Pinky"]
+	var finger_stagger: Array[float] = [0.92, 1.00, 1.06, 1.12]
+	for fi: int in range(finger_names.size()):
+		var finger_name: String = finger_names[fi]
+		var stg: float = finger_stagger[fi]
+		_set_skeleton_bone_rot(finger_name + "2.R", 0.0, -curl_r * 0.95 * stg, 0.0)
+		_set_skeleton_bone_rot(finger_name + "3.R", 0.0, -curl_r * 1.18 * stg, 0.0)
+		_set_skeleton_bone_rot(finger_name + "4.R", 0.0, -curl_r * 0.68 * stg, 0.0)
+		_set_skeleton_bone_rot(finger_name + "2.L", 0.0, curl_l * 0.95 * stg, 0.0)
+		_set_skeleton_bone_rot(finger_name + "3.L", 0.0, curl_l * 1.18 * stg, 0.0)
+		_set_skeleton_bone_rot(finger_name + "4.L", 0.0, curl_l * 0.68 * stg, 0.0)
+	_set_skeleton_bone_rot("Thumb2.R", lerpf(6.0, 18.0, grip_r), lerpf(-14.0, -40.0, grip_r), lerpf(-8.0, -22.0, grip_r))
+	_set_skeleton_bone_rot("Thumb3.R", lerpf(4.0, 12.0, grip_r), lerpf(-10.0, -28.0, grip_r), 0.0)
+	_set_skeleton_bone_rot("Thumb2.L", lerpf(6.0, 18.0, grip_l), lerpf(14.0, 40.0, grip_l), lerpf(8.0, 22.0, grip_l))
+	_set_skeleton_bone_rot("Thumb3.L", lerpf(4.0, 12.0, grip_l), lerpf(10.0, 28.0, grip_l), 0.0)
 
 func _set_skeleton_bone_rot(canonical_bone_name: String, rot_x_deg: float, rot_z_deg: float, rot_y_deg: float) -> void:
 	var idx: int = _find_bone_idx(player_skeleton, canonical_bone_name)
@@ -1822,8 +1876,12 @@ func trigger_action_animation(anim_name: String, duration: float = 0.45) -> void
 	if _equip_switch_progress < 1.0:
 		visual_equipped_item_id = equipped_item_id
 		_equip_switch_progress = 1.0
+		_equip_grab_sfx_played = true
+		equip_anim_phase = "holding" if equipped_item_id != "" else "empty"
 		_item_hold_blend = 1.0 if equipped_item_id != "" else 0.0
 		_left_equip_blend = 1.0 if equipped_item_id == "kentongan" else 0.0
+		_hand_grip_blend = 1.0 if equipped_item_id != "" else 0.0
+		_left_grip_blend = 1.0 if equipped_item_id == "kentongan" else 0.0
 		_sync_hand_prop_visibility()
 	if not model_anim_player:
 		return
@@ -1896,10 +1954,39 @@ func _update_fpp_camera_and_arm(delta: float, is_moving: bool) -> void:
 			_equip_switch_progress = minf(1.0, _equip_switch_progress + (delta / maxf(0.05, _equip_switch_duration)))
 			if _equip_switch_progress >= _equip_swap_point and visual_equipped_item_id != equipped_item_id:
 				visual_equipped_item_id = equipped_item_id
+				if not _equip_grab_sfx_played:
+					_equip_grab_sfx_played = true
+					if visual_equipped_item_id != "" and DisplayServer.get_name() != "headless":
+						AudioManager.play_sound("item_pickup", -16.0, 1.28)
 				_sync_hand_prop_visibility()
+		if _equip_switch_progress < _equip_swap_point:
+			equip_anim_phase = "reaching_pocket"
+		elif _equip_switch_progress < _equip_grab_end:
+			equip_anim_phase = "grabbing_pocket"
+		elif _equip_switch_progress < 1.0:
+			equip_anim_phase = "pulling_out"
+		else:
+			equip_anim_phase = "holding" if visual_equipped_item_id != "" else "empty"
+
 		equip_raise_blend = _equip_switch_progress
 		_item_hold_blend = move_toward(_item_hold_blend, 1.0 if visual_equipped_item_id != "" else 0.0, delta * 7.5)
 		_left_equip_blend = move_toward(_left_equip_blend, 1.0 if visual_equipped_item_id == "kentongan" else 0.0, delta * 6.5)
+
+		var target_grip_r: float = 0.0
+		var target_grip_l: float = 0.0
+		match equip_anim_phase:
+			"reaching_pocket":
+				target_grip_r = 0.85 if _equip_prev_item_id != "" else 0.10
+				target_grip_l = 0.85 if _equip_prev_item_id == "kentongan" else 0.0
+			"grabbing_pocket":
+				var grab_t: float = clampf((_equip_switch_progress - _equip_swap_point) / maxf(0.01, _equip_grab_end - _equip_swap_point), 0.0, 1.0)
+				target_grip_r = lerpf(0.25, 1.0, grab_t) if visual_equipped_item_id != "" else 0.0
+				target_grip_l = lerpf(0.25, 1.0, grab_t) if visual_equipped_item_id == "kentongan" else 0.0
+			"pulling_out", "holding":
+				target_grip_r = 1.0 if visual_equipped_item_id != "" else 0.0
+				target_grip_l = 1.0 if visual_equipped_item_id == "kentongan" else 0.0
+		_hand_grip_blend = move_toward(_hand_grip_blend, target_grip_r, delta * 12.0)
+		_left_grip_blend = move_toward(_left_grip_blend, target_grip_l, delta * 12.0)
 
 		if target_move < 0.1 and not is_hiding and not is_caught and _equip_switch_progress >= 1.0 and action_anim_timer <= 0.0:
 			if _idle_fidget_timer > 0.0:
@@ -1923,9 +2010,13 @@ func _update_fpp_camera_and_arm(delta: float, is_moving: bool) -> void:
 		sprint_blend = target_sprint
 		equip_raise_blend = 1.0
 		_equip_switch_progress = 1.0
+		_equip_grab_sfx_played = true
 		visual_equipped_item_id = equipped_item_id
+		equip_anim_phase = "holding" if visual_equipped_item_id != "" else "empty"
 		_item_hold_blend = 1.0 if visual_equipped_item_id != "" else 0.0
 		_left_equip_blend = 1.0 if visual_equipped_item_id == "kentongan" else 0.0
+		_hand_grip_blend = 1.0 if visual_equipped_item_id != "" else 0.0
+		_left_grip_blend = 1.0 if visual_equipped_item_id == "kentongan" else 0.0
 
 	var breath_cam_y: float = sin(idle_arm_time * 1.75) * 0.0045 * (1.0 - move_blend * 0.6)
 	var walk_bob_x: float = cos(bob_time * bob_freq * 0.5) * bob_amp * 0.65 * lerpf(1.0, 1.35, sprint_blend) * move_blend
@@ -1961,6 +2052,16 @@ func _update_fpp_camera_and_arm(delta: float, is_moving: bool) -> void:
 		flashlight.position = Vector3(0.14 + look_sway.x * 0.002, -0.09 + look_sway.y * 0.002, -0.38)
 	_sync_hand_prop_visibility()
 
+func get_pocket_anim_state() -> Dictionary:
+	return {
+		"phase": equip_anim_phase,
+		"progress": _equip_switch_progress,
+		"equipped_item_id": equipped_item_id,
+		"visual_equipped_item_id": visual_equipped_item_id,
+		"grip_blend": _hand_grip_blend,
+		"left_grip_blend": _left_grip_blend
+	}
+
 func revive_from_extra_life() -> void:
 	is_caught = false
 	is_hiding = false
@@ -1991,8 +2092,12 @@ func revive_from_extra_life() -> void:
 	_equip_prev_item_id = equipped_item_id
 	_equip_switch_progress = 1.0
 	equip_raise_blend = 1.0
+	_equip_grab_sfx_played = true
+	equip_anim_phase = "holding" if visual_equipped_item_id != "" else "empty"
 	_item_hold_blend = 1.0 if visual_equipped_item_id != "" else 0.0
 	_left_equip_blend = 1.0 if visual_equipped_item_id == "kentongan" else 0.0
+	_hand_grip_blend = 1.0 if visual_equipped_item_id != "" else 0.0
+	_left_grip_blend = 1.0 if visual_equipped_item_id == "kentongan" else 0.0
 	_sync_hand_prop_visibility()
 	_sync_flashlight_state(true)
 	_play_player_anim("idle", 0.05, 1.0)

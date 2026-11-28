@@ -67,6 +67,11 @@ func _run_checks() -> void:
 	var ver_lbl: Label = mm.get("version_label") as Label
 	if ver_lbl == null or ver_lbl.get_parent() != mm or not is_equal_approx(ver_lbl.anchor_left, 1.0) or not is_equal_approx(ver_lbl.anchor_top, 1.0) or not is_equal_approx(ver_lbl.anchor_right, 1.0) or not is_equal_approx(ver_lbl.anchor_bottom, 1.0):
 		errors.append("MainMenu version_label missing, wrong parent, or not anchored bottom-right")
+	elif ver_lbl.text != "v1.3.1" or str(ProjectSettings.get_setting("application/config/version", "")) != "1.3.1":
+		errors.append("Version mismatch: project.godot=%s, version_label=%s" % [str(ProjectSettings.get_setting("application/config/version", "")), ver_lbl.text])
+
+	if mm.get("account_chip_panel") != null or mm.get("account_chip_badge") != null:
+		errors.append("MainMenu account_chip_panel/account_chip_badge above MULAI PERMAINAN must be removed")
 
 	var icon_rail: Control = mm.get("right_icon_rail") as Control
 	var rail_friends_btn: Button = mm.get("friends_button") as Button
@@ -436,10 +441,9 @@ func _run_checks() -> void:
 		if not bool(am.get("is_verified")):
 			errors.append("is_verified did not become true after apply_live_server_user")
 		mm.call("_refresh_account_ui")
-		var badge_ctrl: Control = mm.get("account_chip_badge") as Control
 		var top_badge: Control = mm.get("top_account_badge") as Control
-		if badge_ctrl == null or not badge_ctrl.visible or top_badge == null or not top_badge.visible:
-			errors.append("MainMenu verified badges not visible for verified user")
+		if top_badge == null or not top_badge.visible or not acc_chip.visible:
+			errors.append("MainMenu top_account_badge or top_account_chip not visible for verified user")
 		am.set("incoming_friend_requests", [{"id": "u99", "username": "ReqUser"}])
 		mm.call("_refresh_friends_button_badge")
 		if rail_friends_btn == null or rail_friends_btn.text != "" or not bool(mm.get("_friends_has_pending_dot")):
@@ -983,10 +987,159 @@ func _run_checks() -> void:
 	var rp_script: Script = load("res://scripts/player/RemotePlayer.gd") as Script
 	var rp: Node3D = rp_script.new() as Node3D
 	vm.add_child(rp)
-	rp.call("apply_network_state", {"userId": "u2", "username": "PemainTes", "isHost": true, "isVerified": true, "pos": [0.0, 0.0, 2.0]})
+	rp.call("apply_network_state", {"userId": "u2", "username": "PemainTes", "isHost": true, "isVerified": true, "pos": [0.0, 0.0, 2.0], "equippedItem": ""})
 	var rp_vs: Sprite3D = rp.get("verified_sprite") as Sprite3D
 	if rp_vs == null or not rp_vs.visible or rp_vs.texture == null:
 		errors.append("RemotePlayer VerifiedSprite missing or hidden for verified player")
+
+	# Verifikasi tombol Admin Panel dihapus dari PauseMenu
+	if hud_node != null:
+		var pm_check: Control = hud_node.get("pause_menu") as Control
+		if hud_node.get("pause_admin_button") != null or (pm_check != null and pm_check.find_child("AdminPanelButton", true, false) != null):
+			errors.append("PauseMenu still contains forbidden AdminPanelButton")
+
+	# Verifikasi animasi mengambil barang dari kantong celana & menggenggam (PlayerController & RemotePlayer)
+	var p_char_pocket: Node = gm.get("player_character") as Node if gm != null else null
+	if p_char_pocket != null and p_char_pocket.has_method("get_pocket_anim_state"):
+		var inv_p: Node = p_char_pocket.get("inventory_system") as Node
+		if inv_p != null:
+			var orig_p_slot: int = int(inv_p.get("active_slot"))
+			var orig_p_slots: Array = (inv_p.get("slots") as Array).duplicate(true)
+			var p_slots: Array = orig_p_slots.duplicate(true)
+			p_slots[4] = {}
+			inv_p.set("slots", p_slots)
+			inv_p.call("select_slot", 4)
+			for _si: int in range(4):
+				p_char_pocket.call("_update_fpp_camera_and_arm", 0.2, false)
+			var empty_st: Dictionary = p_char_pocket.call("get_pocket_anim_state")
+			if str(empty_st.get("phase", "")) != "empty" or float(empty_st.get("grip_blend", 1.0)) > 0.1:
+				errors.append("PlayerController empty slot did not settle to empty/relaxed grip: " + str(empty_st))
+
+			inv_p.call("select_slot", 1) # Jamu
+			var reach_st: Dictionary = p_char_pocket.call("get_pocket_anim_state")
+			if str(reach_st.get("phase", "")) != "reaching_pocket":
+				errors.append("PlayerController switching to jamu did not enter reaching_pocket: " + str(reach_st))
+			p_char_pocket.call("_update_fpp_camera_and_arm", 0.28, false)
+			var grab_st: Dictionary = p_char_pocket.call("get_pocket_anim_state")
+			if str(grab_st.get("phase", "")) != "grabbing_pocket" or str(grab_st.get("visual_equipped_item_id", "")) != "jamu":
+				errors.append("PlayerController pocket grab phase/item mismatch: " + str(grab_st))
+			p_char_pocket.call("_update_fpp_camera_and_arm", 0.10, false)
+			var pull_st: Dictionary = p_char_pocket.call("get_pocket_anim_state")
+			if str(pull_st.get("phase", "")) != "pulling_out":
+				errors.append("PlayerController pocket pull_out phase mismatch: " + str(pull_st))
+			p_char_pocket.call("_update_fpp_camera_and_arm", 0.35, false)
+			p_char_pocket.call("_apply_fpp_hand_override")
+			var hold_st: Dictionary = p_char_pocket.call("get_pocket_anim_state")
+			if str(hold_st.get("phase", "")) != "holding" or float(hold_st.get("grip_blend", 0.0)) < 0.9:
+				errors.append("PlayerController did not grip jamu after pulling from pocket: " + str(hold_st))
+
+			inv_p.call("select_slot", 0) # Swap jamu -> flashlight
+			var swap_reach: Dictionary = p_char_pocket.call("get_pocket_anim_state")
+			if str(swap_reach.get("visual_equipped_item_id", "")) != "jamu":
+				errors.append("PlayerController swapped visual item before reaching pocket: " + str(swap_reach))
+			p_char_pocket.call("_update_fpp_camera_and_arm", 0.45, false)
+			p_char_pocket.call("_apply_fpp_hand_override")
+			var swap_done: Dictionary = p_char_pocket.call("get_pocket_anim_state")
+			if str(swap_done.get("visual_equipped_item_id", "")) != "flashlight":
+				errors.append("PlayerController did not draw flashlight from pocket: " + str(swap_done))
+			for _si2: int in range(3):
+				p_char_pocket.call("_update_fpp_camera_and_arm", 0.25, false)
+			inv_p.set("slots", orig_p_slots)
+			inv_p.call("select_slot", orig_p_slot)
+
+	if rp.has_method("get_pocket_anim_state"):
+		rp.call("apply_network_state", {"equippedItem": "flashlight"})
+		var r_reach: Dictionary = rp.call("get_pocket_anim_state")
+		if str(r_reach.get("phase", "")) != "reaching_pocket":
+			errors.append("RemotePlayer equip did not enter reaching_pocket: " + str(r_reach))
+		rp.call("_process", 0.30)
+		var r_grab: Dictionary = rp.call("get_pocket_anim_state")
+		if str(r_grab.get("phase", "")) != "grabbing_pocket" or str(r_grab.get("visual_equipped_item", "")) != "flashlight":
+			errors.append("RemotePlayer pocket grab mismatch: " + str(r_grab))
+		rp.call("_process", 0.45)
+		rp.call("_apply_remote_hand_override")
+		var r_hold: Dictionary = rp.call("get_pocket_anim_state")
+		var rp_props: Dictionary = rp.get("hand_item_props") as Dictionary
+		var rp_fl_prop: Node3D = rp_props.get("flashlight", null) as Node3D
+		if str(r_hold.get("phase", "")) != "holding" or float(r_hold.get("grip_blend", 0.0)) < 0.9 or rp_fl_prop == null or not rp_fl_prop.visible:
+			errors.append("RemotePlayer did not grip/display flashlight after pocket draw: " + str(r_hold))
+
+	# Verifikasi FateCardOverlay: auto-pick 10 detik & tunggu semua pemain di Multiplayer
+	if gm != null and mp != null and hud_node != null:
+		var fco: Node = hud_node.get("fate_card_overlay") as Node
+		if fco == null:
+			errors.append("HUD fate_card_overlay missing")
+		else:
+			gm.call("reset_fate_cards")
+			gm.set("current_state", 1)
+			gm.set("is_tutorial_mode", false)
+			gm.set("is_resuming_saved_run", false)
+			var pair_sp: Dictionary = gm.call("request_fate_card_pair_for_act", 1)
+			if not bool(fco.call("open_choice", 1, pair_sp)):
+				errors.append("FateCardOverlay failed to open singleplayer pair")
+			else:
+				fco.call("_process", 10.1)
+				if not bool(fco.get("_auto_selected")) or (fco.get("_chosen_card") as Dictionary).is_empty():
+					errors.append("FateCardOverlay did not auto-select card after 10 seconds")
+				fco.call("complete_reveal_immediately")
+				if int(fco.get("_phase")) != 4:
+					errors.append("FateCardOverlay singleplayer expected READY_CONTINUE(4), got " + str(fco.get("_phase")))
+				fco.call("close_overlay")
+				if bool(fco.call("is_open")) or bool(gm.call("is_fate_card_selection_blocking")):
+					errors.append("FateCardOverlay singleplayer failed to close/unblock")
+
+			# Simulasi 2 pemain online: tunggu pemain kedua selesai memilih sebelum lanjut
+			gm.call("reset_fate_cards")
+			var orig_uid_fc: String = str(am.get("user_id")) if am != null else ""
+			if am != null:
+				am.set("user_id", "u1")
+			mp.set("is_online_session", true)
+			mp.set("is_room_owner", true)
+			mp.set("session_mode", "multiplayer")
+			mp.set("current_room", {"id": "room-fc", "mode": "multiplayer", "hostUserId": "u1", "status": "playing"})
+			mp.set("room_players", [
+				{"userId": "u1", "username": "host", "displayName": "Host", "isHost": true, "playerState": {"isAlive": true}},
+				{"userId": "u2", "username": "teman", "displayName": "Teman", "isHost": false, "playerState": {"isAlive": true}}
+			])
+			gm.set("current_state", 1)
+			var pair_mp: Dictionary = gm.call("request_fate_card_pair_for_act", 1)
+			if not bool(fco.call("open_choice", 1, pair_mp)):
+				errors.append("FateCardOverlay failed to open multiplayer pair")
+			else:
+				fco.call("_select_side", "left", false)
+				fco.call("complete_reveal_immediately")
+				if int(fco.get("_phase")) != 3:
+					errors.append("FateCardOverlay multiplayer expected WAITING_OTHERS(3) while peer pending, got " + str(fco.get("_phase")))
+				fco.call("close_overlay")
+				if not bool(fco.call("is_open")):
+					errors.append("FateCardOverlay closed before all players finished choosing!")
+				if not bool(gm.call("is_fate_card_selection_blocking")):
+					errors.append("GameManager.is_fate_card_selection_blocking() must be true while waiting for other players")
+				gm.set("time_accumulator", 0.0)
+				gm.call("_process", 1.0)
+				if float(gm.get("time_accumulator")) > 0.0:
+					errors.append("GameManager night clock advanced while waiting for FateCardOverlay choices!")
+
+				var rp_arr: Array = mp.get("room_players") as Array
+				rp_arr[1]["playerState"] = {"isAlive": true, "fateCardAct": 1, "fateCardDone": true}
+				mp.set("room_players", rp_arr)
+				gm.call("sync_mp_fate_selection_state")
+				if int(fco.get("_phase")) != 4:
+					errors.append("FateCardOverlay did not unlock to READY_CONTINUE(4) once all players chose, got " + str(fco.get("_phase")))
+				fco.call("close_overlay")
+				if bool(fco.call("is_open")) or bool(gm.call("is_fate_card_selection_blocking")):
+					errors.append("FateCardOverlay multiplayer remained open/blocking after all players finished")
+				gm.call("_process", 1.0)
+				if float(gm.get("time_accumulator")) <= 0.0:
+					errors.append("GameManager night clock did not resume after all players finished FateCardOverlay")
+
+			if am != null:
+				am.set("user_id", orig_uid_fc)
+			mp.call("reset_to_singleplayer")
+			gm.call("reset_fate_cards")
+			gm.set("current_state", 0)
+			self.paused = false
+
 	vm.queue_free()
 
 	print("[6/7] Memeriksa VictoryScreen & GameOverScreen centering...")

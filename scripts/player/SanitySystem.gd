@@ -56,7 +56,7 @@ func _pick_random_dialog(category: String) -> String:
 	return pool[randi() % pool.size()]
 
 func _process(delta: float) -> void:
-	if GameManager.current_state != GameManager.GameState.PLAYING or get_tree().paused:
+	if GameManager.current_state != GameManager.GameState.PLAYING or get_tree().paused or GameManager.is_fate_card_selection_blocking():
 		return
 	_sanity_dialog_cooldown = maxf(0.0, _sanity_dialog_cooldown - delta)
 	_safezone_relief_cooldown = maxf(0.0, _safezone_relief_cooldown - delta)

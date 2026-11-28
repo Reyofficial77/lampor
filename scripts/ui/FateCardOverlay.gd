@@ -7,7 +7,10 @@ const LocScript = preload("res://scripts/systems/Loc.gd")
 signal overlay_opened()
 signal overlay_closed(chosen_card: Dictionary)
 
-enum Phase { INACTIVE, WAITING_CHOICE, ANIMATING, READY_CONTINUE }
+const CHOICE_TIME_LIMIT_SEC: float = 10.0
+const MP_AUTO_RESUME_DELAY_SEC: float = 1.8
+
+enum Phase { INACTIVE, WAITING_CHOICE, ANIMATING, WAITING_OTHERS, READY_CONTINUE }
 
 var _phase: Phase = Phase.INACTIVE
 var _act_num: int = 1
@@ -19,6 +22,10 @@ var _paused_tree_by_overlay: bool = false
 var _prev_inventory_open: bool = false
 var _flip_tween: Tween = null
 var _texture_cache: Dictionary = {}
+var _choice_time_left: float = CHOICE_TIME_LIMIT_SEC
+var _auto_selected: bool = false
+var _mp_auto_resume_left: float = -1.0
+var _is_mp_waiting_barrier: bool = false
 
 var _backdrop: ColorRect
 var _center_wrap: CenterContainer
@@ -26,7 +33,11 @@ var _main_vbox: VBoxContainer
 var _divider_label: Label
 var _title_label: Label
 var _subtitle_label: Label
+var _timer_box: VBoxContainer
+var _timer_label: Label
+var _timer_bar: ProgressBar
 var _cards_row: HBoxContainer
+var _wait_status_label: Label
 var _continue_btn: Button
 var _slots: Dictionary = {}
 
@@ -41,6 +52,8 @@ func _ready() -> void:
 	_build_ui()
 	get_viewport().size_changed.connect(_apply_layout)
 	SettingsManager.language_changed.connect(_on_language_changed)
+	if SignalBus.has_signal("fate_card_round_status_changed"):
+		SignalBus.fate_card_round_status_changed.connect(_on_fate_round_status_changed)
 
 func _exit_tree() -> void:
 	if _flip_tween and _flip_tween.is_running():
@@ -72,6 +85,15 @@ func _load_card_texture(res_path: String) -> Texture2D:
 	_texture_cache[res_path] = tex
 	return tex
 
+func _make_timer_bar_style(bg_col: Color, border_col: Color = Color.TRANSPARENT) -> StyleBoxFlat:
+	var st := StyleBoxFlat.new()
+	st.bg_color = bg_col
+	if border_col.a > 0.01:
+		st.border_color = border_col
+		st.set_border_width_all(1)
+	st.set_corner_radius_all(3)
+	return st
+
 func _build_ui() -> void:
 	_backdrop = ColorRect.new()
 	_backdrop.name = "Backdrop"
@@ -89,7 +111,7 @@ func _build_ui() -> void:
 	_main_vbox = VBoxContainer.new()
 	_main_vbox.name = "MainVBox"
 	_main_vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	_main_vbox.add_theme_constant_override("separation", 12)
+	_main_vbox.add_theme_constant_override("separation", 10)
 	_main_vbox.mouse_filter = Control.MOUSE_FILTER_PASS
 	_center_wrap.add_child(_main_vbox)
 
@@ -110,6 +132,32 @@ func _build_ui() -> void:
 	HorrorTheme.style_label(_subtitle_label, "body-md", HorrorTheme.ON_SURFACE_VARIANT, 14)
 	_main_vbox.add_child(_subtitle_label)
 
+	_timer_box = VBoxContainer.new()
+	_timer_box.name = "TimerBox"
+	_timer_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	_timer_box.add_theme_constant_override("separation", 4)
+	_timer_box.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_timer_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_main_vbox.add_child(_timer_box)
+
+	_timer_label = Label.new()
+	_timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_timer_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	HorrorTheme.style_label(_timer_label, "mono-sm", HorrorTheme.RELIC_BRASS, 12)
+	_timer_box.add_child(_timer_label)
+
+	_timer_bar = ProgressBar.new()
+	_timer_bar.name = "ChoiceTimerBar"
+	_timer_bar.min_value = 0.0
+	_timer_bar.max_value = CHOICE_TIME_LIMIT_SEC
+	_timer_bar.value = CHOICE_TIME_LIMIT_SEC
+	_timer_bar.show_percentage = false
+	_timer_bar.custom_minimum_size = Vector2(300.0, 9.0)
+	_timer_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_timer_bar.add_theme_stylebox_override("background", _make_timer_bar_style(Color(0.08, 0.035, 0.038, 0.92), HorrorTheme.OUTLINE_VARIANT))
+	_timer_bar.add_theme_stylebox_override("fill", _make_timer_bar_style(HorrorTheme.RELIC_BRASS))
+	_timer_box.add_child(_timer_bar)
+
 	_cards_row = HBoxContainer.new()
 	_cards_row.name = "CardsRow"
 	_cards_row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -121,6 +169,15 @@ func _build_ui() -> void:
 	_slots["right"] = _create_card_slot("right")
 	_cards_row.add_child(_slots["left"]["holder"] as Control)
 	_cards_row.add_child(_slots["right"]["holder"] as Control)
+
+	_wait_status_label = Label.new()
+	_wait_status_label.name = "WaitStatusLabel"
+	_wait_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_wait_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_wait_status_label.visible = false
+	_wait_status_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	HorrorTheme.style_label(_wait_status_label, "body-md", HorrorTheme.RELIC_BRASS, 13)
+	_main_vbox.add_child(_wait_status_label)
 
 	var btn_row := HBoxContainer.new()
 	btn_row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -358,10 +415,21 @@ func open_choice(act_num: int, pair: Dictionary) -> bool:
 	_current_pair = {"pairing": str(pair.get("pairing", "")), "left": left_card.duplicate(true), "right": right_card.duplicate(true)}
 	_chosen_side = ""
 	_chosen_card = {}
+	_choice_time_left = CHOICE_TIME_LIMIT_SEC
+	_auto_selected = false
+	_mp_auto_resume_left = -1.0
 	_phase = Phase.WAITING_CHOICE
+
+	GameManager.begin_fate_card_selection(act_num)
+	_is_mp_waiting_barrier = GameManager.is_multiplayer_fate_barrier_needed(act_num)
 
 	_reset_slot_face_down(_slots["left"], "left")
 	_reset_slot_face_down(_slots["right"], "right")
+	if _timer_box:
+		_timer_box.visible = true
+	if _wait_status_label:
+		_wait_status_label.visible = false
+	_update_timer_ui()
 	_refresh_header_and_button_texts()
 
 	var player: PlayerController = GameManager.player_character as PlayerController
@@ -385,6 +453,39 @@ func open_choice(act_num: int, pair: Dictionary) -> bool:
 	HorrorTheme.animate_surface_enter(_main_vbox)
 	overlay_opened.emit()
 	return true
+
+func _process(delta: float) -> void:
+	if not is_open():
+		return
+	if _phase == Phase.WAITING_CHOICE:
+		_choice_time_left = maxf(0.0, _choice_time_left - maxf(0.0, delta))
+		_update_timer_ui()
+		if _choice_time_left <= 0.0:
+			var auto_side: String = "left" if (randi() % 2 == 0) else "right"
+			_select_side(auto_side, true)
+	elif _phase == Phase.WAITING_OTHERS:
+		_refresh_waiting_others_status()
+		if GameManager.are_all_players_fate_ready(_act_num):
+			_enter_ready_continue()
+	elif _phase == Phase.READY_CONTINUE and _is_mp_waiting_barrier and _mp_auto_resume_left > 0.0:
+		_mp_auto_resume_left = maxf(0.0, _mp_auto_resume_left - maxf(0.0, delta))
+		_refresh_header_and_button_texts()
+		if _mp_auto_resume_left <= 0.0:
+			close_overlay()
+
+func _update_timer_ui() -> void:
+	if not is_instance_valid(_timer_label) or not is_instance_valid(_timer_bar):
+		return
+	var secs_left: int = maxi(0, ceili(_choice_time_left))
+	var urgent: bool = _choice_time_left <= 3.0
+	var bar_col: Color = Color("e84a42") if urgent else HorrorTheme.RELIC_BRASS
+	_timer_label.text = LocScript.pick(
+		"Waktu memilih: %d detik (otomatis jika habis)" % secs_left,
+		"Time to choose: %ds (auto-pick on timeout)" % secs_left
+	)
+	_timer_label.add_theme_color_override("font_color", bar_col)
+	_timer_bar.value = clampf(_choice_time_left, 0.0, CHOICE_TIME_LIMIT_SEC)
+	_timer_bar.add_theme_stylebox_override("fill", _make_timer_bar_style(bar_col))
 
 func _reset_slot_face_down(slot: Dictionary, side: String) -> void:
 	var panel: PanelContainer = slot["panel"] as PanelContainer
@@ -438,32 +539,60 @@ func _refresh_header_and_button_texts() -> void:
 			_continue_btn.text = LocScript.pick("PILIH KARTU DULU", "CHOOSE A CARD")
 		Phase.ANIMATING:
 			if _chosen_card.is_empty():
-				_subtitle_label.text = LocScript.pick("Membuka takdir pilihanmu...", "Revealing your chosen fate...")
+				_subtitle_label.text = LocScript.pick(
+					"Waktu habis — memilih kartu secara otomatis..." if _auto_selected else "Membuka takdir pilihanmu...",
+					"Time's up — auto-selecting a card..." if _auto_selected else "Revealing your chosen fate..."
+				)
 			else:
-				_subtitle_label.text = "%s — %s" % [
+				var prefix: String = LocScript.pick("[OTOMATIS] ", "[AUTO] ") if _auto_selected else ""
+				_subtitle_label.text = "%s%s — %s" % [
+					prefix,
 					FATE_CARD_SYSTEM.get_card_title(_chosen_card),
 					FATE_CARD_SYSTEM.get_card_description(_chosen_card)
 				]
 			_continue_btn.disabled = true
 			_continue_btn.modulate.a = 0.35
 			_continue_btn.text = LocScript.pick("MEMBUKA KARTU...", "REVEALING...")
+		Phase.WAITING_OTHERS:
+			if not _chosen_card.is_empty():
+				var prefix_w: String = LocScript.pick("[OTOMATIS] ", "[AUTO] ") if _auto_selected else ""
+				_subtitle_label.text = "%s%s — %s" % [
+					prefix_w,
+					FATE_CARD_SYSTEM.get_card_title(_chosen_card),
+					FATE_CARD_SYSTEM.get_card_description(_chosen_card)
+				]
+			_continue_btn.disabled = true
+			_continue_btn.modulate.a = 0.40
+			_continue_btn.text = LocScript.pick("MENUNGGU PEMAIN LAIN...", "WAITING FOR PLAYERS...")
 		Phase.READY_CONTINUE:
 			if not _chosen_card.is_empty():
-				_subtitle_label.text = "%s — %s" % [
+				var prefix_r: String = LocScript.pick("[OTOMATIS] ", "[AUTO] ") if _auto_selected else ""
+				_subtitle_label.text = "%s%s — %s" % [
+					prefix_r,
 					FATE_CARD_SYSTEM.get_card_title(_chosen_card),
 					FATE_CARD_SYSTEM.get_card_description(_chosen_card)
 				]
 			_continue_btn.disabled = false
 			_continue_btn.modulate.a = 1.0
-			_continue_btn.text = LocScript.pick(
-				"LANJUTKAN" if _is_touch_device() else "LANJUTKAN [ENTER / SPASI]",
-				"CONTINUE" if _is_touch_device() else "CONTINUE [ENTER / SPACE]"
-			)
+			if _is_mp_waiting_barrier and _mp_auto_resume_left > 0.0:
+				var rem_s: int = maxi(1, ceili(_mp_auto_resume_left))
+				_continue_btn.text = LocScript.pick(
+					"SEMUA SIAP · LANJUT (%d)" % rem_s,
+					"ALL READY · CONTINUE (%d)" % rem_s
+				)
+			else:
+				_continue_btn.text = LocScript.pick(
+					"LANJUTKAN" if _is_touch_device() else "LANJUTKAN [ENTER / SPASI]",
+					"CONTINUE" if _is_touch_device() else "CONTINUE [ENTER / SPACE]"
+				)
 
 func _on_language_changed(_lang: String) -> void:
 	if not is_open():
 		return
+	_update_timer_ui()
 	_refresh_header_and_button_texts()
+	if _phase == Phase.WAITING_OTHERS:
+		_refresh_waiting_others_status()
 	if _phase == Phase.WAITING_CHOICE:
 		_reset_slot_face_down(_slots["left"], "left")
 		_reset_slot_face_down(_slots["right"], "right")
@@ -501,7 +630,7 @@ func _on_slot_gui_input(event: InputEvent, side: String) -> void:
 		var mb := event as InputEventMouseButton
 		pressed = mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT
 	if pressed:
-		_select_side(side)
+		_select_side(side, false)
 		get_viewport().set_input_as_handled()
 
 func _input(event: InputEvent) -> void:
@@ -513,11 +642,11 @@ func _input(event: InputEvent) -> void:
 			var kc: Key = ke.keycode
 			if _phase == Phase.WAITING_CHOICE:
 				if kc == KEY_A or kc == KEY_LEFT or ke.is_action_pressed("move_left"):
-					_select_side("left")
+					_select_side("left", false)
 					get_viewport().set_input_as_handled()
 					return
 				if kc == KEY_D or kc == KEY_RIGHT or ke.is_action_pressed("move_right"):
-					_select_side("right")
+					_select_side("right", false)
 					get_viewport().set_input_as_handled()
 					return
 			elif _phase == Phase.READY_CONTINUE:
@@ -535,13 +664,16 @@ func _sync_pivots() -> void:
 		if is_instance_valid(panel):
 			panel.pivot_offset = panel.size * 0.5
 
-func _select_side(side: String) -> void:
+func _select_side(side: String, was_auto: bool = false) -> void:
 	if _phase != Phase.WAITING_CHOICE:
 		return
 	_phase = Phase.ANIMATING
+	_auto_selected = was_auto
 	_chosen_side = side
-	var other_side: String = "right" if side == "left" else "left"
+	if _timer_box:
+		_timer_box.visible = false
 
+	var other_side: String = "right" if side == "left" else "left"
 	var chosen_slot: Dictionary = _slots[side]
 	var other_slot: Dictionary = _slots[other_side]
 	var chosen_card: Dictionary = (_current_pair.get(side, {}) as Dictionary).duplicate(true)
@@ -584,13 +716,83 @@ func _select_side(side: String) -> void:
 	)
 	_flip_tween.tween_property(other_panel, "scale:x", 1.0, 0.22).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 
-	# 3. Aktifkan tombol Lanjutkan
-	_flip_tween.tween_callback(func() -> void:
-		_phase = Phase.READY_CONTINUE
+	# 3. Tandai pilihan selesai & cek apakah perlu menunggu pemain lain
+	_flip_tween.tween_callback(_finish_reveal_sequence)
+
+func _finish_reveal_sequence() -> void:
+	if not is_open():
+		return
+	GameManager.mark_local_fate_card_chosen(_act_num, _chosen_card)
+	_is_mp_waiting_barrier = GameManager.is_multiplayer_fate_barrier_needed(_act_num)
+	if _is_mp_waiting_barrier and not GameManager.are_all_players_fate_ready(_act_num):
+		_phase = Phase.WAITING_OTHERS
 		_refresh_header_and_button_texts()
-		if is_instance_valid(_continue_btn):
-			_continue_btn.call_deferred("grab_focus")
+		_refresh_waiting_others_status()
+	else:
+		_enter_ready_continue()
+
+func complete_reveal_immediately() -> void:
+	if not is_open() or _phase != Phase.ANIMATING or _chosen_side.is_empty():
+		return
+	if _flip_tween and _flip_tween.is_running():
+		_flip_tween.kill()
+	_flip_tween = null
+	var other_side: String = "right" if _chosen_side == "left" else "left"
+	var chosen_slot: Dictionary = _slots[_chosen_side]
+	var other_slot: Dictionary = _slots[other_side]
+	var chosen_card: Dictionary = (_current_pair.get(_chosen_side, {}) as Dictionary).duplicate(true)
+	var other_card: Dictionary = (_current_pair.get(other_side, {}) as Dictionary).duplicate(true)
+	_chosen_card = chosen_card
+	var chosen_panel: PanelContainer = chosen_slot["panel"] as PanelContainer
+	var other_panel: PanelContainer = other_slot["panel"] as PanelContainer
+	chosen_panel.scale = Vector2.ONE
+	other_panel.scale = Vector2.ONE
+	if not (chosen_slot["face_up"] as Control).visible:
+		_reveal_card_slot(chosen_slot, chosen_card, true)
+		GameManager.apply_fate_card(chosen_card)
+	if not (other_slot["face_up"] as Control).visible:
+		_reveal_card_slot(other_slot, other_card, false)
+	_finish_reveal_sequence()
+
+func _refresh_waiting_others_status() -> void:
+	if not is_instance_valid(_wait_status_label):
+		return
+	var st: Dictionary = GameManager.get_fate_round_status(_act_num)
+	var chosen_cnt: int = int(st.get("chosen_count", 1))
+	var total_cnt: int = maxi(1, int(st.get("total_count", 1)))
+	var pending_raw: Variant = st.get("pending_names", [])
+	var pending_names: Array[String] = []
+	if pending_raw is Array:
+		for nm: Variant in (pending_raw as Array):
+			var s: String = str(nm).strip_edges()
+			if not s.is_empty():
+				pending_names.append(s)
+	var pending_txt: String = ""
+	if not pending_names.is_empty():
+		pending_txt = " (" + ", ".join(pending_names) + ")"
+	_wait_status_label.text = LocScript.pick(
+		"Menunggu pemain lain memilih kartu (%d/%d)%s..." % [chosen_cnt, total_cnt, pending_txt],
+		"Waiting for other players to choose (%d/%d)%s..." % [chosen_cnt, total_cnt, pending_txt]
 	)
+	_wait_status_label.visible = true
+
+func _on_fate_round_status_changed(act_num: int, _chosen_count: int, _total_count: int, all_chosen: bool, _pending_names: Array) -> void:
+	if not is_open() or act_num != _act_num:
+		return
+	if _phase == Phase.WAITING_OTHERS:
+		_refresh_waiting_others_status()
+		if all_chosen or GameManager.are_all_players_fate_ready(_act_num):
+			_enter_ready_continue()
+
+func _enter_ready_continue() -> void:
+	_phase = Phase.READY_CONTINUE
+	if _wait_status_label:
+		_wait_status_label.visible = false
+	_is_mp_waiting_barrier = GameManager.is_multiplayer_fate_barrier_needed(_act_num)
+	_mp_auto_resume_left = MP_AUTO_RESUME_DELAY_SEC if _is_mp_waiting_barrier else -1.0
+	_refresh_header_and_button_texts()
+	if is_instance_valid(_continue_btn):
+		_continue_btn.call_deferred("grab_focus")
 
 func _reveal_card_slot(slot: Dictionary, card: Dictionary, is_chosen: bool) -> void:
 	(slot["face_down"] as Control).visible = false
@@ -659,14 +861,16 @@ func _populate_face_up_texts(slot: Dictionary, card: Dictionary, is_chosen: bool
 	desc_lbl.text = FATE_CARD_SYSTEM.get_card_description(card)
 
 func close_overlay() -> void:
-	if not is_open():
+	if not is_open() or _phase != Phase.READY_CONTINUE:
 		return
 	if _flip_tween and _flip_tween.is_running():
 		_flip_tween.kill()
 	_flip_tween = null
+	_mp_auto_resume_left = -1.0
 
 	visible = false
 	_phase = Phase.INACTIVE
+	GameManager.finish_local_fate_card_overlay(_act_num)
 
 	var player: PlayerController = GameManager.player_character as PlayerController
 	if player:
@@ -685,8 +889,10 @@ func force_close() -> void:
 	if _flip_tween and _flip_tween.is_running():
 		_flip_tween.kill()
 	_flip_tween = null
+	_mp_auto_resume_left = -1.0
 	visible = false
 	_phase = Phase.INACTIVE
+	GameManager.finish_local_fate_card_overlay(_act_num)
 	var player: PlayerController = GameManager.player_character as PlayerController
 	if player:
 		player.is_inventory_open = false
@@ -703,10 +909,10 @@ func _apply_layout() -> void:
 	var compact: bool = view_size.x < 720.0 or view_size.y < 540.0
 
 	var card_w: float = clampf((view_size.x - (52.0 if compact else 140.0)) * 0.44, 148.0, 265.0)
-	var card_h: float = clampf(view_size.y - (176.0 if compact else 230.0), 210.0, 385.0)
+	var card_h: float = clampf(view_size.y - (210.0 if compact else 270.0), 190.0, 365.0)
 	var row_gap: int = 14 if compact else 32
 
-	_main_vbox.add_theme_constant_override("separation", 6 if compact else 12)
+	_main_vbox.add_theme_constant_override("separation", 6 if compact else 10)
 	_cards_row.add_theme_constant_override("separation", row_gap)
 
 	if _title_label:
@@ -715,8 +921,15 @@ func _apply_layout() -> void:
 	if _subtitle_label:
 		_subtitle_label.custom_minimum_size.x = minf(view_size.x - 32.0, 700.0)
 		_subtitle_label.add_theme_font_size_override("font_size", 12 if compact else 14)
+	if _timer_label:
+		_timer_label.add_theme_font_size_override("font_size", 10 if compact else 12)
+	if _timer_bar:
+		_timer_bar.custom_minimum_size = Vector2(minf(340.0, view_size.x - 64.0), 8.0 if compact else 10.0)
+	if _wait_status_label:
+		_wait_status_label.custom_minimum_size.x = minf(view_size.x - 32.0, 680.0)
+		_wait_status_label.add_theme_font_size_override("font_size", 11 if compact else 13)
 	if _continue_btn:
-		_continue_btn.custom_minimum_size = Vector2(minf(260.0, view_size.x - 48.0), 38.0 if compact else 44.0)
+		_continue_btn.custom_minimum_size = Vector2(minf(280.0, view_size.x - 48.0), 38.0 if compact else 44.0)
 		_continue_btn.add_theme_font_size_override("font_size", 12 if compact else 13)
 
 	for side_key: String in ["left", "right"]:
